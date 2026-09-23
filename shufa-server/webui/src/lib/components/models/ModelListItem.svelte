@@ -87,8 +87,11 @@
   const headerName = $derived(nameText.trim().length > 0 ? nameText.trim() : readableModelName(idText.trim() || model.id));
   const currentInputTypes = $derived(new Set(model.inputTypes ?? ["text"]));
   const currentOutputTypes = $derived(new Set(model.outputTypes ?? ["text"]));
-  /** datalist id 实例化（多条目并存不串档）。 */
-  const listId = `model-id-candidates-${crypto.randomUUID()}`;
+  /** datalist id 实例化（多条目并存不串档）。走查 R5：randomUUID 仅 secure
+   * context（HTTPS/localhost）存在——局域网 IP 直访（http://192.168.x.x）下为
+   * undefined，条目挂载即抛异常、整个模型列表渲染崩溃（本地 localhost 走查
+   * 全绿、真机全炸的根因）；Math.random 全上下文可用。 */
+  const listId = `model-id-candidates-${Math.random().toString(36).slice(2, 10)}`;
 
   function emit(patch: Partial<RouteModel>): void {
     onchange({ ...model, ...patch });
