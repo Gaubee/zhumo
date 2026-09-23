@@ -153,6 +153,14 @@ test('/r/{public_id} 与 SPA 回退返回 index.html；静态缺失 404 兜底',
       // 缺失静态文件：webui/dist 只有 index.html，回退后仍然命中 SPA。
       const missing = await fetch(`${base}/assets/nope.js`);
       expect(missing.status).toBe(200);
+
+      // 缓存策略（走查 2026-09-23）：SPA 入口 no-cache（升级立即生效），
+      // 带 hash 的资产长缓存。helpers 的 dist 只有 index.html——先补一个资产。
+      writeFileSync(path.join(s.root, 'webui', 'dist', 'app-abc123.js'), 'console.log(1)', 'utf8');
+      const entry = await fetch(`${base}/`);
+      expect(entry.headers.get('cache-control')).toBe('no-cache');
+      const asset = await fetch(`${base}/app-abc123.js`);
+      expect(asset.headers.get('cache-control')).toBe('public, max-age=3600');
     } finally {
       await daemon.stop();
     }

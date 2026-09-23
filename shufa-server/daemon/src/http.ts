@@ -413,7 +413,11 @@ export class DaemonHttp {
       return;
     }
     if (existsSync(file) && !statSync(file).isDirectory()) {
-      await this.sendFile(request, response, file, 'public, max-age=3600');
+      // index.html 是 SPA 入口（引用带 hash 的资产）：必须 no-cache——否则升级后
+      // 浏览器最长 1 小时跑旧 bundle（实证 2026-09-23：mini 部署冒烟全部打到
+      // 旧前端，向导"点击无反应"实为旧代码）。带 hash 的资产保持长缓存。
+      const cache = file === path.join(root, 'index.html') ? 'no-cache' : 'public, max-age=3600';
+      await this.sendFile(request, response, file, cache);
       return;
     }
     await this.sendFile(request, response, path.join(root, 'index.html'), 'no-cache');
