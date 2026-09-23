@@ -7,7 +7,9 @@
  *   [1] 种子清单（按 OS 派生）与迁移落库（定义字段更新、下线行删除、运行态保留）。
  *   [2] 命令步骤：shell 执行 + 全量日志逐行追加（64KB 截断）+ 终态行 + 成功后验嗅探。
  *   [3] 下载步骤：HTTP(S) 断点续传（.download + Range 206）+ 进度行原位替换，原子落位。
- *   [4] 嗅探跳过 / force 重跑 / 同步互斥（并发 run 同一步骤拒绝）。
+ *   [4] 嗅探跳过 / force 重跑 / 同步互斥（并发 run 同一步骤拒绝）/ 运行中取消
+ *       （走查 2026-09-24：命令组杀 + 下载 abort；取消回 pending，下载残留
+ *       .download 供续传）。
  *   [5] whisper 步骤参数化：型号×镜像组装 URL 并持久化回行。
  */
 import { spawn } from 'node:child_process';
@@ -193,6 +195,8 @@ export function listSteps(db: SqliteDb): WizardStep[] {
 export class WizardRunner {
   /** 同一步骤并发 run 的互斥集合。 */
   private readonly running = new Set<string>();
+  /** 运行中步骤的取消句柄（走查 2026-09-24：cancel() 经此触达真实进程/流）。 */
+  private readonly active = new Map<string, { kill: () => void }>();
 
   constructor(
     private readonly db: SqliteDb,
@@ -269,11 +273,13 @@ export class WizardRunner {
 
     this.running.add(id);
     const log = new StepLogWriter(this.db, id, row.last_log);
+    /** 本轮取消标记：cancel() 置位后由 runCommand/runDownload 的收尾路径感知。 */
+    const state = { cancelled: false };
     try {
       updateWizardProgress(this.db, id, { status: 'running' });
       log.append('开始执行…');
       if (row.kind === 'command') {
-        const code = await this.runCommand(id, row, log);
+        const code = await this.runCommand(id, row, log, state);
         // 终态行（走查 BUG1）：无论成败都追加，退出码如实入库。
         log.append(code === 0 ? '[完成] 退出码 0' : `[失败] 退出码 ${code}`);
         if (code !== 0) {
@@ -290,18 +296,43 @@ export class WizardRunner {
         }
       } else {
         // 下载终态（完成行/失败行）同样追加；文件存在 + 尺寸校验即后验（R6 保持）。
-        const doneLine = await this.runDownload(id, row, log);
+        const doneLine = await this.runDownload(id, row, log, state);
         log.append(doneLine);
         updateWizardProgress(this.db, id, { status: 'done' });
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      log.append(`[失败] ${message}`);
-      updateWizardProgress(this.db, id, { status: 'failed' });
+      if (error instanceof WizardCancelledError) {
+        // 用户取消 ≠ 失败：回 pending（按钮回到待执行/待下载）；下载残留
+        // .download 保留，下次 run 自动 Range 续传。
+        log.append(
+          row.kind === 'download'
+            ? '[中断] 用户取消（已下载部分保留，可续传）'
+            : '[中断] 用户取消',
+        );
+        updateWizardProgress(this.db, id, { status: 'pending' });
+      } else {
+        const message = error instanceof Error ? error.message : String(error);
+        log.append(`[失败] ${message}`);
+        updateWizardProgress(this.db, id, { status: 'failed' });
+      }
     } finally {
+      this.active.delete(id);
       this.running.delete(id);
     }
     return toView(getWizardStep(this.db, id));
+  }
+
+  /**
+   * 取消运行中的步骤（走查 2026-09-24）：命令组杀（detached + 负 pid，连带
+   * shell 孙进程），下载 abort。run() 的 catch 收尾置回 pending。未在运行 →
+   * CONFLICT（前端按钮只在 running 态可见，兜底语义）。
+   */
+  cancel(id: string): { ok: true } {
+    if (!getWizardStep(this.db, id)) throw new WizardError('NOT_FOUND', `向导步骤不存在：${id}`);
+    const handle = this.active.get(id);
+    if (!handle) throw new WizardError('CONFLICT', `步骤未在执行中：${id}`);
+    handle.kill();
+    return { ok: true };
   }
 
   /** 返回跳过原因文案；不跳过返回 null。 */
@@ -335,13 +366,30 @@ export class WizardRunner {
     );
   }
 
-  /** 命令步骤：工作目录取 target_dir（目录不存在退到其父级/家目录）。全量输出逐行入日志。 */
-  private async runCommand(id: string, row: WizardStepRow, log: StepLogWriter): Promise<number> {
+  /**
+   * 命令步骤：工作目录取 target_dir（目录不存在退到其父级/家目录）。全量输出逐行入日志。
+   * 取消（走查 2026-09-24）：POSIX detached 进程组 + 负 pid 组杀（连带 shell 的
+   * 孙进程——TaskStop 只杀 shell 杀不掉 brew 的教训）；close 时读 cancelled 标记
+   * 抛 WizardCancelledError 交 run() 收尾。
+   */
+  private async runCommand(
+    id: string,
+    row: WizardStepRow,
+    log: StepLogWriter,
+    state: { cancelled: boolean },
+  ): Promise<number> {
     if (!row.command) throw new Error('步骤缺少 command 定义');
     const cwd = workDirFor(row.target_dir);
     const child = spawn(row.command, {
       cwd,
       shell: this.options.shell ?? true,
+      detached: process.platform !== 'win32',
+    });
+    this.active.set(id, {
+      kill: () => {
+        state.cancelled = true;
+        killProcessTree(child);
+      },
     });
     const onLine = (chunk: Buffer | string): void => {
       for (const line of String(chunk).split(/\r?\n/)) {
@@ -353,7 +401,10 @@ export class WizardRunner {
     child.stderr.on('data', onLine);
     return new Promise<number>((resolve, reject) => {
       child.on('error', reject);
-      child.on('close', (code) => resolve(code ?? -1));
+      child.on('close', (code) => {
+        if (state.cancelled) reject(new WizardCancelledError());
+        else resolve(code ?? -1);
+      });
     });
   }
 
@@ -363,8 +414,15 @@ export class WizardRunner {
    * 服务端不支持 Range，从头覆盖写）。失败/中断保留 .download 供下次续传；
    * 尺寸校验通过后原子改名落位。进度行走 appendProgress（走查 BUG3：同一下载
    * 会话内原位替换，历史非进度日志保留）；完成行由 run() 追加。
+   * 取消（走查 2026-09-24）：AbortController 断流，pipeline 抛错转
+   * WizardCancelledError（.download 残留即续传基数）。
    */
-  private async runDownload(id: string, row: WizardStepRow, log: StepLogWriter): Promise<string> {
+  private async runDownload(
+    id: string,
+    row: WizardStepRow,
+    log: StepLogWriter,
+    state: { cancelled: boolean },
+  ): Promise<string> {
     if (!row.url) throw new Error('步骤缺少 url 定义');
     const target = downloadTargetPath(row.url, row.target_dir);
     if (!target) throw new Error(`无法从 url 推导目标文件名：${row.url}`);
@@ -377,10 +435,39 @@ export class WizardRunner {
       resumeFrom = statSync(tmp).size;
       headers.range = `bytes=${resumeFrom}-`;
     }
-    const response = await fetchImpl(row.url, { redirect: 'follow', headers });
-    if (!response.ok || !response.body) {
-      throw new Error(`下载失败：HTTP ${response.status}（${row.url}）`);
+    const abort = new AbortController();
+    this.active.set(id, {
+      kill: () => {
+        state.cancelled = true;
+        abort.abort();
+      },
+    });
+    let response: Response;
+    let source: Readable;
+    try {
+      response = await fetchImpl(row.url, { redirect: 'follow', headers, signal: abort.signal });
+      if (!response.ok || !response.body) {
+        throw new Error(`下载失败：HTTP ${response.status}（${row.url}）`);
+      }
+      source = Readable.fromWeb(response.body as import('node:stream/web').ReadableStream);
+      await this.pipeDownload(response, source, tmp, log, resumeFrom);
+    } catch (error) {
+      if (state.cancelled) throw new WizardCancelledError();
+      throw error;
     }
+    renameSync(tmp, target);
+    const sizeMb = (statSync(target).size / MB).toFixed(1);
+    return `下载完成：${target}（${sizeMb}MB）`;
+  }
+
+  /** 206/200 判定 + 流式落盘 + MB 粒度进度行（runDownload 的主体，取消外框单独包）。 */
+  private async pipeDownload(
+    response: Response,
+    source: Readable,
+    tmp: string,
+    log: StepLogWriter,
+    resumeFrom: number,
+  ): Promise<void> {
     // 206=续传（append + Content-Range 总长）；起点与本地不符说明 .download 已失效，
     // 丢弃重来，下轮从零开始。200（或无 Content-Range）=不支持 Range，从头覆盖。
     let baseSize = 0;
@@ -404,7 +491,6 @@ export class WizardRunner {
     }
     let received = 0;
     let lastLoggedMb = -1;
-    const source = Readable.fromWeb(response.body as import('node:stream/web').ReadableStream);
     source.on('data', (chunk: Buffer) => {
       received += chunk.byteLength;
       // 进度写库按 MB 粒度节流，避免小包高频打 sqlite；分母含续传基数。
@@ -424,9 +510,6 @@ export class WizardRunner {
       // 保留 .download 供下次续传。
       throw new Error(`下载不完整：期望 ${total} 字节，实际 ${finalSize} 字节`);
     }
-    renameSync(tmp, target);
-    const sizeMb = (statSync(target).size / MB).toFixed(1);
-    return `下载完成：${target}（${sizeMb}MB）`;
   }
 }
 
@@ -521,4 +604,39 @@ export class WizardError extends Error {
   ) {
     super(message);
   }
+}
+
+/** 用户取消的哨兵错误（走查 2026-09-24）：run() 捕获后回 pending，不计失败。 */
+export class WizardCancelledError extends Error {
+  constructor() {
+    super('用户取消');
+  }
+}
+
+/**
+ * 进程组杀（走查 2026-09-24）：POSIX 下负 pid 广播到整组（shell 的孙进程一并
+ * 收敛——TaskStop 只杀外层进程杀不掉孙进程的教训）；SIGTERM 后 3s 兜底 SIGKILL。
+ * Windows 无进程组语义，退化为直接 kill（适配属初步未测试范畴）。
+ */
+function killProcessTree(child: import('node:child_process').ChildProcess): void {
+  const pid = child.pid;
+  if (pid === undefined) return;
+  if (process.platform === 'win32') {
+    try {
+      child.kill();
+    } catch {
+      /* 已退出 */
+    }
+    return;
+  }
+  const signalGroup = (signal: NodeJS.Signals): void => {
+    try {
+      process.kill(-pid, signal);
+    } catch {
+      /* 组已随主进程退出 */
+    }
+  };
+  signalGroup('SIGTERM');
+  const killer = setTimeout(() => signalGroup('SIGKILL'), 3000);
+  killer.unref?.();
 }
