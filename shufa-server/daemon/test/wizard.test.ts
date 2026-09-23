@@ -327,6 +327,64 @@ describe('wizard 取消（走查 2026-09-24）', () => {
     }
   });
 
+  test('resumable 残差投影 + 覆盖下载（force 丢弃 .download 从头下载）', async () => {
+    const s = createServices();
+    try {
+      const { target } = seedsIn(s);
+      // 记录收到的 Range 头：首轮（残差续传）应无/有 Range，force 轮必须无 Range。
+      const seenRanges: (string | undefined)[] = [];
+      let hits = 0;
+      const server = http.createServer((req, res) => {
+        hits += 1;
+        seenRanges.push(req.headers.range);
+        res.writeHead(200, { 'content-length': '4096' });
+        res.end(Buffer.alloc(4096));
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const port = (server.address() as { port: number }).port;
+      const seeds = [
+        {
+          id: 'dl-resume',
+          kind: 'download' as const,
+          title: '覆盖下载语义',
+          command: null,
+          url: `http://127.0.0.1:${port}/overwrite.bin`,
+          targetDir: target,
+        },
+      ];
+      const runner = new WizardRunner(s.db, seeds);
+      installWizardSeeds(s.db, seeds);
+      const target2 = `${path.join(target, 'overwrite.bin')}`;
+
+      // 首轮正常下载完成 → resumable=false。
+      const done = await runner.run('dl-resume', true);
+      expect(done.status).toBe('done');
+      expect(done.resumable).toBe(false);
+      expect(existsSync(target2)).toBe(true);
+
+      // 人工制造 .download 残差（模拟取消/中断遗留）→ 列表投影 resumable=true。
+      writeFileSync(`${target2}.download`, Buffer.alloc(1024));
+      expect(runner.list().find((v) => v.id === 'dl-resume')?.resumable).toBe(true);
+
+      // 非强制 run：嗅探只看最终文件存在 → 已 done 会直接跳过（force=false 返回原状）。
+      const skipped = await runner.run('dl-resume', false);
+      expect(skipped.status).toBe('done');
+
+      // 覆盖下载（force=true）：残差被丢弃——服务端不得收到 Range 头。
+      const before = hits;
+      const overwritten = await runner.run('dl-resume', true);
+      expect(overwritten.status).toBe('done');
+      expect(overwritten.resumable).toBe(false);
+      expect(hits).toBe(before + 1);
+      expect(seenRanges[seenRanges.length - 1]).toBeUndefined();
+      // 残差已被消费清理（覆盖下载成功后 tmp 改名落位，无 .download 残留）。
+      expect(existsSync(`${target2}.download`)).toBe(false);
+      server.close();
+    } finally {
+      s.dispose();
+    }
+  });
+
   test('cancel 未知步骤 NOT_FOUND；未运行 CONFLICT', async () => {
     const s = createServices();
     try {
@@ -654,7 +712,9 @@ describe('wizard 下载断点续传（R6，fetchImpl mock）', () => {
       expect(existsSync(tmp)).toBe(true); // 失败/中断保留 .download 供续传
       expect(calls[0]?.range).toBeUndefined(); // 首次无 Range
 
-      const done = await runner.run('dl', true);
+      // 三轮语义：force=覆盖下载（丢弃残差）——续传腿必须 force=false（failed 态
+      // 本就不会被 done 跳过，天然走 Range 续传）。
+      const done = await runner.run('dl', false);
       expect(done.status).toBe('done');
       expect(done.last_log).toContain('下载完成');
       expect(calls.length).toBe(2);

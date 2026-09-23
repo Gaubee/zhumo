@@ -79,6 +79,9 @@ export const WizardStepSchema = z.object({
    * 原位替换（同一下载会话只留最新进度），命令输出与终态行永久保留。 */
   last_log: z.string().nullable(),
   updated_at: IsoDateTimeSchema,
+  /** 走查 2026-09-24 · 三轮：download 步骤存在 .download 残差（取消/中断遗留）；
+   * UI 据此显示「恢复下载」（无残差=「开始下载」）。command 恒 false。 */
+  resumable: z.boolean(),
 });
 export type WizardStep = z.infer<typeof WizardStepSchema>;
 
@@ -87,7 +90,8 @@ export type WizardStepsOutput = z.infer<typeof WizardStepsOutputSchema>;
 
 export const WizardRunInputSchema = z.object({
   id: IdSchema,
-  /** 强制执行：嗅探跳过与「已完成」都重跑。 */
+  /** 强制执行：嗅探跳过与「已完成」都重跑；download 步骤强制=覆盖下载
+   * （丢弃 .download 残差从头下载，走查 2026-09-24 · 三轮）。 */
   force: z.boolean().default(false),
   /** download 参数化（whisper-model）：模型型号（WHISPER_MODEL_CATALOG.id），缺省保持行上既有。 */
   model: z.string().optional(),

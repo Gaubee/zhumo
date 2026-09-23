@@ -97,6 +97,8 @@ export interface WizardStep {
   progressText?: string;
   /** 嗅探结果：命令已安装 / 文件已存在（默认跳过）。 */
   detected: boolean;
+  /** download 步骤存在 .download 残差 → 按钮「恢复下载」（否则「开始下载」）。 */
+  resumable: boolean;
   updatedAt: string;
 }
 

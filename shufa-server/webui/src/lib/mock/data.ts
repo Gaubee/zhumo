@@ -205,6 +205,7 @@ export const mockDb = {
       status: "done",
       lastLog: "嗅探：ffmpeg 已安装（ffmpeg version 7.1），跳过执行",
       progress: 100,
+      resumable: false,
       detected: true,
       updatedAt: now(),
     },
@@ -217,6 +218,7 @@ export const mockDb = {
       status: "pending",
       lastLog: "",
       progress: 0,
+      resumable: false,
       detected: false,
       updatedAt: now(),
     },
@@ -229,6 +231,7 @@ export const mockDb = {
       status: "pending",
       lastLog: "",
       progress: 0,
+      resumable: false,
       detected: false,
       updatedAt: now(),
     },
@@ -241,6 +244,7 @@ export const mockDb = {
       status: "pending",
       lastLog: "",
       progress: 0,
+      resumable: false,
       detected: false,
       updatedAt: now(),
     },
@@ -344,6 +348,8 @@ export async function runWizardStepMock(
   const step = mockDb.wizardSteps.find((s) => s.id === stepId);
   if (!step) return;
   step.status = "running";
+  // 三轮：下载启动即消费/覆盖 .download 残差（与 daemon rmSync/续传语义对齐）。
+  step.resumable = false;
   step.updatedAt = now();
   for (const listener of stepListeners) listener({ at: now(), seq: 0, kind: "status" });
   let selectedLine = "";
@@ -386,6 +392,7 @@ export async function runWizardStepMock(
       await sleep(400);
       if (mockCancelled.delete(stepId)) {
         step.status = "pending";
+        step.resumable = true;
         step.lastLog += "\n[中断] 用户取消（已下载部分保留，可续传）";
         step.updatedAt = now();
         for (const listener of stepListeners) listener({ at: now(), seq: 0, kind: "status" });

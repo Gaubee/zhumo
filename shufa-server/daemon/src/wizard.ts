@@ -296,7 +296,7 @@ export class WizardRunner {
         }
       } else {
         // 下载终态（完成行/失败行）同样追加；文件存在 + 尺寸校验即后验（R6 保持）。
-        const doneLine = await this.runDownload(id, row, log, state);
+        const doneLine = await this.runDownload(id, row, log, state, force);
         log.append(doneLine);
         updateWizardProgress(this.db, id, { status: 'done' });
       }
@@ -422,6 +422,7 @@ export class WizardRunner {
     row: WizardStepRow,
     log: StepLogWriter,
     state: { cancelled: boolean },
+    force: boolean,
   ): Promise<string> {
     if (!row.url) throw new Error('步骤缺少 url 定义');
     const target = downloadTargetPath(row.url, row.target_dir);
@@ -429,6 +430,8 @@ export class WizardRunner {
     mkdirSync(row.target_dir, { recursive: true });
     const fetchImpl = this.options.fetchImpl ?? fetch;
     const tmp = `${target}.download`;
+    // 覆盖下载（走查 2026-09-24 · 三轮）：force 丢弃 .download 残差从头下载。
+    if (force) rmSync(tmp, { force: true });
     let resumeFrom = 0;
     const headers: Record<string, string> = {};
     if (existsSync(tmp)) {
@@ -525,7 +528,15 @@ export function toView(row: WizardStepRow | null): WizardStep {
     status: row.status,
     last_log: row.last_log,
     updated_at: row.updated_at,
+    // 走查 2026-09-24 · 三轮：.download 残差存在性（UI「恢复下载」依据）。
+    resumable: row.kind === 'download' && downloadResumable(row.url, row.target_dir),
   };
+}
+
+/** download 步骤的 .download 残差存在（取消/中断遗留，可 Range 续传）。 */
+export function downloadResumable(url: string | null, targetDir: string): boolean {
+  const target = downloadTargetPath(url ?? '', targetDir);
+  return target !== null && existsSync(`${target}.download`);
 }
 
 /** download 目标文件：<target_dir>/<url 最后一段路径>。 */

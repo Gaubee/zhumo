@@ -505,8 +505,9 @@ function toUserView(user: ContractUserInfo): UserInfo {
 }
 
 interface DownloadProgress {
+  /** 0-100 浮点（两位小数精度，走查 2026-09-24 · 三轮：badge「下载中 nn.nn%」）。 */
   percent: number;
-  /** 「12.3MB / 148.0MB（8%）」进度文案；解析不出为 null（命令类步骤/无进度行）。 */
+  /** 「12.3MB / 148.0MB（8.31%）」进度文案；解析不出为 null（命令类步骤/无进度行）。 */
   text: string | null;
 }
 
@@ -516,7 +517,9 @@ interface DownloadProgress {
  * 缺百分比时按 MB 比值折算；续传时 total 不变、current 从偏移起跳，正则原样兼容。
  */
 function parseDownloadProgress(log: string): DownloadProgress {
-  const clamp = (value: number): number => Math.min(100, Math.max(0, Math.round(value)));
+  // 不再取整：MB 比值折算保留两位小数（走查 2026-09-24 · 三轮），显式整数百分比
+  // 仅在 MB 缺失时兜底。
+  const clamp = (value: number): number => Math.min(100, Math.max(0, value));
   const re =
     /已下载\s*([\d.]+)\s*(KB|MB|GB)\s*\/\s*([\d.]+)\s*(KB|MB|GB)(?:\s*（(\d+(?:\.\d+)?)%）)?/g;
   let last: RegExpExecArray | null = null;
@@ -524,16 +527,16 @@ function parseDownloadProgress(log: string): DownloadProgress {
   if (last === null) return { percent: 0, text: null };
   const current = `${last[1]}${last[2]}`;
   const total = `${last[3]}${last[4]}`;
+  const downloaded = Number.parseFloat(last[1] ?? "0");
+  const totalNumber = Number.parseFloat(last[3] ?? "0");
   const explicit = last[5] === undefined ? null : Number.parseFloat(last[5] ?? "");
-  let percent: number;
-  if (explicit !== null && Number.isFinite(explicit)) {
-    percent = clamp(explicit);
-  } else {
-    const downloaded = Number.parseFloat(last[1] ?? "0");
-    const totalNumber = Number.parseFloat(last[3] ?? "0");
-    percent = totalNumber > 0 ? clamp((downloaded / totalNumber) * 100) : 0;
-  }
-  return { percent, text: `${current} / ${total}（${percent}%）` };
+  const percent =
+    totalNumber > 0
+      ? clamp((downloaded / totalNumber) * 100)
+      : explicit !== null && Number.isFinite(explicit)
+        ? clamp(explicit)
+        : 0;
+  return { percent, text: `${current} / ${total}（${percent.toFixed(2)}%）` };
 }
 
 /**
@@ -563,6 +566,7 @@ function toWizardStepView(step: ContractWizardStep): WizardStep {
     lastLog: step.last_log ?? "",
     ...deriveStepProgress(step.status, step.last_log ?? ""),
     detected: step.status === "done" && (step.last_log ?? "").includes("嗅探"),
+    resumable: step.resumable ?? false,
     updatedAt: step.updated_at,
   };
 }

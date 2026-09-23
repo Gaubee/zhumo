@@ -8,6 +8,13 @@
   2. done 态按钮默认 disabled，勾选强制开关才 enable，并在按钮附近给说明行。
   3. 嗅探徽章 kind-aware（已安装（嗅探）/ 已下载（嗅探））。
   4. whisper-model 步骤内嵌模型/镜像选择器，选中值随 onrun params 传出。
+  走查修订 [2026-09-24 · 三轮]：
+  1. 下载运行徽章带百分比：「下载中 nn.nn%」（解析精度两位小数）。
+  2. title 摘要 span 补 block——inline 元素上 w-full/truncate 不生效，长行撑破布局。
+  3. whisper 两个 Select 触发器 w-fit 撑破格子（选中 large-v3-turbo 与镜像源重叠）
+     → w-full min-w-0 + label min-w-0。
+  4. 下载开关改「覆盖下载」（force=丢弃 .download 从头下载）；按钮按残差分
+     「开始下载 / 恢复下载」。
   走查修订 [2026-09-24 · 二轮]：
   1. running 徽章/按钮按 kind 分型（命令=执行中，下载=下载中），运行中按钮变
      「中断」（oncancel），不再禁用等待。
@@ -100,7 +107,13 @@
    * 父组件乐观值（pending 但刚点过运行）时同样按 kind 显示运行文案。
    */
   function statusLabel(step: WizardStep, isRunning: boolean): string {
-    const runningLabel = step.kind === "command" ? "执行中" : "下载中";
+    // 三轮：下载运行中带两位小数百分比（「下载中 nn.nn%」）；无进度行时纯文案。
+    const runningLabel =
+      step.kind === "command"
+        ? "执行中"
+        : step.progress > 0
+          ? `下载中 ${step.progress.toFixed(2)}%`
+          : "下载中";
     if (isRunning) return runningLabel;
     switch (step.status) {
       case "pending":
@@ -121,16 +134,17 @@
     return step.kind === "command" ? "已安装（嗅探）" : "已下载（嗅探）";
   }
 
-  /** 按钮文字 kind-aware：命令=运行，下载=下载。 */
+  /** 按钮文字（三轮）：命令=运行；下载=.download 残差存在=恢复下载，否则开始下载。 */
   function actionLabel(step: WizardStep): string {
-    return step.kind === "command" ? "运行" : "下载";
+    if (step.kind === "command") return "运行";
+    return step.resumable ? "恢复下载" : "开始下载";
   }
 
   /** done 态且未开强制开关时按钮旁的说明行（kind-aware）。 */
   function rerunHint(step: WizardStep): string {
     return step.kind === "command"
       ? "已安装；重跑请先开启强制开关。"
-      : "已下载；重跑请先开启强制开关。";
+      : "已下载；重新下载请先开启「覆盖下载」。";
   }
 
   /** 体积展示：≥1024MB 折算 GB 一位小数，否则整 MB。 */
@@ -174,7 +188,9 @@
       value={step.id}
       class="rounded-lg border bg-card px-4 {isRunning ? 'border-primary/40' : ''}"
     >
-      <Accordion.Trigger class="gap-3 py-3 text-sm hover:no-underline">
+      <!-- min-w-0：Trigger 是 Header(flex) 的 flex item，min-width:auto 会随长日志行
+           撑开（三轮实证：2864px 长行把 w-full/truncate 全链顶穿，只剩祖先硬剪）。 -->
+      <Accordion.Trigger class="min-w-0 gap-3 py-3 text-sm hover:no-underline">
         <span class="flex min-w-0 flex-1 flex-col items-start gap-1">
           <span class="flex w-full items-center gap-2">
             <span class="truncate font-medium">{step.title}</span>
@@ -197,7 +213,7 @@
           <!-- summary 内嵌预览（走查 2026-09-24 · 二轮：title 不再放进度条——展开
                面板已有唯一进度条，title 只留命令尾行/下载 URL 的 mono 摘要） -->
           <span
-            class="w-full truncate rounded bg-muted/60 px-1.5 py-0.5 text-left font-mono text-[11px] text-muted-foreground"
+            class="block w-full truncate rounded bg-muted/60 px-1.5 py-0.5 text-left font-mono text-[11px] text-muted-foreground"
           >
             {step.kind === "command"
               ? (step.lastLog.length > 0 ? lastLine(step.lastLog) : (step.command ?? ""))
@@ -266,10 +282,10 @@
           <!-- whisper-model 专属：模型 + 镜像源选择（选中值随下载动作传出） -->
           {#if step.id === "whisper-model"}
             <div class="grid gap-2 sm:grid-cols-2">
-              <label class="flex flex-col gap-1">
+              <label class="flex min-w-0 flex-col gap-1">
                 <span class="text-muted-foreground">模型</span>
                 <Select.Root type="single" items={whisperModelItems} bind:value={whisperModel}>
-                  <Select.Trigger class="h-8 text-xs" aria-label="选择 whisper 模型">
+                  <Select.Trigger class="h-8 w-full min-w-0 text-xs" aria-label="选择 whisper 模型">
                     <Select.Value />
                   </Select.Trigger>
                   <Select.Content class="max-h-64 text-xs">
@@ -281,10 +297,10 @@
                   </Select.Content>
                 </Select.Root>
               </label>
-              <label class="flex flex-col gap-1">
+              <label class="flex min-w-0 flex-col gap-1">
                 <span class="text-muted-foreground">镜像源</span>
                 <Select.Root type="single" items={whisperMirrorItems} bind:value={whisperMirror}>
-                  <Select.Trigger class="h-8 text-xs" aria-label="选择下载镜像源">
+                  <Select.Trigger class="h-8 w-full min-w-0 text-xs" aria-label="选择下载镜像源">
                     <Select.Value />
                   </Select.Trigger>
                   <Select.Content class="max-h-64 text-xs">
@@ -304,7 +320,7 @@
                 disabled={isRunning}
                 aria-label="强制执行"
               />
-              <span>{step.kind === "command" ? "强制执行（嗅探已装也重跑）" : "强制下载（已存在也重下）"}</span>
+              <span>{step.kind === "command" ? "强制执行（嗅探已装也重跑）" : "覆盖下载"}</span>
             </label>
             {#if isRunning}
               {#if oncancel}
