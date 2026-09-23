@@ -22,11 +22,16 @@
     void initAuth();
   });
 
-  // 安装门控：needsSetup 且不在 /setup → 强制跳转（PRODUCT_DESIGN §1）。
+  // 安装门控：needsSetup 且不在 /setup → 强制跳转（PRODUCT_DESIGN §1）；
+  // 反向：安装已完成（setup_completed，非 needs_setup——后者建管理员即翻 false）
+  // 再进 /setup 属残废向导（无会话凭证步 2 必败）→ 弹去登录。
   $effect(() => {
     if (auth.loading) return;
-    if (auth.bootstrap?.needsSetup && router.route.name !== "setup") {
+    const name = router.route.name;
+    if (auth.bootstrap?.needsSetup && name !== "setup") {
       location.hash = "#/setup";
+    } else if (auth.bootstrap?.setupCompleted && name === "setup") {
+      location.hash = "#/login";
     }
   });
 </script>

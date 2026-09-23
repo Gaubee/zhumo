@@ -10,6 +10,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export interface AppConfig {
   /** .env 绝对路径。 */
@@ -128,12 +129,14 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
   );
   const siteBaseUrl = pick('SITE_BASE_URL') || `http://${host}:${port}`;
   // webuiDir 解析：envFile 可能放仓库根（.env）也可能放子目录（runtime/w7b.env、
-  // daemon/.env）——两级候选按 index.html 存在性择优（实证 2026-09-23：仓库根
-  // .env 走 `..` 候选会指到仓库外，前台全量 404「未找到」）。
+  // daemon/.env）——候选按 index.html 存在性择优（实证 2026-09-23：仓库根
+  // .env 走 `..` 候选会指到仓库外，前台全量 404「未找到」）；末位兜底按本模块
+  // 位置上溯（webui 与 daemon 恒为兄弟包，env 文件放任意处都不丢前台）。
   const envDir = path.dirname(envFile);
   const webuiCandidates = [
     path.resolve(envDir, 'webui', 'dist'),
     path.resolve(envDir, '..', 'webui', 'dist'),
+    fileURLToPath(new URL('../../webui/dist', import.meta.url)),
   ];
   const webuiDir =
     webuiCandidates.find((candidate) => existsSync(path.join(candidate, 'index.html'))) ??

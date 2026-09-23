@@ -584,6 +584,7 @@ class RpcApi implements ShufaApi {
       modelRoute: out.model_route ?? null,
       // BUG2：setup_progress 契约由 daemon 并行落地；缺字段时归一 null（向导自由步进）。
       setupProgress: out.setup_progress ?? null,
+      setupCompleted: out.setup_completed ?? false,
     };
   }
 

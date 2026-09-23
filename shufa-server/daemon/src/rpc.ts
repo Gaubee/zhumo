@@ -184,6 +184,8 @@ const bootstrap = base.handler(async ({ context }): Promise<BootstrapOutput> => 
       steps_total: steps.total,
       model_configured: resolveModelRouteInfo(context.db, context.config) !== null,
     },
+    // 走查 2026-09-24：完成标记随 bootstrap 下发（SPA 反向门控 /setup → 登录）。
+    setup_completed: getSetting(context.db, 'setup_completed') === '1',
   };
 });
 
@@ -222,7 +224,13 @@ const setupRunStep = setupGated.input(WizardRunInputSchema).handler(async ({ con
   return context.wizard.run(input.id, input.force, { model: input.model, mirror: input.mirror });
 });
 
-const setupComplete = setupGated.handler(async ({ context }) => {
+// 完成标记不能挂 setupGated：needs_setup 在建管理员后即翻 false，complete 会恒
+// 403（实证 2026-09-24：向导「完成安装」静默失败、settings.setup_completed 从未
+// 落库）。改为校验管理员已建（防全新站点误触），幂等写标记。
+const setupComplete = base.handler(async ({ context }) => {
+  if (!hasNonAnonymousUser(context.db)) {
+    throw new ORPCError('FORBIDDEN', { message: '尚未创建管理员账号，无法完成安装' });
+  }
   putSetting(context.db, 'setup_completed', '1');
   return { ok: true as const };
 });

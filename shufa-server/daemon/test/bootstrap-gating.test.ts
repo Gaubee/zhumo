@@ -96,7 +96,10 @@ test('完成后 setup 端点一律 403（§4 完成后 403）', async () => {
     await expect(client.setup.runStep({ id: 'ffmpeg', force: false })).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
-    await expect(client.setup.complete()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    // 走查 2026-09-24：complete 不再受 setupGated 拦截（needs_setup 建管理员后即翻
+    // false，旧实现令「完成安装」恒 403 静默失败）——完成后仍可幂等补写标记。
+    expect((await client.setup.complete()).ok).toBe(true);
+    expect(getSetting(s.db, 'setup_completed')).toBe('1');
     await expect(
       client.setup.createAdmin({ username: 'other', password: 'secret66' }),
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -105,12 +108,17 @@ test('完成后 setup 端点一律 403（§4 完成后 403）', async () => {
   }
 });
 
-test('setup.complete：写安装完成标记（幂等）', async () => {
+test('setup.complete：管理员未建时拒绝；已建后幂等写标记', async () => {
   const s = createServices();
   try {
     const client = clientFor(s.context());
+    // 防全新站点误触：无非匿名用户时 complete 拒绝。
+    await expect(client.setup.complete()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await client.setup.createAdmin({ username: 'boss', password: 'secret66' });
     expect((await client.setup.complete()).ok).toBe(true);
     expect(getSetting(s.db, 'setup_completed')).toBe('1');
+    // 幂等：重复完成不抛。
+    expect((await client.setup.complete()).ok).toBe(true);
   } finally {
     s.dispose();
   }

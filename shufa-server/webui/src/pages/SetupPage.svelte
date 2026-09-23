@@ -73,11 +73,15 @@
     const raw = localStorage.getItem(SETUP_STEP_KEY);
     const stored = raw === null ? Number.NaN : Number(raw); // Number(null)=0，须显式排除缺键。
     const remembered = Number.isInteger(stored) && stored >= 0 && stored <= 2 ? stored : null;
+    // 记忆只作下限之上的偏好：不拖已完成的后腿（实证 2026-09-24：挂载时
+    // admin_created=false 走 gotoStep(0) 会把 "0" 写进记忆，createAdmin 后
+    // 若照单全收，推导 effect 会把 UI 钉回步 0）。
+    const floor = deriveServerStep(progress) ?? 0;
     if (remembered !== null) {
-      step = remembered;
+      step = Math.max(remembered, floor);
       return;
     }
-    step = deriveServerStep(progress) ?? step;
+    step = floor;
   }
 
   applySetupProgress();
@@ -147,7 +151,8 @@
       try {
         await api.createAdmin(username.trim(), password, allowAnonymous);
         // 刷新 bootstrap（setup_progress.admin_created 翻转）→ 推导 effect 落到步 1。
-        await initAuth();
+        // quiet：不翻 loading（响亮刷新会卸载整树、重置本组件状态——步 0 卡死根因）。
+        await initAuth({ quiet: true });
       } catch (e) {
         error = e instanceof Error ? e.message : String(e);
         busy = false;
@@ -173,12 +178,16 @@
 
   async function finish(): Promise<void> {
     busy = true;
+    error = null;
     try {
       await api.completeSetup();
       localStorage.removeItem(SETUP_STEP_KEY); // 向导走完，清除手动步记忆。
-      // 刷新 bootstrap（needs_setup 已翻转），否则门控会把页面弹回 /setup。
-      await initAuth();
+      // 刷新 bootstrap（needs_setup 已翻转），否则门控会把页面弹回 /setup；同上用 quiet。
+      await initAuth({ quiet: true });
       navigate("#/login");
+    } catch (e) {
+      // 实证 2026-09-24：complete 失败曾静默（无 catch），UI 停在步 2 无任何反馈。
+      error = e instanceof Error ? e.message : String(e);
     } finally {
       busy = false;
     }

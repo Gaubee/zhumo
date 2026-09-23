@@ -45,6 +45,8 @@ export interface BootstrapInfo {
   modelRoute: ModelRouteInfo | null;
   /** 安装向导进度（BUG2）；旧 daemon 未带字段时归一 null（向导退化为自由步进）。 */
   setupProgress: SetupProgress | null;
+  /** 安装已完成标记（走查 2026-09-24）；旧 daemon 未带字段时归一 false。 */
+  setupCompleted: boolean;
 }
 
 export type UserRole = "admin" | "user" | "anonymous";

@@ -12,9 +12,14 @@ export const auth = $state({
   error: null as string | null,
 });
 
-/** 启动：拉 bootstrap + 恢复会话；匿名允许且无会话时自动匿名（PRODUCT_DESIGN §3）。 */
-export async function initAuth(): Promise<void> {
-  auth.loading = true;
+/**
+ * 启动：拉 bootstrap + 恢复会话；匿名允许且无会话时自动匿名（PRODUCT_DESIGN §3）。
+ * quiet（后台刷新）：不翻 loading——实证 2026-09-24：SetupPage createAdmin 后
+ * 调本函数，loading=true 令 App 整树卸载重挂，向导表单被重置回步 0（冒泡为
+ * 「创建成功但 UI 永远停在管理员账号步」）；仅首次启动用响亮模式。
+ */
+export async function initAuth(opts: { quiet?: boolean } = {}): Promise<void> {
+  if (!opts.quiet) auth.loading = true;
   auth.error = null;
   try {
     auth.bootstrap = await api.getBootstrap();

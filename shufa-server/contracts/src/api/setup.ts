@@ -39,6 +39,10 @@ export const BootstrapOutputSchema = z.object({
   site_name: z.string(),
   model_route: ModelRouteInfoSchema.nullable(),
   setup_progress: SetupProgressSchema,
+  /** 走查 2026-09-24：完成标记（settings.setup_completed）——完成后 /setup 属残废
+   * 向导（步 2 无凭证必败），SPA 反向弹登录。注意 needs_setup 在建管理员后即翻
+   * false，不能作此判定。 */
+  setup_completed: z.boolean(),
 });
 export type BootstrapOutput = z.infer<typeof BootstrapOutputSchema>;
 
