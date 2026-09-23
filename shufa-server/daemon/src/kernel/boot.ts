@@ -26,10 +26,10 @@ import {
 import type { Context } from '@deepseek-ai/cordis';
 import { stringify as stringifyYaml } from 'yaml';
 import {
-  injectApiKeyEnv,
-  syncModelRouteCredential,
-  syncModelRouteSettings,
-  type ShufaModelRoute,
+  injectApiKeysEnv,
+  syncModelRoutesCredentials,
+  syncModelRoutesSettings,
+  type ModelRoutesBundle,
 } from './model-route.js';
 import { KERNEL_DISABLED_TOOL_ROWS } from './tool-surface.js';
 import { buildSystemPersona } from './prompts.js';
@@ -55,8 +55,8 @@ export interface ShufaKernelOptions {
   dataRoot: string;
   /** daemon 的 /mcp 端点（内核组合 dsh-mcp-client 行连接）。 */
   mcp?: { url: string; token: string };
-  /** 模型路由（null = 未配置模型，内核以缺省路由运行）。 */
-  modelRoute: ShufaModelRoute | null;
+  /** 模型路由束（多路由 + 默认模型；空 routes = 未配置，内核以缺省路由运行）。 */
+  modelRoutes: ModelRoutesBundle | null;
   /** skills/shufa/SKILL.md 路径（persona 注入）。 */
   skillDocPath: string;
 }
@@ -72,7 +72,10 @@ export async function bootShufaKernel(options: ShufaKernelOptions): Promise<Shuf
 
   const restoreMcpUrl = stashEnv('SHUFA_MCP_URL', options.mcp?.url);
   const restoreMcpToken = stashEnv('SHUFA_MCP_TOKEN', options.mcp?.token);
-  const restoreKey = options.modelRoute ? injectApiKeyEnv(options.modelRoute) : () => {};
+  const restoreKey =
+    options.modelRoutes && options.modelRoutes.routes.length > 0
+      ? injectApiKeysEnv(options.modelRoutes.routes)
+      : () => {};
 
   // 官方 profile 机制：单 dsh-base bundle。
   const profileDir = resolveProfileDir('kernel', home);
@@ -82,10 +85,11 @@ export async function bootShufaKernel(options: ShufaKernelOptions): Promise<Shuf
   const disableYaml = KERNEL_DISABLED_TOOL_ROWS.map((id) => `- id: ${id}\n  disabled: true\n`).join('');
   writeFileSync(path.join(profileDir, 'cordis.patch.yml'), disableYaml, 'utf8');
 
-  // 模型路由桥（热面）：settings.yaml 路由 + .credentials.yaml version-1 refs。
-  if (options.modelRoute) {
-    syncModelRouteSettings(home, options.modelRoute);
-    syncModelRouteCredential(home, options.modelRoute);
+  // 模型路由桥（热面，五轮多路由）：settings.yaml providers 全量 + 默认模型
+  // + .credentials.yaml version-1 refs 全量密钥。
+  if (options.modelRoutes && options.modelRoutes.routes.length > 0) {
+    syncModelRoutesSettings(home, options.modelRoutes);
+    syncModelRoutesCredentials(home, options.modelRoutes.routes);
   }
 
   // shufa 产品 preset（$DSH_HOME/.agent-presets/shufa/，官方 includeUserRoot 机制）：

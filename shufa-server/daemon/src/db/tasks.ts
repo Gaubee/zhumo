@@ -21,6 +21,9 @@ export interface TaskRow {
   video_resource_id: string | null;
   agent_session_id: string | null;
   result_id: string | null;
+  /** 任务级模型覆盖（五轮活动模型；NULL=跟随默认模型）。 */
+  model_provider: string | null;
+  model_model: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -32,6 +35,8 @@ export function createTask(
     resourceId: string | null;
     videoResourceId: string | null;
     prompt: string;
+    modelProvider?: string | null;
+    modelModel?: string | null;
   },
 ): TaskRow {
   const row: TaskRow = {
@@ -43,19 +48,24 @@ export function createTask(
     video_resource_id: input.videoResourceId,
     agent_session_id: null,
     result_id: null,
+    model_provider: input.modelProvider ?? null,
+    model_model: input.modelModel ?? null,
     created_at: nowIso(),
     updated_at: nowIso(),
   };
   db.prepare(
     `INSERT INTO tasks (id, resource_id, owner_id, status, prompt, video_resource_id,
-                        agent_session_id, result_id, created_at, updated_at)
-     VALUES (?, ?, ?, 'queued', ?, ?, NULL, NULL, ?, ?)`,
+                        agent_session_id, result_id, model_provider, model_model,
+                        created_at, updated_at)
+     VALUES (?, ?, ?, 'queued', ?, ?, NULL, NULL, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.resource_id,
     row.owner_id,
     row.prompt,
     row.video_resource_id,
+    row.model_provider,
+    row.model_model,
     row.created_at,
     row.updated_at,
   );

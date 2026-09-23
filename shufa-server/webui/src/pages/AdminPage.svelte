@@ -422,9 +422,10 @@
             </div>
           </div>
         {:else}
-          <!-- 设置 -->
+          <!-- 设置（五轮 · 二：高度链——页级滚动只属于整页；ModelsConfig 卡片
+               撑满剩余视口（内容内部自滚），不再被流式卡片高度塌缩）。 -->
           <div class="h-full overflow-y-auto p-4">
-            <div class="mx-auto max-w-2xl space-y-4">
+            <div class="mx-auto flex max-w-2xl flex-col gap-4">
               <section class="space-y-2">
                 <h2 class="text-sm font-medium">准备步骤重跑</h2>
                 <PrepStepsAccordion
@@ -434,7 +435,7 @@
                   oncancel={cancelStep}
                 />
               </section>
-              <section class="rounded-lg border bg-card p-4">
+              <section class="flex min-h-[28rem] flex-col rounded-lg border bg-card p-4 lg:h-[calc(100vh-11rem)] lg:min-h-[32rem]">
                 <ModelsConfig />
               </section>
               <section class="space-y-3 rounded-lg border bg-card p-4">

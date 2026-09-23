@@ -102,55 +102,69 @@ export interface WizardStep {
   updatedAt: string;
 }
 
-// ---- [3] 模型路由（DshModelRoute） ----
+// ---- [3] 模型路由（五轮多路由；契约 api/models.ts 的本地镜像） ----
+
+export type RouteApi = "anthropic-messages" | "openai-completions" | "openai-responses";
+export type ModelInputType = "text" | "image";
 
 /** 路由内单模型条目。 */
 export interface RouteModel {
   id: string;
   /** 展示名：缺省由 id 派生（readableModelName）。 */
   name?: string;
-  /** 可用 reasoning effort 档。 */
-  efforts?: string[];
+  /** 上下文窗口（token；UI 以 128k/0.5M 简写交互）。 */
   contextWindow?: number;
   maxOutputTokens?: number;
-  inputTypes?: string[];
+  /** 可用 reasoning effort 档。 */
+  efforts?: string[];
+  /** 输入模态（五轮）：text 恒支持；image = 视觉输入。 */
+  inputTypes?: ModelInputType[];
   outputTypes?: string[];
 }
 
-/**
- * 模型路由（与 skill-creator-v2 DshModelRouteSchema 同形；apiKey 为本地 UI
- * 字段，桥接层写 .credentials.yaml，不进 settings.yaml）。
- */
+/** 模型路由（密钥不在输出面——hasKey 布尔；保存时空 apiKey=保留旧值）。 */
 export interface DshModelRoute {
-  /** 路由名 = providers 键。 */
   provider: string;
-  /** wire 协议（自定义路由必填，如 anthropic-messages）。 */
-  api?: string;
+  api: RouteApi;
   baseURL: string;
+  /** models.dev 图标 URL（缺失回退字母头像）。 */
+  iconUrl?: string;
+  hasKey?: boolean;
+  /** 仅保存面：非空=更新密钥；空/缺省=保留。 */
   apiKey?: string;
-  icon?: string;
-  iconLetter?: string;
-  iconColor?: string;
-  iconSuppressed?: boolean;
   models: RouteModel[];
 }
 
-/** Models 配置真源：路由集合 + 活动模型选择。 */
+/** Models 配置（五轮）：路由集合 + 默认模型（活动模型按任务由前台选择）。 */
 export interface ModelsSettings {
   routes: DshModelRoute[];
-  active: { provider: string; model: string };
+  default: { provider: string; model: string } | null;
+}
+
+/** 连接测试结果（ok 判别联合）。 */
+export type ModelsTestResult = { ok: true; latencyMs: number } | { ok: false; detail: string };
+
+/** 可用模型（前台任务对话框活动模型选择面）。 */
+export interface AvailableModel {
+  provider: string;
+  model: string;
+  name: string;
+  contextWindow?: number;
+  inputTypes?: ModelInputType[];
+  iconUrl?: string;
 }
 
 // ---- [3'] 模型预设目录（BUG4，2026-09-24） ----
 // 【本地镜像】契约 admin.models.catalog 出参由 daemon 代理并行落地中，先行镜像并注明。
 
-/** 预设路由条目：source=builtin 内置常量 | models.dev 远端拉取。 */
+/** 预设路由条目：source=builtin 内置常量 | models.dev 远端拉取（五轮带模态/窗口/图标）。 */
 export interface ModelsCatalogPreset {
   provider: string;
   name: string;
   baseURL?: string;
   api?: string;
-  models: Array<{ id: string; name?: string }>;
+  iconUrl?: string;
+  models: Array<{ id: string; name?: string; contextWindow?: number; inputTypes?: ModelInputType[] }>;
   source: "builtin" | "models.dev";
 }
 
@@ -231,6 +245,8 @@ export interface Task {
   videoName: string;
   createdAt: string;
   updatedAt: string;
+  /** 任务使用的模型（五轮：provider/model 展示）。 */
+  model?: string;
 }
 
 /** 结果页信息（/r/{public_id}，公开）。 */

@@ -28,8 +28,19 @@ function modelsDevPayload() {
       name: 'Zhipu AI',
       api: 'https://open.bigmodel.cn/api/paas/v4',
       models: {
-        'glm-5.3-flash': { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash' },
-        'glm-5.2': { id: 'glm-5.2', name: 'GLM-5.2' },
+        // 五轮：limit.context → contextWindow；modalities.input 含 image → 视觉输入。
+        'glm-5.3-flash': {
+          id: 'glm-5.3-flash',
+          name: 'GLM-5.3 Flash',
+          limit: { context: 131072, output: 8192 },
+          modalities: { input: ['text', 'image'], output: ['text'] },
+        },
+        'glm-5.2': {
+          id: 'glm-5.2',
+          name: 'GLM-5.2',
+          limit: { context: 2000000 },
+          modalities: { input: ['text'] },
+        },
       },
     },
     // 无 api 字段（如实测的 openai/anthropic 在 models.dev 上不带端点）→ 过滤。
@@ -115,9 +126,15 @@ describe('BUG4 models.dev 刷新与缓存', () => {
       expect(zhipu?.baseURL).toBe('https://open.bigmodel.cn/api/paas/v4');
       expect(zhipu?.name).toBe('Zhipu AI');
       expect(zhipu?.models).toEqual([
-        { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash' },
-        { id: 'glm-5.2', name: 'GLM-5.2' },
+        {
+          id: 'glm-5.3-flash',
+          name: 'GLM-5.3 Flash',
+          contextWindow: 131072,
+          inputTypes: ['text', 'image'],
+        },
+        { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 2000000, inputTypes: ['text'] },
       ]);
+      expect(zhipu?.iconUrl).toBe('https://models.dev/logos/zhipuai.svg');
       const many = catalog.presets.find((p) => p.provider === 'many');
       expect(many?.models.length).toBe(PRESET_MODEL_LIMIT);
       expect(many?.models[0]?.id).toBe('many-1');

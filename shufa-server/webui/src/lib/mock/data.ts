@@ -98,7 +98,10 @@ export const mockDb = {
     routes: [
       {
         provider: "zai",
+        api: "openai-completions",
         baseURL: "https://api.z.ai/api/paas/v4",
+        iconUrl: "https://models.dev/logos/zai.svg",
+        hasKey: true,
         apiKey: "sk-demo-zai",
         models: [
           {
@@ -106,17 +109,34 @@ export const mockDb = {
             contextWindow: 131072,
             maxOutputTokens: 16384,
             efforts: ["low", "high", "max"],
+            inputTypes: ["text"],
           },
-          { id: "glm-5.3", contextWindow: 204800, maxOutputTokens: 32768, efforts: ["low", "high"] },
+          {
+            id: "glm-5.3",
+            contextWindow: 204800,
+            maxOutputTokens: 32768,
+            efforts: ["low", "high"],
+            inputTypes: ["text"],
+          },
         ],
       },
       {
         provider: "deepseek",
+        api: "openai-completions",
         baseURL: "https://api.deepseek.com/v1",
-        models: [{ id: "deepseek-chat", contextWindow: 65536, efforts: ["low", "high"] }],
+        iconUrl: "https://models.dev/logos/deepseek.svg",
+        hasKey: false,
+        models: [
+          {
+            id: "deepseek-chat",
+            contextWindow: 65536,
+            efforts: ["low", "high"],
+            inputTypes: ["text"],
+          },
+        ],
       },
     ] as DshModelRoute[],
-    active: { provider: "zai", model: "glm-5.3-flash" },
+    default: { provider: "zai", model: "glm-5.3-flash" },
   } as ModelsSettings,
   tasks: [
     {

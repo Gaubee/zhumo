@@ -91,10 +91,14 @@ export async function sendPrompt(prompt: string): Promise<void> {
   }
 }
 
-export async function createTask(prompt: string, video: File | null): Promise<void> {
+export async function createTask(
+  prompt: string,
+  video: File | null,
+  model?: { provider: string; model: string },
+): Promise<void> {
   tasks.error = null;
   try {
-    const task = await api.createTask(prompt, video);
+    const task = await api.createTask(prompt, video, model);
     tasks.list = [task, ...tasks.list];
     await selectTask(task.id);
   } catch (error) {

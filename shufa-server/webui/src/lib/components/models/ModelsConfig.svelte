@@ -1,24 +1,16 @@
 <!--
-  Models 配置（移植自 skill-creator-v2 webui settings/*：ModelSettingsSection
-  tab 条语法 + RouteTabContent 编辑面 + model-fields 数据模型；剔除目录画廊/
-  IconPicker，图标统一字母头像）。
-  原始需求 [2026-09-23]：DshModelRoute（provider/api/baseURL/apiKey/models[]/icon
-  + 活动模型选择）；安装向导第 3 步与后台设置页共用。
-  走查修复 [2026-09-23]：BUG4——加载失败不再只是红字+死按钮（+ 新路由在
-  settings 未就绪时直接不渲染，错误态给重试）；头部展示生效路由（R4）。
-  朱墨前端改造 [2026-09-24]：BUG4 预设选择器——「从预设添加」Popover（本地
-  provider/name 搜索；点选新建路由并预填 provider/baseURL/api/models 前若干个，
-  仍可改）；列表底部「从 models.dev 刷新预设」+ fetched_at 展示；加载失败给
-  非阻断提示。
-  正交意图：
-  1. tab 条：每路由一 tab（字母头像 + key 缺失 amber 点 + active badge），
-     横滚；+ New 追加路由。
-  2. 路由编辑面：provider/api/baseURL/apiKey + models 列表（id/展示名/上下文
-     窗口/efforts 增删改）+ 删除路由（ConfirmDialog 语法）。
-  3. 活动模型选择：active = {provider, model}（路由内模型单选）。
-  4. 持久化经 api.getModels/saveModels（mock→真 API 同签名），保存即生效；
-     保存成功/失败均有可见反馈，成功后刷新生效路由展示。
-  5. 预设目录（api.getModelsCatalog/refreshModelsCatalog）→ 预填新建路由。
+  Models 配置 v2（走查五轮 2026-09-24，全面对齐 skill-creator-v2）：
+  五点落法——
+  1. 连接测试：逐路由「测试连接」按钮（表单密钥直传优先 → 已存密钥），
+     结果 inline 回显（testing… / ok · Nms / failed · detail）。
+  2. 模型图标：路由 iconUrl（models.dev logos）三级回退字母头像；预设同。
+  3. 协议：三协议 select（补 openai-responses）。
+  4. 活动模型出清：服务配置只管路由；头部独立「默认模型」选择器；
+     任务级模型选择在前台任务对话框（TaskComposer）。
+  5. 上下文窗口草稿态提交（128k/0.5M 简写；非法红边不提交且阻断保存）；
+     输入模态 chips（text 锁定 + image 可切）、输出 text 锁定。
+  原有语义保留：tab 条（图标 + key 缺失点 + 默认 badge）、预设 Popover
+  （搜索 + models.dev 刷新）、保存即桥接生效、生效路由头部投影。
 -->
 <script lang="ts">
   import { Button } from "$lib/components/ui/button";
@@ -26,6 +18,7 @@
   import { Badge } from "$lib/components/ui/badge";
   import * as Select from "$lib/components/ui/select";
   import * as Popover from "$lib/components/ui/popover";
+  import IconPlugZap from "@lucide/svelte/icons/plug-zap";
   import { api } from "$lib/api";
   import type {
     DshModelRoute,
@@ -33,9 +26,13 @@
     ModelsCatalog,
     ModelsCatalogPreset,
     ModelsSettings,
+    ModelsTestResult,
+    RouteApi,
     RouteModel,
   } from "$lib/types";
   import { formatTokenCount, readableModelName, routeAvatarColor, routeLetter } from "./route-meta";
+
+  const ROUTE_APIS: RouteApi[] = ["anthropic-messages", "openai-completions", "openai-responses"];
 
   let { onsaved }: { onsaved?: () => void } = $props();
 
@@ -44,11 +41,19 @@
   let error = $state<string | null>(null);
   let saving = $state(false);
   let savedFlash = $state(false);
-  /** 生效路由（R4）：bootstrap.model_route 投影；保存后刷新。 */
+  /** 生效路由投影（bootstrap.model_route）；保存后刷新。 */
   let routeInfo = $state<ModelRouteInfo | null>(null);
   let routeInfoError = $state(false);
+  /** 连接测试状态（键=provider）。 */
+  let testing = $state<Record<string, boolean>>({});
+  let testResult = $state<Record<string, ModelsTestResult | undefined>>({});
+  /** 上下文窗口草稿（键=`provider/modelId`）；非法时红边并阻断保存。 */
+  let contextDrafts = $state<Record<string, string>>({});
+  let contextInvalid = $state<Record<string, boolean>>({});
+  /** 密钥草稿（provider → 输入值；空=不更新）。 */
+  let keyDrafts = $state<Record<string, string>>({});
 
-  // ---- BUG4：预设选择器状态 ----
+  // ---- 预设选择器 ----
   let catalogOpen = $state(false);
   let catalog = $state<ModelsCatalog | null>(null);
   let catalogLoading = $state(false);
@@ -58,8 +63,8 @@
 
   const routes = $derived(settings?.routes ?? []);
   const selectedRoute = $derived(routes.find((route) => route.provider === selected));
+  const hasInvalidContext = $derived(Object.values(contextInvalid).some(Boolean));
 
-  /** 预设列表本地过滤（provider/名称，大小写不敏感）。 */
   const filteredPresets = $derived.by(() => {
     const presets = catalog?.presets ?? [];
     const query = catalogQuery.trim().toLowerCase();
@@ -70,7 +75,6 @@
     );
   });
 
-  /** fetched_at 展示文案；null=从未拉取 models.dev。 */
   const catalogFetchedLabel = $derived.by(() => {
     const at = catalog?.fetched_at ?? null;
     if (at === null) return null;
@@ -90,7 +94,6 @@
     }
   });
 
-  /** Popover 开关：首次打开惰性拉目录（失败非阻断，面板内红字提示）。 */
   async function openCatalog(open: boolean): Promise<void> {
     catalogOpen = open;
     if (!open || catalog !== null || catalogLoading) return;
@@ -111,7 +114,7 @@
     }
   }
 
-  /** 点选预设 → 新建路由并预填 provider/baseURL/api/models（前 8 个），用户仍可改。 */
+  /** 点选预设 → 新建路由（预填 provider/baseURL/api/图标 + 富模型字段）。 */
   function addRouteFromPreset(preset: ModelsCatalogPreset): void {
     if (settings === null) return;
     let provider = preset.provider;
@@ -120,16 +123,19 @@
       provider = `${preset.provider}-${suffix}`;
       suffix += 1;
     }
+    const api0 = ROUTE_APIS.includes(preset.api as RouteApi) ? (preset.api as RouteApi) : "openai-completions";
     const models: RouteModel[] = preset.models.slice(0, 8).map((model) => ({
       id: model.id,
       name: model.name,
+      ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+      ...(model.inputTypes !== undefined ? { inputTypes: model.inputTypes } : {}),
       efforts: ["low", "high", "max"],
     }));
     settings.routes.push({
       provider,
-      api: preset.api ?? "openai-completions",
+      api: api0,
       baseURL: preset.baseURL ?? "",
-      apiKey: "",
+      ...(preset.iconUrl !== undefined ? { iconUrl: preset.iconUrl } : {}),
       models,
     });
     selected = provider;
@@ -142,7 +148,6 @@
     try {
       routeInfo = (await api.getBootstrap()).modelRoute;
     } catch {
-      // 生效路由展示失败不阻断配置编辑，头部退化为「未知」。
       routeInfoError = true;
     }
   }
@@ -155,15 +160,30 @@
       error = e instanceof Error ? e.message : String(e);
       return;
     }
+    // 密钥草稿清空（新读面重新起算）；上下文草稿按存量值初始化。
+    keyDrafts = {};
+    for (const route of settings.routes) {
+      for (const model of route.models) {
+        const key = draftKey(route.provider, model.id);
+        contextDrafts[key] =
+          model.contextWindow === undefined ? "" : formatTokenCount(model.contextWindow);
+      }
+    }
     await loadRouteInfo();
   }
 
   async function save(): Promise<void> {
-    if (settings === null) return;
+    if (settings === null || hasInvalidContext) return;
     saving = true;
     error = null;
     try {
-      await api.saveModels($state.snapshot(settings) as ModelsSettings);
+      // 密钥草稿并入（apiKey 非空=更新；空=保留旧值——daemon 侧语义）。
+      const snapshot = $state.snapshot(settings) as ModelsSettings;
+      for (const route of snapshot.routes) {
+        const draft = keyDrafts[route.provider]?.trim();
+        if (draft && draft.length > 0) route.apiKey = draft;
+      }
+      await api.saveModels(snapshot);
       savedFlash = true;
       setTimeout(() => (savedFlash = false), 1200);
       await loadRouteInfo();
@@ -182,8 +202,7 @@
       provider,
       api: "openai-completions",
       baseURL: "https://api.example.com/v1",
-      apiKey: "",
-      models: [{ id: "model-a", efforts: ["low", "high", "max"] }],
+      models: [{ id: "model-a", efforts: ["low", "high", "max"], inputTypes: ["text"] }],
     });
     selected = provider;
   }
@@ -191,28 +210,96 @@
   function removeRoute(provider: string): void {
     if (settings === null) return;
     settings.routes = settings.routes.filter((route) => route.provider !== provider);
-    if (settings.active.provider === provider) {
-      const first = settings.routes[0];
-      settings.active = { provider: first?.provider ?? "", model: first?.models[0]?.id ?? "" };
-    }
+    if (settings.default?.provider === provider) settings.default = null;
   }
 
   function addModel(route: DshModelRoute): void {
-    route.models.push({ id: `model-${route.models.length + 1}`, efforts: ["low", "high", "max"] });
+    route.models.push({
+      id: `model-${route.models.length + 1}`,
+      efforts: ["low", "high", "max"],
+      inputTypes: ["text"],
+    });
   }
 
   function displayName(model: RouteModel): string {
     return model.name ?? readableModelName(model.id);
   }
 
-  function parseToken(text: string): number | undefined {
-    const matched = /^(\d+(?:\.\d+)?)\s*([kKmM])?$/.exec(text.trim());
-    if (matched === null) return undefined;
+  // ---- 上下文窗口草稿：128k/0.5M/131072；blur/Enter 提交，非法红边不提交 ----
+  function draftKey(provider: string, modelId: string): string {
+    return `${provider}/${modelId}`;
+  }
+
+  function commitContext(provider: string, model: RouteModel): void {
+    const key = draftKey(provider, model.id);
+    const text = (contextDrafts[key] ?? "").trim();
+    if (text.length === 0) {
+      model.contextWindow = undefined;
+      contextInvalid[key] = false;
+      return;
+    }
+    const matched = /^(\d+(?:\.\d+)?)\s*([kKmM])?$/.exec(text);
+    if (matched === null) {
+      contextInvalid[key] = true; // 红边 + 阻断保存；草稿保留待改
+      return;
+    }
     const base = Number.parseFloat(matched[1] ?? "0");
     const unit = matched[2]?.toLowerCase();
-    if (unit === "k") return Math.round(base * 1024);
-    if (unit === "m") return Math.round(base * 1024 * 1024);
-    return Math.round(base);
+    const value =
+      unit === "k"
+        ? base * 1024
+        : unit === "m"
+          ? base * 1024 * 1024
+          : base;
+    const rounded = Math.round(value);
+    if (!Number.isSafeInteger(rounded) || rounded <= 0) {
+      contextInvalid[key] = true;
+      return;
+    }
+    model.contextWindow = rounded;
+    contextDrafts[key] = formatTokenCount(rounded); // 规范化回显
+    contextInvalid[key] = false;
+  }
+
+  // ---- 输入/输出模态：text 恒锁定 ----
+  function toggleInputType(model: RouteModel, type: "image"): void {
+    const set = new Set(model.inputTypes ?? ["text"]);
+    if (set.has(type)) set.delete(type);
+    else set.add(type);
+    set.add("text");
+    model.inputTypes = ["text", ...[...set].filter((t) => t !== "text")] as RouteModel["inputTypes"];
+  }
+
+  function toggleOutputType(model: RouteModel, type: "image"): void {
+    const set = new Set(model.outputTypes ?? ["text"]);
+    if (set.has(type)) set.delete(type);
+    else set.add(type);
+    set.add("text");
+    model.outputTypes = ["text", ...[...set].filter((t) => t !== "text")];
+  }
+
+  // ---- 连接测试：表单密钥草稿直传优先，否则已存密钥 ----
+  async function runTest(route: DshModelRoute): Promise<void> {
+    testing[route.provider] = true;
+    testResult[route.provider] = undefined;
+    try {
+      const modelId = route.models[0]?.id ?? "";
+      if (modelId.length === 0) {
+        testResult[route.provider] = { ok: false, detail: "路由内没有模型可测" };
+        return;
+      }
+      const draft = keyDrafts[route.provider]?.trim();
+      testResult[route.provider] = await api.testModelRoute({
+        api: route.api,
+        baseURL: route.baseURL,
+        modelId,
+        ...(draft && draft.length > 0 ? { apiKey: draft } : { provider: route.provider }),
+      });
+    } catch (e) {
+      testResult[route.provider] = { ok: false, detail: e instanceof Error ? e.message : String(e) };
+    } finally {
+      testing[route.provider] = false;
+    }
   }
 </script>
 
@@ -221,9 +308,8 @@
     <div class="min-w-0">
       <h3 class="text-sm font-medium">大模型服务</h3>
       <p class="mt-0.5 text-[11px] text-muted-foreground">
-        配置模型路由与 API Key，保存后立即对新的分析会话生效。
+        配置模型路由与 API Key；活动模型在新建任务时选择，保存后对新会话生效。
       </p>
-      <!-- R4 生效路由：透明展示当前 agent 实际使用的 provider/model 与来源。 -->
       <p class="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
         生效路由：
         {#if routeInfo !== null}
@@ -240,7 +326,6 @@
     </div>
     {#if settings !== null}
       <div class="flex shrink-0 items-center gap-2">
-        <!-- BUG4：从预设添加（Popover 搜索列表；点选预填新路由）。 -->
         <Popover.Root open={catalogOpen} onOpenChange={(open) => void openCatalog(open)}>
           <Popover.Trigger>
             {#snippet child({ props })}
@@ -270,6 +355,20 @@
                       class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/60"
                       onclick={() => addRouteFromPreset(preset)}
                     >
+                      {#if preset.iconUrl}
+                        <img
+                          src={preset.iconUrl}
+                          alt=""
+                          class="h-5 w-5 shrink-0 object-contain dark:invert"
+                          onerror={(event) => ((event.currentTarget as HTMLImageElement).style.display = "none")}
+                        />
+                      {:else}
+                        <span
+                          class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[9px] font-semibold text-white"
+                          style="background: {routeAvatarColor({ provider: preset.provider })}"
+                          aria-hidden="true">{preset.provider.slice(0, 1).toUpperCase()}</span
+                        >
+                      {/if}
                       <span class="flex min-w-0 flex-1 flex-col">
                         <span class="truncate text-xs font-medium">{preset.name}</span>
                         <span class="truncate font-mono text-[10px] text-muted-foreground">
@@ -302,7 +401,6 @@
                 </Button>
               </div>
               {#if catalogError}
-                <!-- 非阻断提示：预设失败不影响手动配置。 -->
                 <p class="border-t border-border px-2 py-1.5 text-[11px] text-destructive" role="alert">
                   预设加载失败：{catalogError}
                 </p>
@@ -316,10 +414,48 @@
   </div>
 
   {#if settings !== null}
+    <!-- 默认模型（五轮 · 四：独立选择器，不掺进路由编辑） -->
+    <div class="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
+      <span class="shrink-0 text-xs text-muted-foreground">默认模型</span>
+      <Select.Root
+        type="single"
+        items={routes.flatMap((route) =>
+          route.models.map((model) => ({
+            value: `${route.provider}::${model.id}`,
+            label: `${route.provider} / ${displayName(model)}`,
+          })),
+        )}
+        value={settings.default ? `${settings.default.provider}::${settings.default.model}` : undefined}
+        onValueChange={(value) => {
+          if (settings === null || !value) return;
+          const [provider, model] = value.split("::");
+          settings.default =
+            provider !== undefined && model !== undefined ? { provider, model } : null;
+        }}
+      >
+        <Select.Trigger class="h-8 min-w-0 flex-1 text-xs" aria-label="选择默认模型">
+          <Select.Value placeholder="未设置（任务未指定时跟随首个路由）" />
+        </Select.Trigger>
+        <Select.Content class="max-h-64 text-xs">
+          {#each routes as route (route.provider)}
+            {#each route.models as model (model.id)}
+              <Select.Item
+                value={`${route.provider}::${model.id}`}
+                label={`${route.provider} / ${displayName(model)}`}
+              >
+                {route.provider} / {displayName(model)}
+              </Select.Item>
+            {/each}
+          {/each}
+        </Select.Content>
+      </Select.Root>
+      <span class="shrink-0 text-[10px] text-muted-foreground">新建任务未选模型时使用</span>
+    </div>
+
     <!-- tab 条 -->
     <div class="flex items-stretch gap-1 overflow-x-auto border-b border-border pb-px">
       {#each routes as route (route.provider)}
-        {@const ownsActive = settings?.active.provider === route.provider}
+        {@const isDefaultRoute = settings?.default?.provider === route.provider}
         <button
           type="button"
           role="tab"
@@ -330,19 +466,28 @@
             : 'border-b-2 border-transparent text-muted-foreground hover:text-foreground'}"
           onclick={() => (selected = route.provider)}
         >
-          <span
-            class="flex h-4 w-4 shrink-0 items-center justify-center rounded text-[8px] font-semibold text-white"
-            style="background: {routeAvatarColor(route)}"
-            aria-hidden="true">{routeLetter(route)}</span
-          >
+          {#if route.iconUrl}
+            <img
+              src={route.iconUrl}
+              alt=""
+              class="h-4 w-4 shrink-0 object-contain dark:invert"
+              onerror={(event) => ((event.currentTarget as HTMLImageElement).style.display = "none")}
+            />
+          {:else}
+            <span
+              class="flex h-4 w-4 shrink-0 items-center justify-center rounded text-[8px] font-semibold text-white"
+              style="background: {routeAvatarColor(route)}"
+              aria-hidden="true">{routeLetter(route)}</span
+            >
+          {/if}
           <span class="max-w-[120px] truncate">{route.provider}</span>
-          {#if route.apiKey === undefined || route.apiKey.length === 0}
+          {#if !route.hasKey && (keyDrafts[route.provider] ?? "").length === 0}
             <span class="h-1 w-1 rounded-full bg-amber-500" title="缺少 API Key"></span>
           {/if}
-          {#if ownsActive}
+          {#if isDefaultRoute}
             <span
               class="rounded bg-primary/10 px-1 py-px text-[9px] font-medium leading-tight text-primary"
-              >活动</span
+              >默认</span
             >
           {/if}
         </button>
@@ -365,8 +510,9 @@
                 <Select.Value />
               </Select.Trigger>
               <Select.Content class="text-xs">
-                <Select.Item value="anthropic-messages">anthropic-messages</Select.Item>
-                <Select.Item value="openai-completions">openai-completions</Select.Item>
+                {#each ROUTE_APIS as api0 (api0)}
+                  <Select.Item value={api0}>{api0}</Select.Item>
+                {/each}
               </Select.Content>
             </Select.Root>
           </label>
@@ -375,14 +521,42 @@
             <Input bind:value={route.baseURL} class="h-8 font-mono text-xs" />
           </label>
           <label class="flex flex-col gap-1 text-xs">
-            <span class="text-muted-foreground">API Key {route.apiKey ? "（已配置）" : "（缺失）"}</span>
+            <span class="text-muted-foreground">
+              API Key {route.hasKey || (keyDrafts[route.provider] ?? "").length > 0
+                ? "（已配置）"
+                : "（缺失）"}
+            </span>
             <Input
-              bind:value={route.apiKey}
+              bind:value={keyDrafts[route.provider]}
               type="password"
               class="h-8 font-mono text-xs"
-              placeholder="sk-..."
+              placeholder={route.hasKey ? "已保存（输入即更新）" : "sk-..."}
             />
           </label>
+        </div>
+
+        <!-- 连接测试（五轮 · 一） -->
+        <div class="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={testing[route.provider] || route.baseURL.trim().length === 0 || route.models.length === 0}
+            onclick={() => void runTest(route)}
+          >
+            <IconPlugZap data-icon="inline-start" />
+            {testing[route.provider] ? "测试中…" : "测试连接"}
+          </Button>
+          {#if testResult[route.provider]}
+            {@const result = testResult[route.provider]!}
+            {#if result.ok}
+              <span class="text-xs font-medium text-primary">ok · {result.latencyMs} ms</span>
+            {:else}
+              <span class="text-xs text-destructive" role="alert">failed · {result.detail}</span>
+            {/if}
+          {/if}
+          <span class="text-[10px] text-muted-foreground">
+            以首个模型发最小探测请求；密钥用上方输入或已保存值
+          </span>
         </div>
 
         <div class="space-y-1.5">
@@ -391,11 +565,12 @@
             <Button size="xs" variant="ghost" onclick={() => addModel(route)}>+ 加模型</Button>
           </div>
           {#each route.models as model, index (index)}
+            {@const ck = draftKey(route.provider, model.id)}
             <div
-              class="rounded-md border bg-muted/20 p-2 {settings?.active.provider === route.provider &&
-              settings?.active.model === model.id
-                ? 'border-primary/50'
-                : ''}"
+              class="rounded-md border bg-muted/20 p-2 {settings?.default?.provider === route.provider &&
+              settings?.default?.model === model.id
+                ? "border-primary/50"
+                : ""}"
             >
               <div class="flex flex-wrap items-center gap-2">
                 <Input bind:value={model.id} class="h-7 w-44 font-mono text-xs" placeholder="模型 id" />
@@ -407,13 +582,16 @@
                 <label class="flex items-center gap-1 text-[11px] text-muted-foreground">
                   上下文窗口
                   <Input
-                    class="h-7 w-24 font-mono text-xs"
-                    value={model.contextWindow === undefined
-                      ? ""
-                      : formatTokenCount(model.contextWindow)}
+                    class="h-7 w-24 font-mono text-xs {contextInvalid[ck] ? "border-destructive" : ""}"
+                    placeholder="128k / 0.5M"
+                    value={contextDrafts[ck] ?? ""}
                     oninput={(event) => {
-                      const parsed = parseToken(event.currentTarget.value);
-                      if (parsed === undefined || parsed > 0) model.contextWindow = parsed;
+                      contextDrafts[ck] = event.currentTarget.value;
+                      contextInvalid[ck] = false;
+                    }}
+                    onblur={() => commitContext(route.provider, model)}
+                    onkeydown={(event) => {
+                      if (event.key === "Enter") event.currentTarget.blur();
                     }}
                   />
                 </label>
@@ -439,25 +617,45 @@
                   onclick={() => route.models.splice(index, 1)}>移除</Button
                 >
               </div>
-              <div class="mt-1.5 flex items-center gap-2">
-                <span class="text-[11px] text-muted-foreground">
-                  显示名：{displayName(model)}{model.contextWindow !== undefined
+              <!-- 输入/输出模态（五轮 · 五）：text 恒锁定 -->
+              <div class="mt-1.5 flex flex-wrap items-center gap-2">
+                <span class="text-[11px] text-muted-foreground">输入</span>
+                <span
+                  class="rounded bg-primary px-1.5 py-px text-[10px] font-medium text-primary-foreground"
+                  >text</span
+                >
+                <button
+                  type="button"
+                  aria-pressed={(model.inputTypes ?? ["text"]).includes("image")}
+                  class="rounded px-1.5 py-px text-[10px] font-medium transition-colors {(model.inputTypes ??
+                  ["text"]).includes("image")
+                    ? "bg-primary text-primary-foreground"
+                    : "border border-border text-muted-foreground hover:text-foreground"}"
+                  onclick={() => toggleInputType(model, "image")}
+                >
+                  image
+                </button>
+                <span class="ml-2 text-[11px] text-muted-foreground">输出</span>
+                <span
+                  class="rounded bg-primary px-1.5 py-px text-[10px] font-medium text-primary-foreground"
+                  >text</span
+                >
+                <button
+                  type="button"
+                  aria-pressed={(model.outputTypes ?? ["text"]).includes("image")}
+                  class="rounded px-1.5 py-px text-[10px] font-medium transition-colors {(model.outputTypes ??
+                  ["text"]).includes("image")
+                    ? "bg-primary text-primary-foreground"
+                    : "border border-border text-muted-foreground hover:text-foreground"}"
+                  onclick={() => toggleOutputType(model, "image")}
+                >
+                  image
+                </button>
+                <span class="ml-auto text-[11px] text-muted-foreground">
+                  {displayName(model)}{model.contextWindow !== undefined
                     ? ` · ${formatTokenCount(model.contextWindow)}`
                     : ""}
                 </span>
-                {#if settings?.active.provider === route.provider && settings?.active.model === model.id}
-                  <Badge class="text-[9px]" variant="secondary">活动模型</Badge>
-                {:else}
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onclick={() => {
-                      if (settings) settings.active = { provider: route.provider, model: model.id };
-                    }}
-                  >
-                    设为活动模型
-                  </Button>
-                {/if}
               </div>
             </div>
           {/each}
@@ -471,10 +669,13 @@
             {#if error}
               <span class="text-xs text-destructive" role="alert">{error}</span>
             {/if}
+            {#if hasInvalidContext}
+              <span class="text-xs text-destructive" role="alert">上下文窗口有非法输入（红边项）</span>
+            {/if}
             {#if savedFlash}
               <span class="text-xs text-primary">已保存</span>
             {/if}
-            <Button size="sm" disabled={saving} onclick={() => void save()}>
+            <Button size="sm" disabled={saving || hasInvalidContext} onclick={() => void save()}>
               {saving ? "保存中…" : "保存配置"}
             </Button>
           </div>
@@ -490,7 +691,6 @@
       </div>
     {/if}
   {:else if error}
-    <!-- BUG4 修复：加载失败不再只有一行红字+死按钮，给出显式错误卡与重试。 -->
     <div class="flex flex-col items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-4">
       <p class="text-xs font-medium text-destructive" role="alert">模型配置加载失败：{error}</p>
       <p class="text-[11px] text-muted-foreground">

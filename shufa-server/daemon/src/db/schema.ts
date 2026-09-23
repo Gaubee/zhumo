@@ -78,6 +78,14 @@ CREATE TABLE IF NOT EXISTS tasks (
   updated_at        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner_id);
+`,
+  },
+  {
+    // 五轮（2026-09-24）：任务级模型覆盖（活动模型由前台按任务选择）。
+    version: 2,
+    up: `
+ALTER TABLE tasks ADD COLUMN model_provider TEXT;
+ALTER TABLE tasks ADD COLUMN model_model TEXT;
 
 CREATE TABLE IF NOT EXISTS results (
   id          TEXT PRIMARY KEY,

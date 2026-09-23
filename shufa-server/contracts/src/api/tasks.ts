@@ -42,6 +42,8 @@ export const TaskCreateInputSchema = z
     prompt: z.string().min(1),
     video: TaskVideoUploadSchema.optional(),
     video_resource_id: IdSchema.optional(),
+    /** 任务级模型覆盖（五轮活动模型）：null/缺省 = 跟随后台默认模型。 */
+    model: z.object({ provider: z.string().min(1), model: z.string().min(1) }).optional(),
   })
   .refine((input) => input.video !== undefined || input.video_resource_id !== undefined, {
     message: 'video 与 video_resource_id 必须提供其一',

@@ -33,7 +33,11 @@ import {
   type TaskRow,
 } from '../db/tasks.js';
 import { createResult, type UserRow } from '../db/store.js';
-import { resolveModelRoute, type LlmSettingKey } from '../kernel/model-route.js';
+import {
+  resolveModelRoute,
+  type ModelRoutesBundle,
+} from '../kernel/model-route.js';
+import { buildRoutesBundle, resolveRouteFor } from '../models-store.js';
 import { buildTaskPrompt } from '../kernel/prompts.js';
 import type { TaskSessions } from '../kernel/sessions.js';
 import { createAnalysisCapabilities, type TaskLocation } from '../capability/analysis.js';
@@ -117,15 +121,29 @@ export class TaskService {
   /** 创建任务：视频进资源树 → .shufa 任务目录 → 会话 → 提示词启动。 */
   async create(
     user: UserRow,
-    input: { prompt: string; video?: { filename: string; data_base64: string }; video_resource_id?: string },
+    input: {
+      prompt: string;
+      video?: { filename: string; data_base64: string };
+      video_resource_id?: string;
+      model?: { provider: string; model: string };
+    },
   ): Promise<TaskItem> {
     if (!this.deps.kernelMounted()) {
       throw new Error('agent 内核未挂载，暂不能创建任务（重启 daemon 或检查 dsh 安装）');
     }
-    // 走查 BUG2 门控（2026-09-23）：settings 表与 .env 都没有完整 llm_* 四键时
-    // 拒绝创建，不再静默落入内核缺省路由（「后台没配大模型服务居然能用」的魔术根源）。
-    if (resolveModelRouteInfo(this.deps.db, this.deps.config) === null) {
+    // 走查 BUG2 门控（2026-09-23；五轮沿用新链）：无任何已配置路由时拒绝创建，
+    // 不再静默落入内核缺省路由（「后台没配大模型服务居然能用」的魔术根源）。
+    if (modelsRouteInfo(this.deps.db, this.deps.config) === null) {
       throw new Error('管理员尚未配置大模型服务，请先在后台「设置 → 大模型服务」完成配置');
+    }
+    // 任务级模型覆盖（五轮活动模型）：必须命中已配置路由，防悬空引用。
+    if (input.model) {
+      const route = resolveRouteFor(this.deps.db, input.model.provider, input.model.model);
+      if (!route) {
+        throw new Error(
+          `所选模型不在已配置路由中：${input.model.provider} / ${input.model.model}`,
+        );
+      }
     }
     const videoResource = input.video
       ? this.ingestVideo(user, input.video.filename, decodeVideo(input.video))
@@ -171,6 +189,8 @@ export class TaskService {
       resourceId: shufaRow.id,
       videoResourceId: videoResource.id,
       prompt: input.prompt,
+      modelProvider: input.model?.provider ?? null,
+      modelModel: input.model?.model ?? null,
     });
     this.writeShufaMeta(shufaRow.id, shufaDir, task.id, null, null);
 
@@ -544,61 +564,72 @@ function isAwaitingRun(status: TaskStatus): boolean {
 }
 
 /**
- * 模型路由解析（boot 用）：settings 表（llm_*）→ .env（LLM_*）→ null。
- * 桥接取舍见 kernel/model-route.ts 头注。
+ * 模型路由解析（五轮多路由，boot/任务会话用）：models_routes（settings 表真源）
+ * 优先；空则回落旧 llm_* 单路由链（settings 表 → .env）投影为单路由 bundle。
  */
-export function resolveModelRouteFromStore(
+export function resolveModelRoutesFromStore(
   db: SqliteDb,
   config: Pick<AppConfig, 'fileEnv'>,
-) {
-  const setting = (key: LlmSettingKey): string | null => {
+): ModelRoutesBundle {
+  const bundle = buildRoutesBundle(db);
+  if (bundle.routes.length > 0) return bundle;
+  const setting = (key: string): string | null => {
     const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
       | { value: string }
       | undefined;
     return row?.value ?? config.fileEnv[key.toUpperCase()] ?? null;
   };
-  return resolveModelRoute(setting);
+  const legacy = resolveModelRoute(setting);
+  if (!legacy) return { routes: [], default: null };
+  return {
+    routes: [
+      {
+        provider: legacy.provider,
+        api: legacy.api,
+        baseURL: legacy.baseURL,
+        apiKey: legacy.apiKey,
+        models: [{ id: legacy.model, contextWindow: legacy.contextWindow }],
+      },
+    ],
+    default: { provider: legacy.provider, model: legacy.model },
+  };
 }
 
-/** 路由四键（llm_api 是协议覆盖键，不参与「是否已配置」判定）。 */
-const MODEL_ROUTE_INFO_KEYS: readonly LlmSettingKey[] = [
-  'llm_provider',
-  'llm_base_url',
-  'llm_api_key',
-  'llm_model',
-];
-
-/** settings 表 llm_* 行值（trim 后；不含 .env 兜底——来源判定专用）。 */
-function llmTableValue(db: SqliteDb, key: LlmSettingKey): string {
+/** 旧链专用：settings 表 llm_* 行值（trim；.env 兜底不含——来源判定）。 */
+function llmTableValue(db: SqliteDb, key: string): string {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
     | { value: string }
     | undefined;
   return (row?.value ?? '').trim();
 }
 
-/** .env fileEnv LLM_* 值（trim 后；不含 settings 兜底——来源判定专用）。 */
-function llmEnvValue(config: Pick<AppConfig, 'fileEnv'>, key: LlmSettingKey): string {
+/** 旧链专用：.env fileEnv LLM_* 值（trim；settings 兜底不含——来源判定）。 */
+function llmEnvValue(config: Pick<AppConfig, 'fileEnv'>, key: string): string {
   return (config.fileEnv[key.toUpperCase()] ?? '').trim();
 }
 
 /**
- * 模型路由来源信息（走查 BUG2 透明度，2026-09-23）：与 resolveModelRouteFromStore
- * 同一信源链（settings 表 llm_* → .env LLM_*），不另设解析——settings 表四键齐备
- * → source 'settings'；否则 .env 四键齐备 → 'env'；都不齐 → null（bootstrap 呈现
- * 「未配置」+ tasks.create 门控）。单一来源齐备时合并链必然解析出同一路由；混合
- * 半配置态按未配置处理（报错引导管理员补齐，胜过半套路由跑起来）。
+ * 生效路由信息（bootstrap.model_route 投影，五轮多路由语义）：多路由真源
+ * （models_routes）有内容 → source 'settings'（default 优先，缺省取首路由首
+ * 模型）；多路由为空时旧 llm_* 链齐备才 'env'（.env 引导语义保留）；都无 →
+ * null（bootstrap 呈现「未配置」+ tasks.create 门控）。
  */
-export function resolveModelRouteInfo(
+export function modelsRouteInfo(
   db: SqliteDb,
   config: Pick<AppConfig, 'fileEnv'>,
 ): ModelRouteInfo | null {
-  if (MODEL_ROUTE_INFO_KEYS.every((key) => llmTableValue(db, key) !== '')) {
-    return { provider: llmTableValue(db, 'llm_provider'), model: llmTableValue(db, 'llm_model'), source: 'settings' };
-  }
-  if (MODEL_ROUTE_INFO_KEYS.every((key) => llmEnvValue(config, key) !== '')) {
-    return { provider: llmEnvValue(config, 'llm_provider'), model: llmEnvValue(config, 'llm_model'), source: 'env' };
-  }
-  return null;
+  const bundle = resolveModelRoutesFromStore(db, config);
+  if (bundle.routes.length === 0) return null;
+  const first = bundle.routes[0]!;
+  const provider = bundle.default?.provider ?? first.provider;
+  const model =
+    bundle.default?.model ??
+    first.models.find((entry) => entry.id)?.id ??
+    first.models[0]?.id ??
+    '';
+  // 多路由真源命中的路由必来自 settings 表；只有旧链投影才可能是 env 来源。
+  const fromEnv = bundle.routes.length === 1 && provider === first.provider && llmTableValue(db, 'llm_provider') === '' && llmEnvValue(config, 'llm_provider') !== '';
+  return { provider, model, source: fromEnv ? 'env' : 'settings' };
 }
 
 /** 上传字节解码与上限校验。 */

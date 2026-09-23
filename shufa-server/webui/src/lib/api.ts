@@ -58,7 +58,6 @@ import { mockResources } from "$lib/mock/resources";
 import type {
   AdminSettings,
   BootstrapInfo,
-  DshModelRoute,
   Frame,
   ModelRouteInfo,
   ModelsCatalog,
@@ -73,6 +72,8 @@ import type {
   UserInfo,
   WizardRunParams,
   WizardStep,
+  AvailableModel,
+  ModelsTestResult,
 } from "$lib/types";
 
 /** mock 逃生口：默认走真 RPC；?mock=1 才启用 mock（联调期测试/离线演示用）。 */
@@ -103,6 +104,10 @@ interface ShufaRpc {
     refresh(input: RefreshInput): Promise<TokenOutput>;
   };
   me(): Promise<ContractUserInfo>;
+  /** 五轮：登录用户面——可用模型清单（活动模型选择）。 */
+  models: {
+    available(): Promise<{ models: AvailableModel[]; default: { provider: string; model: string } | null }>;
+  };
   admin: {
     users: {
       list(): Promise<{ users: ContractUserInfo[] }>;
@@ -116,6 +121,12 @@ interface ShufaRpc {
       catalog(): Promise<ModelsCatalog>;
       /** 强制重拉 models.dev（预设列表刷新按钮）。 */
       catalogRefresh(): Promise<ModelsCatalog>;
+      /** 五轮：多路由配置读面（hasKey 投影，密钥不出库）。 */
+      get(): Promise<ModelsSettings>;
+      /** 五轮：保存（apiKey 空=保留）。 */
+      save(input: unknown): Promise<ModelsSettings>;
+      /** 五轮：连接测试。 */
+      test(input: { api: string; baseURL: string; modelId: string; apiKey?: string; provider?: string }): Promise<ModelsTestResult>;
     };
     settings: {
       get(input: { key: SettingKey }): Promise<{ key: string; value: string }>;
@@ -176,13 +187,17 @@ export interface ShufaApi {
   updateAdminSettings(patch: Partial<AdminSettings>): Promise<AdminSettings>;
   getModels(): Promise<ModelsSettings>;
   saveModels(next: ModelsSettings): Promise<void>;
+  /** 连接测试（五轮）：直传测试密钥优先（不落盘），缺省用已存密钥。 */
+  testModelRoute(input: { api: string; baseURL: string; modelId: string; apiKey?: string; provider?: string }): Promise<ModelsTestResult>;
+  /** 可用模型清单（五轮活动模型：前台任务对话框选择面）。 */
+  getAvailableModels(): Promise<{ models: AvailableModel[]; default: { provider: string; model: string } | null }>;
   /** 局域网访问链接（BUG3）；失败由调用方降级隐藏（不报错弹脸）。 */
   getLanUrls(): Promise<string[]>;
   listTasks(): Promise<Task[]>;
   getTaskFrames(taskId: string): Promise<Frame[]>;
   subscribeTaskFrames(taskId: string, onFrame: (frame: Frame) => void): () => void;
   sendTaskPrompt(taskId: string, prompt: string): Promise<void>;
-  createTask(prompt: string, video: File | null): Promise<Task>;
+  createTask(prompt: string, video: File | null, model?: { provider: string; model: string }): Promise<Task>;
   cancelTask(taskId: string): Promise<void>;
   getResult(publicId: string): Promise<ResultInfo>;
   // ---- 资源管理器（W5；owner 仅 admin 传他人 username） ----
@@ -200,12 +215,13 @@ const fail = (msg: string): never => {
   throw new Error(msg);
 };
 
-/** mock bootstrap 的生效路由投影：active 指向现存路由 → settings 来源；否则 null。 */
+/** mock bootstrap 的生效路由投影：default 指向现存路由 → settings 来源；否则 null。 */
 function toMockModelRoute(): ModelRouteInfo | null {
-  const { routes, active } = mockDb.models;
-  const route = routes.find((candidate) => candidate.provider === active.provider);
-  if (route === undefined || active.model.length === 0) return null;
-  return { provider: route.provider, model: active.model, source: "settings" };
+  const def = mockDb.models.default;
+  if (def === null) return null;
+  const route = mockDb.models.routes.find((candidate) => candidate.provider === def.provider);
+  if (route === undefined) return null;
+  return { provider: route.provider, model: def.model, source: "settings" };
 }
 
 /** mock setup_progress（BUG2）：由内存库状态实时投影（管理员/步骤完成度/模型配置）。 */
@@ -216,7 +232,7 @@ function toMockSetupProgress(): SetupProgress {
       (step) => step.status === "done" || step.status === "skipped",
     ).length,
     steps_total: mockDb.wizardSteps.length,
-    model_configured: mockDb.models.active.model.length > 0,
+    model_configured: (mockDb.models.default?.model ?? "").length > 0,
   };
 }
 
@@ -232,6 +248,7 @@ class MockApi implements ShufaApi {
     return {
       needsSetup: !mockDb.installed,
       allowAnonymous: mockDb.adminSettings.allowAnonymous,
+      setupCompleted: mockDb.installed,
       siteName: mockDb.siteName,
       // mock 与真 API 同形：路由清空后前台进入「未配置」阻断态（R4 自测口）。
       modelRoute: toMockModelRoute(),
@@ -397,6 +414,30 @@ class MockApi implements ShufaApi {
     mockDb.models = structuredClone(next);
   }
 
+  async testModelRoute(input: { api: string; baseURL: string; modelId: string }): Promise<ModelsTestResult> {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    return input.baseURL.includes("bad")
+      ? { ok: false, detail: "HTTP 401: invalid key" }
+      : { ok: true, latencyMs: 240 };
+  }
+
+  async getAvailableModels() {
+    const { routes, default: def } = mockDb.models;
+    return {
+      models: routes.flatMap((route) =>
+        route.models.map((model) => ({
+          provider: route.provider,
+          model: model.id,
+          name: model.name ?? model.id,
+          ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+          ...(model.inputTypes !== undefined ? { inputTypes: model.inputTypes } : {}),
+          ...(route.iconUrl !== undefined ? { iconUrl: route.iconUrl } : {}),
+        })),
+      ),
+      default: def,
+    };
+  }
+
   async getLanUrls(): Promise<string[]> {
     // mock：以当前访问 host 推两条演示链接（IPv4 风格 + mDNS 主机名风格）。
     const port = location.port.length > 0 ? `:${location.port}` : "";
@@ -421,13 +462,14 @@ class MockApi implements ShufaApi {
     void replayAgentTurn(taskId, prompt);
   }
 
-  async createTask(prompt: string, video: File | null): Promise<Task> {
+  async createTask(prompt: string, video: File | null, model?: { provider: string; model: string }): Promise<Task> {
     const task: Task = {
       id: `t-${mockDb.tasks.length + 1}-${Date.now() % 1000}`,
       title: prompt.slice(0, 18) || "新任务",
       status: "queued",
       prompt,
       videoName: video?.name ?? "演示素材.mp4",
+      model: model ? `${model.provider}/${model.model}` : undefined,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -552,6 +594,11 @@ function deriveStepProgress(
   const parsed = parseDownloadProgress(lastLog);
   if (status === "done") return { progress: 100, progressText: parsed.text ?? undefined };
   return { progress: parsed.percent, progressText: parsed.text ?? undefined };
+}
+
+/** admin.models.get 出参 → ModelsSettings 视图（字段同名直投）。 */
+function toModelsView(out: { routes: unknown[]; default: unknown }): ModelsSettings {
+  return out as ModelsSettings;
 }
 
 function toWizardStepView(step: ContractWizardStep): WizardStep {
@@ -712,6 +759,33 @@ class RpcApi implements ShufaApi {
     return rpc().admin.models.catalogRefresh();
   }
 
+  async getModels(): Promise<ModelsSettings> {
+    return toModelsView(await rpc().admin.models.get());
+  }
+
+  async saveModels(next: ModelsSettings): Promise<void> {
+    // 保存面：apiKey 字段仅在非空时上送（空=保留旧密钥）；hasKey 不上行。
+    await rpc().admin.models.save({
+      routes: next.routes.map((route) => ({
+        provider: route.provider,
+        api: route.api,
+        baseURL: route.baseURL,
+        ...(route.iconUrl !== undefined ? { iconUrl: route.iconUrl } : {}),
+        models: route.models,
+        ...(route.apiKey !== undefined && route.apiKey.length > 0 ? { apiKey: route.apiKey } : {}),
+      })),
+      default: next.default,
+    });
+  }
+
+  async testModelRoute(input: { api: string; baseURL: string; modelId: string; apiKey?: string; provider?: string }): Promise<ModelsTestResult> {
+    return rpc().admin.models.test(input);
+  }
+
+  async getAvailableModels() {
+    return rpc().models.available();
+  }
+
   private async readAdminSettings(): Promise<Map<string, string>> {
     const { settings } = await rpc().admin.settings.list();
     return new Map(settings.map((entry) => [entry.key, entry.value]));
@@ -732,38 +806,6 @@ class RpcApi implements ShufaApi {
     }
     for (const [key, value] of puts) await rpc().admin.settings.put({ key, value });
     return { ...current, ...patch };
-  }
-
-  /** Models 配置 ↔ settings 表 llm_* 五键（单路由投影；api 为 wire 协议，缺省由桥接定）。 */
-  async getModels(): Promise<ModelsSettings> {
-    const stored = await this.readAdminSettings();
-    const value = (key: SettingKey): string => stored.get(key) ?? "";
-    if (value("llm_provider").length === 0 && value("llm_base_url").length === 0) {
-      return { routes: [], active: { provider: "", model: "" } };
-    }
-    const route: DshModelRoute = {
-      provider: value("llm_provider") || "default",
-      baseURL: value("llm_base_url"),
-      apiKey: value("llm_api_key") || undefined,
-      // 缺省显式化为 anthropic-messages（与 daemon 桥接一致），UI 单选不再留空。
-      api: value("llm_api") || "anthropic-messages",
-      models: value("llm_model") ? [{ id: value("llm_model") }] : [],
-    };
-    return { routes: [route], active: { provider: route.provider, model: value("llm_model") } };
-  }
-
-  async saveModels(next: ModelsSettings): Promise<void> {
-    const route = next.routes.find((candidate) => candidate.provider === next.active.provider) ?? next.routes[0];
-    // 活动模型未显式选择时回退该路由首个模型，避免「编辑了模型列表但保存后丢失」。
-    const activeModel = next.active.model || route?.models[0]?.id || "";
-    const puts: Array<[SettingKey, string]> = [
-      ["llm_provider", route?.provider ?? ""],
-      ["llm_base_url", route?.baseURL ?? ""],
-      ["llm_api_key", route?.apiKey ?? ""],
-      ["llm_api", route?.api ?? ""],
-      ["llm_model", activeModel],
-    ];
-    for (const [key, value] of puts) await rpc().admin.settings.put({ key, value });
   }
 
   async getLanUrls(): Promise<string[]> {
@@ -815,11 +857,12 @@ class RpcApi implements ShufaApi {
     await rpc().tasks.followup({ id: taskId, text });
   }
 
-  async createTask(prompt: string, video: File | null): Promise<Task> {
+  async createTask(prompt: string, video: File | null, model?: { provider: string; model: string }): Promise<Task> {
     if (video === null) throw new Error("请先选择素材视频（创建任务必须附带视频）");
     const item = await rpc().tasks.create({
       prompt,
       video: { filename: video.name, data_base64: await fileToBase64(video) },
+      ...(model ? { model } : {}),
     });
     return toTaskView(item);
   }

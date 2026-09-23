@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Frame } from '@zhumo/contracts';
 import { createServices, TEST_SECRET, type TestServices } from './helpers.js';
 import { clientFor } from './helpers.js';
-import { TaskService, resolveModelRouteFromStore, resolveModelRouteInfo } from '../src/tasks/service.js';
+import { TaskService, resolveModelRoutesFromStore, modelsRouteInfo } from '../src/tasks/service.js';
 import type { TaskSessions } from '../src/kernel/sessions.js';
 import { ensureAnonymousUser, hashPassword } from '../src/auth.js';
 import { createUser, putSetting } from '../src/db/store.js';
@@ -195,19 +195,19 @@ describe('TaskService 创建链', () => {
   it('BUG2 来源：settings 四键齐备 → settings；仅 .env LLM_* 齐备 → env', async () => {
     const bare = createServices();
     try {
-      expect(resolveModelRouteInfo(bare.db, bare.config)).toBeNull();
+      expect(modelsRouteInfo(bare.db, bare.config)).toBeNull();
       // 仅 .env 引导值齐备：source='env'（settings 表为空）。
       const envConfig = {
         ...bare.config,
         fileEnv: { LLM_PROVIDER: 'zhipu', LLM_BASE_URL: 'https://env/api', LLM_API_KEY: 'env-key', LLM_MODEL: 'glm-env' },
       };
-      expect(resolveModelRouteInfo(bare.db, envConfig)).toEqual({ provider: 'zhipu', model: 'glm-env', source: 'env' });
+      expect(modelsRouteInfo(bare.db, envConfig)).toEqual({ provider: 'zhipu', model: 'glm-env', source: 'env' });
       // settings 表四键落库后翻转为 settings 来源，bootstrap 同步呈现。
       putSetting(bare.db, 'llm_provider', 'zhipu');
       putSetting(bare.db, 'llm_base_url', 'https://x/api');
       putSetting(bare.db, 'llm_api_key', 'k1');
       putSetting(bare.db, 'llm_model', 'glm-5.3-flash');
-      expect(resolveModelRouteInfo(bare.db, bare.config)).toEqual({ provider: 'zhipu', model: 'glm-5.3-flash', source: 'settings' });
+      expect(modelsRouteInfo(bare.db, bare.config)).toEqual({ provider: 'zhipu', model: 'glm-5.3-flash', source: 'settings' });
       const boot = await clientFor(bare.context()).bootstrap();
       expect(boot.model_route).toEqual({ provider: 'zhipu', model: 'glm-5.3-flash', source: 'settings' });
     } finally {
@@ -268,20 +268,35 @@ describe('TaskService 创建链', () => {
     await expect(bare.tasks.get({ id: 'nope' })).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED' });
   });
 
-  it('resolveModelRouteFromStore：settings 表优先，.env 兜底，缺项为 null', () => {
-    // 独立 env：本 describe 的 beforeEach 已给主 env 配好 settings，null 态需全新库。
+  it('resolveModelRoutesFromStore（五轮 bundle 语义）：多路由真源优先，旧 llm_* 兜底，全缺为空', () => {
+    // 独立 env：本 describe 的 beforeEach 已给主 env 配好 settings，空态需全新库。
     const fresh = createServices();
     try {
-      expect(resolveModelRouteFromStore(fresh.db, fresh.config)).toBeNull();
+      expect(resolveModelRoutesFromStore(fresh.db, fresh.config).routes).toHaveLength(0);
       putSetting(fresh.db, 'llm_provider', 'zhipu');
       putSetting(fresh.db, 'llm_base_url', 'https://x/api');
       putSetting(fresh.db, 'llm_api_key', 'k1');
       putSetting(fresh.db, 'llm_model', 'glm-5.3-flash');
-      const route = resolveModelRouteFromStore(fresh.db, fresh.config);
-      expect(route).toMatchObject({ provider: 'zhipu', model: 'glm-5.3-flash', api: 'anthropic-messages' });
-      // W7b：llm_api 协议键可覆盖（openai-completions 网关）。
-      putSetting(fresh.db, 'llm_api', 'openai-completions');
-      expect(resolveModelRouteFromStore(fresh.db, fresh.config)).toMatchObject({ api: 'openai-completions' });
+      let bundle = resolveModelRoutesFromStore(fresh.db, fresh.config);
+      expect(bundle.routes).toHaveLength(1);
+      expect(bundle.routes[0]).toMatchObject({ provider: 'zhipu', api: 'anthropic-messages' });
+      expect(bundle.routes[0]?.models[0]).toMatchObject({ id: 'glm-5.3-flash' });
+      expect(bundle.default).toEqual({ provider: 'zhipu', model: 'glm-5.3-flash' });
+      // 注意：首次读取即收编物化（models-store 迁移）——llm_* 后续变更不再生效，
+      // 协议覆盖须在首次读取前设置。W7b 语义在另一个全新库验证：
+      const fresh2 = createServices();
+      try {
+        putSetting(fresh2.db, 'llm_provider', 'zhipu');
+        putSetting(fresh2.db, 'llm_base_url', 'https://x/api');
+        putSetting(fresh2.db, 'llm_api_key', 'k1');
+        putSetting(fresh2.db, 'llm_model', 'glm-5.3-flash');
+        putSetting(fresh2.db, 'llm_api', 'openai-completions');
+        expect(resolveModelRoutesFromStore(fresh2.db, fresh2.config).routes[0]).toMatchObject({
+          api: 'openai-completions',
+        });
+      } finally {
+        fresh2.dispose();
+      }
       expect(readFileSync(fresh.envFile, 'utf8')).toBeTruthy();
     } finally {
       fresh.dispose();

@@ -39,7 +39,8 @@ const DEFAULT_RETENTION = 200;
 export interface TaskSessionDeps {
   kernel: () => ShufaKernelHandle | null;
   /** 模型选择（null = 未配置，内核用缺省路由）。 */
-  modelSelection: () => Promise<{ provider: string; model: string } | null>;
+  /** 模型选择（五轮）：按任务——任务覆盖（model_* 列）优先，缺省回落默认模型。 */
+  modelSelection: (taskId: string) => Promise<{ provider: string; model: string } | null>;
   retention?: number;
   /** agent turn 以 error 终止时的失败回调（W7 联调：任务失败路径不悬挂）。 */
   onSessionFailure?: (sessionId: string, reason: string) => void;
@@ -471,7 +472,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       bindFirehose(kernel);
       const agents = agentsService(kernel.ctx);
       const sessionId = `task-${randomUUID()}`;
-      const model = await deps.modelSelection();
+      const model = await deps.modelSelection(taskId);
       const handle = await agents.create({
         sessionId,
         meta: { cwd: input.cwd, agentPreset: 'shufa' },
@@ -491,7 +492,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       const kernel = requireKernel();
       bindFirehose(kernel);
       const agents = agentsService(kernel.ctx);
-      const model = await deps.modelSelection();
+      const model = await deps.modelSelection(taskId);
       const handle = await agents.resume({
         resumeSessionId: input.sessionId,
         ...(model ? { agentOptions: { provider: model.provider, model: model.model } } : {}),

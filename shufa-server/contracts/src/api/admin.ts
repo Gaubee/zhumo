@@ -45,26 +45,6 @@ export type DeleteUserInput = z.infer<typeof DeleteUserInputSchema>;
 export const DeleteUserOutputSchema = z.object({ ok: z.boolean() });
 export type DeleteUserOutput = z.infer<typeof DeleteUserOutputSchema>;
 
-/** 模型预设（走查 BUG4，2026-09-23）：一条 = 一个 provider 的开箱配置。
- * baseURL=服务端点；api=协议类型（如 openai-completions，models.dev 来源暂缺省）。 */
-export const ModelPresetSchema = z.object({
-  provider: z.string(),
-  name: z.string(),
-  baseURL: z.string().optional(),
-  api: z.string().optional(),
-  models: z.array(z.object({ id: z.string(), name: z.string().optional() })),
-  source: z.enum(['builtin', 'models.dev']),
-});
-export type ModelPreset = z.infer<typeof ModelPresetSchema>;
-
-/** 预设目录：builtin（pi-ai 内嵌数据）恒在；models.dev 缓存有则追加。
- * fetched_at=缓存刷新时间（ISO），从未刷新为 null。 */
-export const ModelCatalogOutputSchema = z.object({
-  presets: z.array(ModelPresetSchema),
-  fetched_at: z.string().nullable(),
-});
-export type ModelCatalogOutput = z.infer<typeof ModelCatalogOutputSchema>;
-
 /** 运行时设置键白名单（settings 表其余键属内部状态，不对 API 开放）。
  * W7 联调补：llm_* 四键为模型路由写入面（resolveModelRouteFromStore 第一信源）；
  * 偏差记录：§1 原定 Models 配置落 .env，联调期改为 settings 表承载（.env 仍作回退）。 */

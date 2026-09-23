@@ -31,7 +31,7 @@ export function builtinModelPresets(): ModelPreset[] {
   // getBuiltinModels 的泛型收窄到字面量联合；此处按运行时 provider id 动态取。
   const modelsOf = getBuiltinModels as unknown as (
     provider: string,
-  ) => Array<{ id: string; name?: string; api?: string }>;
+  ) => Array<{ id: string; name?: string; api?: string; input?: string[]; contextWindow?: number }>;
   const presets: ModelPreset[] = [];
   for (const provider of builtinProviders()) {
     if (!provider.baseUrl) continue; // 过滤：只收有 baseUrl 的 provider
@@ -42,11 +42,22 @@ export function builtinModelPresets(): ModelPreset[] {
       name: provider.name,
       baseURL: provider.baseUrl,
       api: models[0]?.api,
-      models: models.slice(0, PRESET_MODEL_LIMIT).map((m) => ({ id: m.id, name: m.name })),
+      iconUrl: modelsDevLogo(provider.id),
+      models: models.slice(0, PRESET_MODEL_LIMIT).map((m) => ({
+        id: m.id,
+        name: m.name,
+        ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+        inputTypes: m.input?.includes('image') ? ['text', 'image'] : ['text'],
+      })),
       source: 'builtin',
     });
   }
   return presets;
+}
+
+/** models.dev logo URL（在线图标源；UI 离线缺失时回退字母头像）。 */
+export function modelsDevLogo(providerId: string): string {
+  return `https://models.dev/logos/${providerId}.svg`;
 }
 
 /**
@@ -86,9 +97,27 @@ export async function fetchModelsDevPresets(
       )) {
         if (models.length >= PRESET_MODEL_LIMIT) break;
         if (typeof modelValue !== 'object' || modelValue === null) continue;
-        const model = modelValue as { id?: unknown; name?: unknown };
+        // 五轮：模型带 contextWindow（limit.context）与输入模态（modalities.input）。
+        const model = modelValue as {
+          id?: unknown;
+          name?: unknown;
+          limit?: { context?: unknown } | null;
+          modalities?: { input?: unknown } | null;
+        };
         const id = typeof model.id === 'string' && model.id ? model.id : modelKey;
-        models.push({ id, name: typeof model.name === 'string' ? model.name : undefined });
+        const context =
+          typeof model.limit?.context === 'number' && model.limit.context > 0
+            ? Math.round(model.limit.context)
+            : undefined;
+        const rawInputs = Array.isArray(model.modalities?.input)
+          ? (model.modalities.input as unknown[]).filter((x): x is string => typeof x === 'string')
+          : [];
+        models.push({
+          id,
+          name: typeof model.name === 'string' ? model.name : undefined,
+          ...(context !== undefined ? { contextWindow: context } : {}),
+          inputTypes: rawInputs.includes('image') ? ['text', 'image'] : ['text'],
+        });
       }
     }
     if (models.length === 0) continue;
@@ -96,6 +125,7 @@ export async function fetchModelsDevPresets(
       provider: providerId,
       name: typeof provider.name === 'string' && provider.name ? provider.name : providerId,
       baseURL,
+      iconUrl: modelsDevLogo(providerId),
       models,
       source: 'models.dev',
     });

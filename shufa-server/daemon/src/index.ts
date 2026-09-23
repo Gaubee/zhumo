@@ -20,12 +20,13 @@ import { loadConfig, volatileRootWarning } from './config.js';
 import { openDatabase } from './db/database.js';
 import { BlobStore } from './db/blobs.js';
 import { createUser, listUsers } from './db/store.js';
+import { getTaskById } from './db/tasks.js';
 import { DaemonHttp } from './http.js';
 import { kernelDisabledByEnv, mountShufaKernel, type ShufaKernelHandle } from './kernel/boot.js';
 import { createTaskSessions } from './kernel/sessions.js';
 import { defaultSkillDocPath } from './kernel/prompts.js';
 import path from 'node:path';
-import { resolveModelRouteFromStore, resolveShufaToolDir, TaskService } from './tasks/service.js';
+import { resolveModelRoutesFromStore, resolveShufaToolDir, TaskService } from './tasks/service.js';
 import { ResourceService } from './resources.js';
 import { createShufaMcpServer } from './capability/mcp.js';
 import { router, type RpcContext } from './rpc.js';
@@ -84,7 +85,18 @@ async function main(): Promise<void> {
   let tasks: TaskService;
   const sessions = createTaskSessions({
     kernel: () => kernel,
-    modelSelection: async () => resolveModelRouteFromStore(db, config),
+    modelSelection: async (taskId: string) => {
+      // 任务覆盖（五轮活动模型）优先；缺省回落默认模型/旧链首路由。
+      const task = getTaskById(db, taskId);
+      if (task?.model_provider && task.model_model) {
+        return { provider: task.model_provider, model: task.model_model };
+      }
+      const bundle = resolveModelRoutesFromStore(db, config);
+      if (bundle.default) return bundle.default;
+      const first = bundle.routes[0];
+      const model = first?.models[0]?.id;
+      return first && model ? { provider: first.provider, model } : null;
+    },
     // W7 联调：agent turn error → 任务 failed + 状态帧（失败路径不悬挂）。
     onSessionFailure: (sessionId, reason) => tasks.markSessionFailed(sessionId, reason),
   });
@@ -110,16 +122,16 @@ async function main(): Promise<void> {
     });
     http.mountMcpEndpoint({ token: mcpToken, handle: toNodeHandler(mcpHandler) });
 
-    const modelRoute = resolveModelRouteFromStore(db, config);
+    const modelRoutes = resolveModelRoutesFromStore(db, config);
     console.log(
-      modelRoute
-        ? `[boot] 模型路由桥：provider=${modelRoute.provider} model=${modelRoute.model} → $DSH_HOME settings.yaml/.credentials.yaml`
-        : '[boot] 未配置模型路由（settings 表 llm_* / .env LLM_* 均为空），内核以缺省路由运行',
+      modelRoutes.routes.length > 0
+        ? `[boot] 模型路由桥：${modelRoutes.routes.length} 条路由（${modelRoutes.routes.map((route) => `${route.provider}×${route.models.length}`).join('、')}）→ $DSH_HOME settings.yaml/.credentials.yaml`
+        : '[boot] 未配置模型路由（models_routes / llm_* / .env LLM_* 均为空），内核以缺省路由运行',
     );
     const mounted = await mountShufaKernel({
       dataRoot: config.dataRoot,
       mcp: { url: mcpUrl, token: mcpToken },
-      modelRoute,
+      modelRoutes,
       skillDocPath: defaultSkillDocPath(path.dirname(config.envFile)),
     });
     if (mounted.kernel) {

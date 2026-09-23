@@ -21,9 +21,8 @@ export function readableModelName(id: string): string {
     .join(" ");
 }
 
-/** 路由展示名：优先 iconLetter，否则 provider 首段首字母。 */
-export function routeLetter(route: DshModelRoute): string {
-  if (route.iconLetter !== undefined && route.iconLetter.length > 0) return route.iconLetter;
+/** 路由展示名：provider 首段首字母（图标缺失时的字母头像）。 */
+export function routeLetter(route: Pick<DshModelRoute, "provider">): string {
   const first = route.provider.split(/[-_.]/)[0] ?? route.provider;
   return first.slice(0, 1).toUpperCase();
 }
@@ -31,15 +30,14 @@ export function routeLetter(route: DshModelRoute): string {
 const PALETTE = ["#c0392b", "#8d6e63", "#2f6f4f", "#3f5b8f", "#8f5b3f", "#5f4b8b"];
 
 /** provider 名 → 稳定暖调底色（与纸墨色系协调）。 */
-export function routeAvatarColor(route: DshModelRoute): string {
-  if (route.iconColor !== undefined) return route.iconColor;
+export function routeAvatarColor(route: Pick<DshModelRoute, "provider">): string {
   let hash = 0;
   for (const ch of route.provider) hash = (hash * 31 + ch.charCodeAt(0)) | 0;
   return PALETTE[Math.abs(hash) % PALETTE.length] ?? "#8d6e63";
 }
 
 /** 路由显示标签：provider 原名（自定义路由即用户键入名）。 */
-export function routeDisplayLabel(route: DshModelRoute): string {
+export function routeDisplayLabel(route: Pick<DshModelRoute, "provider">): string {
   return route.provider;
 }
 

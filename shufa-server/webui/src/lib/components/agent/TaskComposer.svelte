@@ -6,16 +6,24 @@
   警示条并禁用创建（视频选择不受影响）。
   朱墨前端改造 [2026-09-24]（BUG5）：会话用户已被禁用 → 同款警示条 + 禁用创建
   （禁用账号可登录可读，仅新建任务被拦；daemon 侧双重拦截）。
+  走查五轮（2026-09-24 · 四）：活动模型选择移入本面板——模型 chip（Popover
+  分组列表：图标/上下文窗口/视觉标记；「跟随默认」= 不带覆盖创建）。
   正交意图：[1] 素材视频选择；[2] 预设开场 chips；[3] 提示词编辑与创建；
-  [4] 未配置模型路由/账号被禁用的创建阻断。
+  [4] 未配置模型路由/账号被禁用的创建阻断；[5] 任务级模型选择。
 -->
 <script lang="ts">
   import IconFile from "@lucide/svelte/icons/file";
   import IconSend from "@lucide/svelte/icons/send";
   import IconTriangleAlert from "@lucide/svelte/icons/triangle-alert";
+  import IconChevronDown from "@lucide/svelte/icons/chevron-down";
+  import IconImage from "@lucide/svelte/icons/image";
   import { Button } from "$lib/components/ui/button";
+  import * as Popover from "$lib/components/ui/popover";
   import { createTask, tasks } from "$lib/stores/tasks.svelte";
   import { auth } from "$lib/stores/auth.svelte";
+  import { api } from "$lib/api";
+  import { formatTokenCount } from "$lib/components/models/route-meta";
+  import type { AvailableModel } from "$lib/types";
 
   /** 预设开场（点选填充，仍然可编辑；措辞覆盖管线真实工具面）。 */
   const PRESETS: Array<{ label: string; prompt: string }> = [
@@ -44,6 +52,37 @@
   let video = $state<File | null>(null);
   let videoName = $state("");
   let videoInput = $state<HTMLInputElement | null>(null);
+
+  // ---- 五轮：活动模型选择（任务级覆盖；null = 跟随默认） ----
+  let modelPickerOpen = $state(false);
+  let available = $state<AvailableModel[]>([]);
+  let availableDefault = $state<{ provider: string; model: string } | null>(null);
+  let picked = $state<{ provider: string; model: string } | null>(null);
+
+  const pickedLabel = $derived.by(() => {
+    if (picked === null) {
+      const def = availableDefault;
+      return def ? `跟随默认（${def.model}）` : "跟随默认";
+    }
+    const current = picked;
+    const found =
+      current === null
+        ? undefined
+        : available.find((m) => m.provider === current.provider && m.model === current.model);
+    return found ? found.name : `${current?.provider ?? ""} / ${current?.model ?? ""}`;
+  });
+
+  async function openModelPicker(open: boolean): Promise<void> {
+    modelPickerOpen = open;
+    if (!open || available.length > 0) return;
+    try {
+      const out = await api.getAvailableModels();
+      available = out.models;
+      availableDefault = out.default;
+    } catch {
+      available = []; // 拉取失败：选择器空态，创建仍走默认
+    }
+  }
   let sending = $derived(tasks.sending);
   /** R4：bootstrap 已加载且生效路由为 null → 管理员未配置大模型服务。 */
   let modelMissing = $derived(auth.bootstrap !== null && auth.bootstrap.modelRoute === null);
@@ -62,7 +101,9 @@
     const file = video;
     video = null;
     videoName = "";
-    void createTask(trimmed, file);
+    const model = picked === null ? undefined : picked; // 任务级覆盖；未选=跟随默认
+    picked = null;
+    void createTask(trimmed, file, model);
   }
 
   function onkeydown(event: KeyboardEvent): void {
@@ -100,6 +141,73 @@
       {:else}
         <span class="text-[11px] text-muted-foreground">必选；agent 通过文件路径自行读取分析</span>
       {/if}
+    </div>
+
+    <!-- 五轮：任务级模型选择（活动模型；不选=跟随后台默认模型） -->
+    <div class="mt-2 flex items-center gap-2">
+      <Popover.Root open={modelPickerOpen} onOpenChange={(open) => void openModelPicker(open)}>
+        <Popover.Trigger>
+          {#snippet child({ props })}
+            <button
+              type="button"
+              {...props}
+              class="flex h-7 items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2.5 text-[11px] text-foreground/80 transition-colors hover:border-primary/50"
+            >
+              <span class="max-w-[220px] truncate">{pickedLabel}</span>
+              <IconChevronDown class="h-3 w-3 shrink-0 opacity-60" aria-hidden="true" />
+            </button>
+          {/snippet}
+        </Popover.Trigger>
+        <Popover.Content class="w-72 p-0">
+          <div class="max-h-72 overflow-y-auto p-1">
+            <button
+              type="button"
+              class="flex w-full items-center rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted/60 {picked === null
+                ? "bg-accent-soft"
+                : ""}"
+              onclick={() => {
+                picked = null;
+                modelPickerOpen = false;
+              }}
+            >
+              跟随默认{availableDefault ? `（${availableDefault.model}）` : ""}
+            </button>
+            {#each available as item (item.provider + "::" + item.model)}
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted/60 {picked !== null && picked.provider === item.provider && picked.model === item.model
+                  ? "bg-accent-soft"
+                  : ""}"
+                onclick={() => {
+                  picked = { provider: item.provider, model: item.model };
+                  modelPickerOpen = false;
+                }}
+              >
+                {#if item.iconUrl}
+                  <img
+                    src={item.iconUrl}
+                    alt=""
+                    class="h-4 w-4 shrink-0 object-contain dark:invert"
+                    onerror={(event) => ((event.currentTarget as HTMLImageElement).style.display = "none")}
+                  />
+                {/if}
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate">{item.name}</span>
+                  <span class="block truncate text-[10px] text-muted-foreground">
+                    {item.provider}{item.contextWindow !== undefined
+                      ? ` · ${formatTokenCount(item.contextWindow)}`
+                      : ""}
+                  </span>
+                </span>
+                {#if (item.inputTypes ?? ["text"]).includes("image")}
+                  <IconImage class="h-3 w-3 shrink-0 text-muted-foreground" aria-label="支持图片输入" />
+                {/if}
+              </button>
+            {/each}
+          </div>
+        </Popover.Content>
+      </Popover.Root>
+      <span class="text-[10px] text-muted-foreground">本任务使用的模型（活动模型）</span>
     </div>
 
     <div class="mt-3 flex flex-wrap gap-1.5">

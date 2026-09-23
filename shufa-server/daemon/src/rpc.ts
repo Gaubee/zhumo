@@ -71,11 +71,28 @@ import {
 import { needsSetup, saveEnvValues, type AppConfig } from './config.js';
 import { randomBytes } from 'node:crypto';
 import type { WizardRunner } from './wizard.js';
-import { resolveModelRouteInfo } from './tasks/service.js';
+import { modelsRouteInfo } from './tasks/service.js';
 import type { TaskService } from './tasks/service.js';
 import type { ResourceService } from './resources.js';
 import type { BlobStore } from './db/blobs.js';
 import { modelCatalog, refreshModelsDevCache } from './models-catalog.js';
+import {
+  buildRoutesBundle,
+  loadKeys,
+  loadModelsConfig,
+  saveModelsConfig,
+} from './models-store.js';
+import { testRouteConnection } from './test-route-connection.js';
+import { syncModelRoutesCredentials, syncModelRoutesSettings } from './kernel/model-route.js';
+import {
+  ModelsSaveInputSchema,
+  ModelsTestInputSchema,
+} from '@zhumo/contracts';
+import type {
+  ModelsConfigOutput,
+  ModelsTestOutput,
+  ModelsAvailableOutput,
+} from '@zhumo/contracts';
 import { lanUrls } from './lan.js';
 
 /** 每个 WS 连接（或测试调用）注入的初始 context。 */
@@ -177,13 +194,13 @@ const bootstrap = base.handler(async ({ context }): Promise<BootstrapOutput> => 
     allow_anonymous: isAllowAnonymous(context.db),
     site_name: getSetting(context.db, 'site_name') ?? '朱墨',
     // 走查 BUG2（2026-09-23）：模型路由透明化——provider/model/来源对外可见
-    // （与 resolveModelRouteFromStore 同一读取链；api key 永不出现在此）。
-    model_route: resolveModelRouteInfo(context.db, context.config),
+    // （五轮起多路由：routes 的 default 优先，旧 llm_* 兜底；key 永不出现在此）。
+    model_route: modelsRouteInfo(context.db, context.config),
     setup_progress: {
       admin_created: hasNonAnonymousUser(context.db),
       steps_done: steps.done,
       steps_total: steps.total,
-      model_configured: resolveModelRouteInfo(context.db, context.config) !== null,
+      model_configured: modelsRouteInfo(context.db, context.config) !== null,
     },
     // 走查 2026-09-24：完成标记随 bootstrap 下发（SPA 反向门控 /setup → 登录）。
     setup_completed: getSetting(context.db, 'setup_completed') === '1',
@@ -448,6 +465,55 @@ const adminModelsCatalog = requireAdmin.handler(({ context }) => {
   return modelCatalog(context.db);
 });
 
+/** 多路由配置读面（五轮）：密钥只投影 hasKey。 */
+const adminModelsGet = requireAdmin.handler(({ context }): ModelsConfigOutput => {
+  return loadModelsConfig(context.db);
+});
+
+/** 多路由配置写面：apiKey 空/缺省=保留旧值；保存后桥接面随新会话生效。 */
+const adminModelsSave = requireAdmin
+  .input(ModelsSaveInputSchema)
+  .handler(async ({ context, input }) => {
+    saveModelsConfig(context.db, input);
+    // 桥接面即时重写（settings.yaml/.credentials.yaml 行热加载，无需重启）。
+    const bundle = buildRoutesBundle(context.db);
+    if (bundle.routes.length > 0) {
+      const home = path.join(context.config.dataRoot, 'dsh-home');
+      syncModelRoutesSettings(home, bundle);
+      syncModelRoutesCredentials(home, bundle.routes);
+    }
+    return loadModelsConfig(context.db);
+  });
+
+/** 连接测试（五轮 · 一）：apiKey 直传优先，缺省从已存密钥注入。 */
+const adminModelsTest = requireAdmin
+  .input(ModelsTestInputSchema)
+  .handler(async ({ context, input }): Promise<ModelsTestOutput> => {
+    const apiKey =
+      input.apiKey && input.apiKey.length > 0
+        ? input.apiKey
+        : loadKeys(context.db)[input.provider ?? ''] ?? '';
+    return testRouteConnection({ ...input, apiKey });
+  });
+
+/** 可用模型清单（登录用户；前台任务对话框的活动模型选择）。 */
+const modelsAvailable = requireActiveUser.handler(({ context }): ModelsAvailableOutput => {
+  const config = loadModelsConfig(context.db);
+  return {
+    models: config.routes.flatMap((route) =>
+      route.models.map((model) => ({
+        provider: route.provider,
+        model: model.id,
+        name: model.name ?? model.id,
+        ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+        ...(model.inputTypes !== undefined ? { inputTypes: model.inputTypes } : {}),
+        ...(route.iconUrl !== undefined ? { iconUrl: route.iconUrl } : {}),
+      })),
+    ),
+    default: config.default,
+  };
+});
+
 /** models.dev 在线刷新：成功返回合并目录；网络失败中文报错且不伤 builtin/旧缓存。 */
 const adminModelsCatalogRefresh = requireAdmin.handler(async ({ context }) => {
   try {
@@ -580,6 +646,11 @@ export const router = {
 
   me,
 
+  // 登录用户面（非 admin）：前台任务对话框选活动模型用。
+  models: {
+    available: modelsAvailable,
+  },
+
   admin: {
     users: {
       list: adminUserList,
@@ -602,6 +673,9 @@ export const router = {
     models: {
       catalog: adminModelsCatalog,
       catalogRefresh: adminModelsCatalogRefresh,
+      get: adminModelsGet,
+      save: adminModelsSave,
+      test: adminModelsTest,
     },
   },
 
