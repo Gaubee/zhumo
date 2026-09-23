@@ -1,0 +1,130 @@
+/*
+ * 转录流结构原子（移植自 skill-creator-v2 webui
+ * src/lib/components/agent/agent-flow.css；保留本波用到的子集：
+ * flow-item/disclosure-row/sweep/turn-pill/bubble-user/msg-body/tool-card）。
+ * 正交意图：
+ *   [1] 转录行节奏与折叠行 24px 语法；[2] 扫光运行态；[3] 气泡/药丸/工具卡基类。
+ */
+
+/* 转录行基类：全宽；相邻行 16px 节奏。 */
+.flow-item {
+  position: relative;
+  width: 100%;
+}
+.flow-item + .flow-item {
+  margin-top: 16px;
+}
+
+/* DisclosureRow 24px 语法：[icon] 标题 [·] 摘要 [chevron]；hover 换底。 */
+.disclosure-row {
+  display: grid;
+  grid-template-columns: 14px auto 4px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 6px;
+  font-size: 12px;
+  line-height: 1;
+  user-select: none;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.disclosure-row:hover,
+.disclosure-row:focus-visible {
+  background: color-mix(in oklab, var(--muted) 50%, transparent);
+}
+.disclosure-row .disclosure-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  text-align: left;
+}
+.disclosure-row .disclosure-chevron {
+  opacity: 0;
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease;
+}
+.disclosure-row:hover .disclosure-chevron,
+.disclosure-row[data-open="true"] .disclosure-chevron {
+  opacity: 1;
+}
+.disclosure-row[data-open="true"] .disclosure-chevron {
+  transform: rotate(90deg);
+}
+
+/* 运行态扫光（reduced-motion 降级为静态半透明）。 */
+.sweep {
+  position: relative;
+  overflow: hidden;
+}
+.sweep::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -300px;
+  width: 300px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklab, var(--primary) 8%, transparent),
+    transparent
+  );
+  animation: agent-sweep 1.6s linear infinite;
+  pointer-events: none;
+}
+@keyframes agent-sweep {
+  to {
+    left: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sweep {
+    opacity: 0.5;
+  }
+  .sweep::after {
+    animation: none;
+    content: none;
+  }
+}
+
+/* 轮次药丸：tabular-nums 11px muted。 */
+.turn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 9999px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 用户气泡（accent 10% 淡底）。 */
+.bubble-user {
+  border-radius: 22px;
+  background: color-mix(in oklab, var(--primary) 10%, transparent);
+}
+
+/* 转录正文 13px/20。 */
+.msg-body {
+  font-size: 13px;
+  line-height: 20px;
+}
+
+/* 工具展开卡：mono 11px + muted 底。 */
+.tool-card {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--muted) 30%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}

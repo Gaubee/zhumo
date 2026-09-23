@@ -1,0 +1,940 @@
+/*
+ * 结果页全量样式：shufa-tool web/src/style.css 的逐规则移植（BUG5 结果页复刻）。
+ * 纸墨色系：纸 #faf7f0 / 卡 #fffdf8 / 墨 #2a2622 / 灰 #8a827a / 线 #e8e0d2 /
+ * 朱砂 #c0392b；层级靠字号/字重/留白，无渐变无光晕。
+ * 移植差异（相对打磨版，规则一一对应）：
+ *  1. 全部规则收口在 .shufa-report 根下，避免污染 webui 其它页面；
+ *  2. 令牌 --paper/--card/--ink/--dim/--line/--accent-soft 沿用 app.css :root（同名同值），
+ *     --accent/--accent-deep/--itemfill 在 .shufa-report 局部补定义
+ *     （app.css 的 --accent 是 shadcn soft 色，语义不同，不能直接用）；
+ *  3. 打磨版的 html/body{height:100%;overflow:hidden}（桌面双列 body 不滚）改为
+ *     类驱动：ResultPage 挂载期间给 html/body 加 .result-live，MQ 内命中即锁；
+ *  4. 移动端 tab 切换选择器 body[data-tab] → .shufa-report[data-tab]（tab 状态在页面根）。
+ * 布局模型：
+ *  - 移动端（<1000px，document 流）：header → 视频（恒在 tabs 上方）→ 分段 tabs
+ *    → content（字幕列表 | 静态总结）→ footer，页面整体滚动。
+ *  - 桌面端（≥1000px，应用壳）：html/body 100% 不滚动；.shufa-report grid
+ *    auto 1fr auto（header/main/footer）；main 双列 minmax(0,1fr)（防 grid 溢出），
+ *    左列=动态学习（视频 max-height 46dvh + 字幕列表 32dvh 内部滚动）、
+ *    右列=静态总结独立滚动；footer 通栏。
+ */
+
+/* ---------- 根与令牌 ---------- */
+.shufa-report,
+.shufa-report *,
+.shufa-report *::before,
+.shufa-report *::after {
+  box-sizing: border-box;
+}
+.shufa-report {
+  /* 结果页局部令牌（app.css 的 --accent 是 shadcn soft 色，此处收口为朱砂语义） */
+  --accent: var(--accent-strong);
+  --accent-deep: #96271b;
+  --itemfill: rgba(192, 57, 43, 0.13);
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+/* ---------- 应用壳（移动优先：单列 document 流） ---------- */
+.shufa-report main.cols {
+  flex: 1;
+  width: 100%;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 0 14px;
+}
+.shufa-report .col {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 18px 16px;
+  margin-top: 14px;
+}
+.shufa-report .col section {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+.shufa-report #meta {
+  margin-top: 26px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--line);
+}
+
+/* ---------- 页头 ---------- */
+.shufa-report header.hero {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  max-width: 980px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 26px 14px 14px;
+}
+.shufa-report header.hero h1 {
+  margin: 0 0 4px;
+  font-size: 26px;
+  letter-spacing: 2px;
+}
+.shufa-report .seal {
+  width: 52px;
+  height: 52px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  line-height: 1.2;
+  text-align: center;
+  flex: none;
+}
+.shufa-report .hero-text {
+  min-width: 0;
+}
+.shufa-report .sub {
+  margin: 0;
+  color: var(--dim);
+  font-size: 13px;
+}
+.shufa-report .dim {
+  color: var(--dim);
+}
+
+.shufa-report section h2,
+.shufa-report .sub-h2 {
+  margin: 0 0 14px;
+  font-size: 17px;
+  letter-spacing: 1px;
+  border-left: 4px solid var(--accent);
+  padding-left: 10px;
+}
+.shufa-report section h2 small {
+  color: var(--dim);
+  font-weight: 400;
+  margin-left: 8px;
+}
+.shufa-report .sub-h2 {
+  margin-top: 26px;
+}
+.shufa-report dl.meta {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 4px 14px;
+  font-size: 13.5px;
+}
+.shufa-report dl.meta dt {
+  color: var(--dim);
+}
+.shufa-report dl.meta dd {
+  margin: 0;
+}
+
+/* ---------- 移动端分段 tabs（segmented control） ---------- */
+.shufa-report .tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px;
+  margin: 14px 0 12px;
+}
+.shufa-report .tab-btn {
+  flex: 1;
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  background: transparent;
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: var(--dim);
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    background 0.15s;
+}
+.shufa-report .tab-btn:hover {
+  color: var(--ink);
+}
+.shufa-report .tab-btn[aria-selected="true"] {
+  background: var(--accent);
+  color: #fff;
+}
+.shufa-report .tab-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+@media (max-width: 999px) {
+  .shufa-report[data-tab="dyn"] .col-static {
+    display: none;
+  }
+  .shufa-report[data-tab="summary"] #dyn-pane {
+    display: none;
+  }
+  .shufa-report .sp-hint {
+    display: none;
+  }
+}
+
+/* ---------- 逐字笔记 + 旁注横卡 ---------- */
+.shufa-report .char-row {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 14px 0;
+  border-bottom: 1px dashed var(--line);
+}
+.shufa-report .char-row:last-of-type {
+  border-bottom: none;
+}
+.shufa-report .char-grid {
+  flex: none;
+  width: 150px;
+}
+.shufa-report .char-grid img {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  display: block;
+}
+.shufa-report .char-grid .cap {
+  text-align: center;
+  font-size: 13px;
+  color: var(--dim);
+  margin-top: 6px;
+}
+.shufa-report .char-info {
+  flex: 1;
+  min-width: 0;
+}
+.shufa-report .char-info h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+.shufa-report .dim-line {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--dim);
+}
+/* 旁注卡：横向卡片纵向堆叠——左墨迹缩略图（72px 方 contain）右两行文字 */
+.shufa-report .char-annos {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+.shufa-report .anno-card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+}
+.shufa-report .anno-thumb {
+  flex: none;
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #fff;
+  display: block;
+}
+.shufa-report .anno-info {
+  flex: 1;
+  min-width: 0;
+}
+.shufa-report .anno-line {
+  margin: 0 0 2px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.shufa-report .anno-time {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.shufa-report .anno-time:hover {
+  color: var(--accent-deep);
+}
+.shufa-report .anno-time:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+.shufa-report .anno-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.shufa-report .anno-empty {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+.shufa-report .chip {
+  display: inline-block;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 1px 10px;
+  font-size: 12px;
+  margin: 0 3px 2px 0;
+}
+.shufa-report ul.points {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+.shufa-report ul.points li {
+  margin: 4px 0;
+}
+
+/* ---------- 自定义播放器（.sp-*） ---------- */
+.shufa-report .shufa-player {
+  background: transparent;
+  color: var(--ink);
+  padding: 0;
+  margin: 0;
+  font: inherit;
+}
+.shufa-report .sp-layout {
+  min-width: 0;
+}
+.shufa-report .sp-stage {
+  min-width: 0;
+}
+/* 视频宽度受控：媒体框满列宽，高度钳制（object-fit contain 居中，不撑破列） */
+.shufa-report .sp-media {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  margin: 0 auto;
+  background: #000;
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  line-height: 0;
+}
+.shufa-report .sp-media video {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 40dvh;
+  object-fit: contain;
+  background: #000;
+}
+.shufa-report .sp-flash {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.22s ease;
+}
+.shufa-report .sp-flash.sp-show {
+  opacity: 1;
+}
+.shufa-report .sp-flash svg {
+  width: 58px;
+  height: 58px;
+  padding: 15px;
+  box-sizing: border-box;
+  background: rgba(255, 253, 248, 0.92);
+  border-radius: 50%;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  fill: var(--accent);
+}
+.shufa-report .sp-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+  position: relative; /* 音量/倍速 Popover 的定位父级 */
+}
+.shufa-report .sp-btn {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  border-radius: 8px;
+  min-width: 34px;
+  height: 30px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex: none;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background 0.15s;
+}
+.shufa-report .sp-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.shufa-report .sp-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.shufa-report .sp-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+  display: block;
+}
+.shufa-report .sp-btn svg.sp-i-pause,
+.shufa-report .sp-btn svg.sp-voff {
+  display: none;
+}
+.shufa-report .sp-playing .sp-btn svg.sp-i-play {
+  display: none;
+}
+.shufa-report .sp-playing .sp-btn svg.sp-i-pause {
+  display: block;
+}
+.shufa-report .sp-rate {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.3px;
+}
+.shufa-report .sp-btn[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.shufa-report .sp-mute.sp-muted svg.sp-von {
+  display: none;
+}
+.shufa-report .sp-mute.sp-muted svg.sp-voff {
+  display: block;
+}
+.shufa-report .sp-time {
+  color: var(--dim);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex: none;
+}
+.shufa-report .sp-progress {
+  flex: 1 1 120px;
+  min-width: 100px;
+  padding: 9px 0;
+  cursor: pointer;
+  touch-action: none;
+  position: relative; /* 预览 Popover 的定位父级 */
+}
+.shufa-report .sp-track {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--line);
+  transition: height 0.12s ease;
+}
+.shufa-report .sp-progress:hover .sp-track {
+  height: 8px;
+}
+/* 旁注活动量墨迹图层：自 track 顶边向上生长的面积图（底边留 1px 与进度条相接），
+   hover 渐显；track/progress 均 overflow visible，不裁剪 */
+.shufa-report .sp-ink {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% - 1px);
+  width: 100%;
+  height: 20px;
+  display: block;
+  overflow: visible;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+.shufa-report .sp-progress:hover .sp-ink,
+.shufa-report .sp-progress.sp-hovering .sp-ink {
+  opacity: 0.55;
+}
+.shufa-report .sp-ink-area {
+  fill: var(--accent);
+  fill-opacity: 0.35;
+}
+.shufa-report .sp-ink-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+.shufa-report .sp-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left center;
+}
+.shufa-report .sp-cursor {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--accent);
+  box-shadow: 0 1px 3px rgba(42, 38, 34, 0.3);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.shufa-report .sp-mark {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  margin: 0;
+  background: #fff;
+  border: 1.5px solid var(--accent);
+  border-radius: 2px;
+  transform: translate(-50%, -50%) rotate(45deg);
+  cursor: pointer;
+  z-index: 2;
+  transition: background 0.12s;
+}
+.shufa-report .sp-mark:hover {
+  background: var(--accent);
+}
+.shufa-report .sp-mark:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.shufa-report .sp-mark::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%) rotate(-45deg);
+  background: var(--ink);
+  color: #fffdf8;
+  font-size: 11.5px;
+  line-height: 1.4;
+  padding: 2px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+.shufa-report .sp-mark:hover::after,
+.shufa-report .sp-mark:focus-visible::after {
+  opacity: 1;
+}
+.shufa-report .sp-hint {
+  margin: 8px 0 0;
+  color: var(--dim);
+  font-size: 12px;
+}
+.shufa-report .sp-hint b {
+  color: var(--ink);
+  font-weight: 600;
+}
+/* 字幕列表：内部滚动 + scroll-snap（proximity），激活条目吸附至列表顶部。
+   末尾撑高（padding-bottom ≈ 列高 − 一个条目）：最后一条也能 snap 到可视区顶部 */
+.shufa-report .sp-list {
+  min-width: 0;
+  max-height: 60dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+  scroll-snap-type: y proximity;
+  scroll-padding-top: 8px;
+  padding-bottom: calc(60dvh - 88px);
+}
+.shufa-report .sp-item {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 12px 8px 9px;
+  border-bottom: 1px dashed var(--line);
+  border-left: 3px solid transparent;
+  cursor: pointer;
+  scroll-snap-align: start;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.shufa-report .sp-item:last-child {
+  border-bottom: none;
+}
+.shufa-report .sp-item:hover {
+  background: #faf6ed;
+}
+.shufa-report .sp-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.shufa-report .sp-item[data-active] {
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+}
+.shufa-report .sp-item time {
+  flex: none;
+  width: 74px;
+  padding-top: 2px;
+  color: var(--accent);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.shufa-report .sp-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px 0;
+}
+.shufa-report .sp-itemfill {
+  position: absolute;
+  inset: 0;
+  background: var(--itemfill);
+  transform: scaleX(0);
+  transform-origin: left center;
+  pointer-events: none;
+}
+.shufa-report .sp-text,
+.shufa-report .sp-kf-title,
+.shufa-report .sp-kf-desc,
+.shufa-report .sp-chips {
+  position: relative;
+}
+.shufa-report .sp-text {
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.shufa-report .sp-kf-img {
+  flex: none;
+  width: 78px;
+  height: 58px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #fff;
+  display: block;
+}
+.shufa-report .sp-kf-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.shufa-report .sp-kf-title::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 1.5px;
+  background: var(--accent);
+  transform: rotate(45deg);
+}
+.shufa-report .sp-kf-desc {
+  font-size: 12.5px;
+  color: var(--dim);
+  line-height: 1.55;
+  margin-top: 1px;
+}
+.shufa-report .sp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.shufa-report .sp-chip {
+  display: inline-block;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  line-height: 18px;
+}
+
+/* ---------- Popover 三件套（预览 / 音量 / 倍速，data-open 驱动过渡） ---------- */
+.shufa-report .sp-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(42, 38, 34, 0.14);
+  padding: 8px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(6px);
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease,
+    visibility 0.12s;
+  pointer-events: none;
+}
+.shufa-report .sp-pop[data-open="1"] {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+/* 进度条预览：悬于墨迹图层之上（曲线自 track 顶向上生长 19px），不压曲线/菱形 */
+.shufa-report .sp-pv {
+  bottom: 35px;
+  padding: 6px;
+  text-align: center;
+}
+.shufa-report .sp-pv-img {
+  width: 128px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #000;
+  display: block;
+}
+.shufa-report .sp-pv-time {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+/* 竖向音量条 */
+.shufa-report .sp-vol {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 8px;
+}
+.shufa-report .sp-vol-val {
+  font-size: 11.5px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.shufa-report .sp-vol-track {
+  position: relative;
+  width: 10px;
+  height: 84px;
+  border-radius: 999px;
+  background: var(--line);
+  cursor: pointer;
+  touch-action: none;
+}
+.shufa-report .sp-vol-track:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.shufa-report .sp-vol-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 999px;
+  background: var(--accent);
+}
+/* 竖排倍速菜单 */
+.shufa-report .sp-rate-menu {
+  display: flex;
+  flex-direction: column;
+  min-width: 76px;
+  padding: 4px;
+}
+.shufa-report .sp-rate-item {
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.shufa-report .sp-rate-item:hover {
+  background: #faf6ed;
+}
+.shufa-report .sp-rate-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.shufa-report .sp-rate-item[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ---------- 加载 / 错误态 ---------- */
+.shufa-report .boot-error {
+  max-width: 640px;
+  margin: 96px auto;
+  background: var(--card);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 22px 24px;
+}
+.shufa-report .boot-error h2 {
+  margin: 0 0 10px;
+  font-size: 17px;
+  color: var(--accent);
+}
+.shufa-report .boot-error p {
+  margin: 6px 0;
+  font-size: 13.5px;
+}
+.shufa-report .boot-loading {
+  margin: 96px auto;
+  text-align: center;
+  font-size: 13.5px;
+}
+
+/* ---------- 页脚 ---------- */
+.shufa-report footer {
+  padding: 14px 16px 20px;
+  font-size: 12.5px;
+  color: var(--dim);
+  text-align: center;
+}
+
+/* ---------- 桌面应用壳（≥1000px：body 不滚动，双列各自内部滚动） ---------- */
+@media (min-width: 1000px) {
+  /* 打磨版 html/body{height:100%;overflow:hidden} 的类驱动等价：仅结果页挂载期锁滚 */
+  html.result-live,
+  body.result-live {
+    height: 100%;
+    overflow: hidden;
+  }
+  .shufa-report {
+    height: 100dvh;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+  }
+  .shufa-report header.hero {
+    max-width: none;
+    margin: 0;
+    padding: 9px 22px;
+    gap: 12px;
+    align-items: center;
+    border-bottom: 1px solid var(--line);
+    background: var(--card);
+  }
+  .shufa-report header.hero h1 {
+    display: inline;
+    margin: 0 12px 0 0;
+    font-size: 16px;
+    letter-spacing: 1px;
+  }
+  .shufa-report header.hero .sub {
+    display: inline;
+    margin: 0 12px 0 0;
+  }
+  .shufa-report header.hero .sub.hero-note {
+    display: none;
+  }
+  .shufa-report .seal {
+    width: 34px;
+    height: 34px;
+    font-size: 12px;
+    border-radius: 6px;
+  }
+  .shufa-report main.cols {
+    max-width: none;
+    padding: 0;
+    flex: none;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    min-height: 0;
+  }
+  .shufa-report .col {
+    min-width: 0;
+    min-height: 0;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    background: var(--paper);
+    padding: 16px 22px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
+  }
+  .shufa-report .col-dyn {
+    border-right: 1px solid var(--line);
+  }
+  .shufa-report .col section h2,
+  .shufa-report .col .sub-h2 {
+    font-size: 16px;
+    margin-bottom: 12px;
+  }
+  .shufa-report .tabs {
+    display: none;
+  }
+  .shufa-report footer {
+    border-top: 1px solid var(--line);
+    background: var(--card);
+    padding: 7px 22px;
+    text-align: left;
+  }
+  /* 左列：视频 46dvh 钳高，字幕列表压缩至 32dvh 并留末尾撑高（最后条目可置顶） */
+  .shufa-report .sp-media video {
+    max-height: 46dvh;
+  }
+  .shufa-report #dyn-pane .sp-list {
+    --list-h: 32dvh;
+    height: var(--list-h);
+    max-height: none;
+    padding-bottom: calc(var(--list-h) - 88px);
+  }
+}
+
+/* ---------- 小屏微调 ---------- */
+@media (max-width: 720px) {
+  .shufa-report .char-row {
+    flex-direction: column;
+  }
+  .shufa-report .char-grid {
+    width: 130px;
+  }
+  .shufa-report dl.meta {
+    grid-template-columns: 110px 1fr;
+  }
+}

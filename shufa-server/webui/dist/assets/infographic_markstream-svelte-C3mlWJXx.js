@@ -1,0 +1,1 @@
+var e={};throw Error(`Could not resolve "@antv/infographic" imported by "markstream-svelte". Is it installed?`);export{e as default};

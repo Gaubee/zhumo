@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>书写讲评分析</title>
+    <style>
+      /* 首屏加载态内联样式：style.css 由 main.ts 注入前也能正常呈现 */
+      body {
+        margin: 0;
+        background: #faf7f0;
+        color: #2a2622;
+        font: 15px/1.75 system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB",
+          "Microsoft YaHei", sans-serif;
+      }
+      .boot-loading {
+        max-width: 980px;
+        margin: 96px auto;
+        text-align: center;
+        color: #8a827a;
+        letter-spacing: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"><div class="boot-loading">分析加载中…</div></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

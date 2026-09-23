@@ -1,0 +1,98 @@
+/*
+  全局样式（W3）：Tailwind v4 + 纸墨色系主题（shadcn-svelte token 映射）。
+  原始需求 [2026-09-23]：视觉基调延续纸墨色系——--paper/--card/--ink/--dim/
+  --line/--accent/--accent-soft。
+  正交意图：
+  1. Tailwind v4 装配（tw-animate-css 提供 shadcn 动效类）。
+  2. 纸墨色系 → shadcn CSS 变量映射（亮色单主题）。
+*/
+@import "tailwindcss";
+@import "tw-animate-css";
+
+:root {
+  /* 纸墨色系原始 token（命名避开 shadcn token：accent 用 accent-strong） */
+  --paper: #faf7f0;
+  --ink: #2a2622;
+  --dim: #8a827a;
+  --line: #e8e0d2;
+  --accent-strong: #c0392b;
+  --accent-soft: #f7e8e4;
+
+  /* shadcn-svelte token 映射 */
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --card: #fffdf8;
+  --card-foreground: var(--ink);
+  --popover: #fffdf8;
+  --popover-foreground: var(--ink);
+  --primary: var(--accent-strong);
+  --primary-foreground: #fffdf8;
+  --secondary: #f3eee2;
+  --secondary-foreground: var(--ink);
+  --muted: #f3eee2;
+  --muted-foreground: var(--dim);
+  --accent: var(--accent-soft);
+  --accent-foreground: var(--accent-strong);
+  --destructive: #b3261e;
+  --destructive-foreground: #fffdf8;
+  --border: var(--line);
+  --input: var(--line);
+  --ring: color-mix(in srgb, var(--accent-strong) 45%, transparent);
+  --radius: 0.5rem;
+  --sidebar: #fffdf8;
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: var(--accent-strong);
+  --sidebar-primary-foreground: #fffdf8;
+  --sidebar-accent: var(--accent-soft);
+  --sidebar-accent-foreground: var(--accent-strong);
+  --sidebar-border: var(--line);
+  --sidebar-ring: color-mix(in srgb, var(--accent-strong) 45%, transparent);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  /* 纸墨 token 直出（组件可用 bg-paper/text-ink 等语义类） */
+  --color-paper: var(--paper);
+  --color-ink: var(--ink);
+  --color-dim: var(--dim);
+  --color-line: var(--line);
+  --color-accentred: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    background: var(--paper);
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family:
+      "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC",
+      system-ui, -apple-system, sans-serif;
+  }
+}

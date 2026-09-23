@@ -1,0 +1,30 @@
+# shufa-tool — 书法/作业讲评视频分析 CLI
+#
+# 意图（原始需求 2026-09-22）：
+#   1. 输入讲评视频（可能有旋转问题），自动转正
+#   2. 检测田字格，截取格内字
+#   3. 提取讲解过程中老师写的旁注及其出现时间
+#   4. 转录讲解音频并总结教学内容
+#   5. 产出自包含 HTML 报告
+[project]
+name = "shufa-tool"
+version = "0.1.0"
+description = "书法/作业讲评视频 → 田字格字提取 + 旁注时间线 + 转录摘要 HTML"
+requires-python = ">=3.11"
+dependencies = [
+    "opencv-python>=4.10",
+    "numpy>=1.26",
+]
+[project.optional-dependencies]
+transcribe = [
+    "mlx-whisper>=0.4; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "httpx[socks]>=0.27; sys_platform == 'darwin'",  # huggingface_hub 下载经 SOCKS 代理时必需
+]
+[project.scripts]
+shufa-analyze = "shufa_tool.cli:main"
+shufa-serve = "shufa_tool.serve:serve_bundle_main"
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+[tool.hatch.build.targets.wheel]
+packages = ["src/shufa_tool"]

@@ -1,0 +1,4 @@
+packages:
+  - daemon
+  - webui
+  - contracts

@@ -1,0 +1,41 @@
+{
+  "name": "@zhumo/daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-agent-presets": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-app-boot": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-base": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-llm": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-mcp-client": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-persona": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-tool-ask-user": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-workspace": "0.1.6-alpha.1",
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "@orpc/server": "^1.15.3",
+    "@zhumo/contracts": "workspace:*",
+    "better-sqlite3": "^13.0.3",
+    "jose": "^6.2.12",
+    "ws": "^8.21.3",
+    "yaml": "^2.9.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.2",
+    "vitest": "^5.0.1"
+  }
+}

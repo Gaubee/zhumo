@@ -1,0 +1,7 @@
+node_modules/
+data/
+.env
+*.log
+runtime/
+
+# webui/dist 是预编译前端产物，刻意随仓库分发（安装向导不构建前端），保持入库

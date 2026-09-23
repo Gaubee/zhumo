@@ -1,0 +1,24 @@
+# 依赖与生成物
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+
+# 运行时数据与密钥（用户数据不入库）
+.env
+shufa-server/data/
+shufa-server/runtime/
+.shufa-work/
+
+# 大媒体样例（samples/ 内的 mp4 本地自备，不入库；其余小样例文件可提交）
+samples/*.mp4
+
+# 会话工具产物
+.agents/
+
+# 系统
+.DS_Store
+*.log
+
+# 说明：shufa-server/webui/dist 是预编译前端产物，刻意随仓库分发
+# （安装向导不构建前端，见 shufa-server/README.md），保持入库。
