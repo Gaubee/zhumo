@@ -266,7 +266,9 @@
       上一步
     </Button>
     {#if step < 2}
-      <Button disabled={busy} onclick={() => void next()}>下一步</Button>
+      <Button disabled={busy} onclick={() => void next()}>
+        {busy ? (step === 0 ? "创建中…" : "处理中…") : "下一步"}
+      </Button>
     {:else}
       <Button disabled={busy} onclick={() => void finish()}>完成安装</Button>
     {/if}
