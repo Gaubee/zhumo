@@ -95,6 +95,8 @@ export function updateTask(
     agentSessionId?: string | null;
     resultId?: string | null;
     error?: string | null;
+    modelProvider?: string | null;
+    modelModel?: string | null;
   },
 ): TaskRow | null {
   if (patch.status !== undefined) {
@@ -121,6 +123,15 @@ export function updateTask(
   if (patch.error !== undefined) {
     db.prepare('UPDATE tasks SET error = ?, updated_at = ? WHERE id = ?').run(
       patch.error,
+      nowIso(),
+      id,
+    );
+  }
+  if (patch.modelProvider !== undefined || patch.modelModel !== undefined) {
+    const current = getTaskById(db, id);
+    db.prepare('UPDATE tasks SET model_provider = ?, model_model = ?, updated_at = ? WHERE id = ?').run(
+      patch.modelProvider !== undefined ? patch.modelProvider : (current?.model_provider ?? null),
+      patch.modelModel !== undefined ? patch.modelModel : (current?.model_model ?? null),
       nowIso(),
       id,
     );

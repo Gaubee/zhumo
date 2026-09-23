@@ -513,12 +513,24 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       return { sessionId: handle.agent.session.id };
     },
 
-  /** 取消当前活动（幂等；排队消息存活）。 */
-  cancel(sessionId: string): void {
-    const entry = live.get(sessionId);
-    if (!entry) throw new Error(`agent session not found: ${sessionId}`);
-    entry.agent.cancel('user', { keepInbox: true });
-  },
+    /** 取消当前活动（幂等；排队消息存活）。 */
+    cancel(sessionId: string): void {
+      const entry = live.get(sessionId);
+      if (!entry) throw new Error(`agent session not found: ${sessionId}`);
+      entry.agent.cancel('user', { keepInbox: true });
+    },
+
+    /**
+     * 会话内换模型（走查 R6）：仅 dispose live handle（帧 jsonl 不动）；
+     * 上层随后 resumeTaskSession 以新 agentOptions 重建（modelSelection 读
+     * 任务表新值）。不在册时 no-op（daemon 重启后的会话由 resume 自然带新模型）。
+     */
+    async disposeLive(sessionId: string): Promise<void> {
+      const entry = live.get(sessionId);
+      if (!entry) return;
+      live.delete(sessionId);
+      await entry.dispose();
+    },
 
   /**
    * 追加用户消息（W7b 前台续聊）：live 会话排队投递；不在册时抛错

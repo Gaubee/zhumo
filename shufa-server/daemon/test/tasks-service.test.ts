@@ -33,6 +33,7 @@ function fakeSessions() {
     }),
     resumeTaskSession: vi.fn(async (_taskId: string, input: { sessionId: string; framesFile: string }) => ({ sessionId: input.sessionId })),
     cancel: vi.fn(),
+    disposeLive: vi.fn(async () => {}),
     answer: vi.fn(() => false),
     emit: vi.fn((_sessionId: string, frame: Omit<Frame, 'at' | 'seq'>) => {
       emitted.push({ ...frame, at: Date.now(), seq: emitted.length + 1 } as Frame);
@@ -253,6 +254,26 @@ describe('TaskService 创建链', () => {
     expect(cancelled.status).toBe('cancelled');
     expect(sessions.raw.cancel).toHaveBeenCalledWith(`task-${1}`);
     expect(sessions.emitted.some((f) => f.kind === 'status' && (f.payload as { status: string }).status === 'cancelled')).toBe(true);
+  });
+
+  it('走查 R6：setModel 更新覆盖列 + live 会话热切（dispose→resume）；running 拒绝；悬空拒绝', async () => {
+    const item = await service.create(user, {
+      prompt: 'x',
+      video: { filename: 'v.mp4', data_base64: Buffer.from('bytes').toString('base64') },
+      model: { provider: 'zhipu', model: 'glm-5.3-flash' },
+    });
+    // running 态拒绝（对齐「本轮结束后再切换」）。
+    await expect(service.setModel(user, { taskId: item.id, provider: 'zhipu', model: 'glm-5.3-flash' })).rejects.toThrow('本轮结束后再切换');
+    // 收敛 failed（idle）后切换：更新列 + 热切调用。
+    service.markSessionFailed('task-1', 'x');
+    sessions.raw.isLive.mockReturnValue(true);
+    const updated = await service.setModel(user, { taskId: item.id, provider: 'zhipu', model: 'glm-5.3-flash' });
+    expect(updated.model_provider).toBe('zhipu');
+    expect(updated.model_model).toBe('glm-5.3-flash');
+    expect(sessions.raw.disposeLive).toHaveBeenCalledWith('task-1');
+    expect(sessions.raw.resumeTaskSession).toHaveBeenCalled();
+    // 悬空模型拒绝。
+    await expect(service.setModel(user, { taskId: item.id, provider: 'nope', model: 'm' })).rejects.toThrow('不在已配置路由中');
   });
 
   it('走查 R3：markSessionFailed 错误明文落库 + failed 状态帧携带详情；list/get 回放 error', async () => {

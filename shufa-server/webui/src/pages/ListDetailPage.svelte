@@ -30,6 +30,8 @@
   } from "$lib/stores/tasks.svelte";
   import { navigate } from "$lib/router.svelte";
   import { onMount } from "svelte";
+  import { api } from "$lib/api";
+  import type { AvailableModel } from "$lib/types";
 
   const statusLabel: Record<string, string> = {
     queued: "排队中",
@@ -43,6 +45,31 @@
     // 未登录（匿名关闭）不拉任务面——守卫卡呈现，避免 401 噪音。
     if (auth.session !== null) void loadTasks();
   });
+
+  // 可用模型（走查 R6：对话中模型 chip；拉取失败静默隐藏 chip）。
+  let availableModels = $state<AvailableModel[] | null>(null);
+  let availableDefault = $state<{ provider: string; model: string } | null>(null);
+  onMount(async () => {
+    if (auth.session === null) return;
+    try {
+      const out = await api.getAvailableModels();
+      availableModels = out.models;
+      availableDefault = out.default;
+    } catch {
+      availableModels = null;
+    }
+  });
+
+  /** 聊天中切换模型（走查 R6）：热切会话；失败内联呈现。 */
+  async function setModel(provider: string, model: string): Promise<void> {
+    if (selected === null) return;
+    try {
+      const updated = await api.setTaskModel(selected.id, provider, model);
+      tasks.list = tasks.list.map((t) => (t.id === updated.id ? updated : t));
+    } catch (e) {
+      tasks.error = e instanceof Error ? e.message : String(e);
+    }
+  }
 
   const selected = $derived(getSelectedTask());
   const items = $derived(projectFrames(tasks.frames));
@@ -177,6 +204,13 @@
             onsend={(text) => void sendPrompt(text)}
             sending={tasks.sending}
             videoName={selected.videoName}
+            models={availableModels}
+            defaultModel={availableDefault}
+            currentModel={selected.modelProvider !== null && selected.modelModel !== null
+              ? { provider: selected.modelProvider, model: selected.modelModel }
+              : null}
+            running={selected.status === "running" || selected.status === "queued"}
+            onsetmodel={(provider, model) => void setModel(provider, model)}
           />
         </div>
       {:else}

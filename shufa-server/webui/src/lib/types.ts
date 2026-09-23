@@ -245,8 +245,9 @@ export interface Task {
   videoName: string;
   createdAt: string;
   updatedAt: string;
-  /** 任务使用的模型（五轮：provider/model 展示）。 */
-  model?: string;
+  /** 任务级模型覆盖（走查 R6：null = 跟随后台默认模型；聊天中可切换）。 */
+  modelProvider: string | null;
+  modelModel: string | null;
   /** 失败原因明文（走查 R3：failed 必须可见；null = 无）。 */
   error: string | null;
 }

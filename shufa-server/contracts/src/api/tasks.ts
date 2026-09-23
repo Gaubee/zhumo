@@ -24,12 +24,24 @@ export const TaskItemSchema = z.object({
   result_id: IdSchema.nullable(),
   /** 失败原因明文（走查 R3：failed 必须可见；null = 无失败/未失败）。 */
   error: z.string().nullable(),
+  /** 任务级模型覆盖（走查 R6：聊天中可切换；null = 跟随后台默认模型）。 */
+  model_provider: z.string().nullable(),
+  model_model: z.string().nullable(),
   created_at: IsoDateTimeSchema,
   updated_at: IsoDateTimeSchema,
 });
 export type TaskItem = z.infer<typeof TaskItemSchema>;
 
 export const TaskListOutputSchema = z.object({ tasks: z.array(TaskItemSchema) });
+
+/** 聊天中切换任务模型（走查 R6）：更新任务级覆盖并热切会话（idle 态；
+ * running 由服务端拒绝，前端同款禁用）。 */
+export const TaskSetModelInputSchema = z.object({
+  task_id: IdSchema,
+  provider: IdSchema,
+  model: z.string().min(1),
+});
+export type TaskSetModelInput = z.infer<typeof TaskSetModelInputSchema>;
 
 /** 视频直传载荷：字节 base64（oRPC-over-WS JSON 传输；上限由 daemon 校验）。 */
 export const TaskVideoUploadSchema = z.object({

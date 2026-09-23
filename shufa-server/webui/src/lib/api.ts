@@ -147,6 +147,7 @@ interface ShufaRpc {
     get(input: TaskGetInput): Promise<TaskGetOutput>;
     cancel(input: TaskCancelInput): Promise<TaskItem>;
     followup(input: TaskFollowupInput): Promise<TaskFollowupOutput>;
+    setModel(input: { task_id: string; provider: string; model: string }): Promise<{ task: TaskItem }>;
   };
   res: {
     tree(input: ResTreeInput): Promise<ContractResTreeOutput>;
@@ -199,6 +200,8 @@ export interface ShufaApi {
   sendTaskPrompt(taskId: string, prompt: string): Promise<void>;
   createTask(prompt: string, video: File | null, model?: { provider: string; model: string }): Promise<Task>;
   cancelTask(taskId: string): Promise<void>;
+  /** 聊天中切换任务模型（走查 R6）：更新覆盖并热切会话（idle 态）。 */
+  setTaskModel(taskId: string, provider: string, model: string): Promise<Task>;
   getResult(publicId: string): Promise<ResultInfo>;
   // ---- 资源管理器（W5；owner 仅 admin 传他人 username） ----
   resTree(owner?: string, parent?: string): Promise<ResTreeOutputView>;
@@ -469,7 +472,8 @@ class MockApi implements ShufaApi {
       status: "queued",
       prompt,
       videoName: video?.name ?? "演示素材.mp4",
-      model: model ? `${model.provider}/${model.model}` : undefined,
+      modelProvider: model?.provider ?? null,
+      modelModel: model?.model ?? null,
       error: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -482,6 +486,14 @@ class MockApi implements ShufaApi {
   async cancelTask(taskId: string): Promise<void> {
     const task = mockDb.tasks.find((t) => t.id === taskId);
     if (task) task.status = "cancelled";
+  }
+
+  async setTaskModel(taskId: string, provider: string, model: string): Promise<Task> {
+    const task = mockDb.tasks.find((t) => t.id === taskId);
+    if (task === undefined) throw new Error("任务不存在");
+    task.modelProvider = provider;
+    task.modelModel = model;
+    return { ...task };
   }
 
   async getResult(publicId: string): Promise<ResultInfo> {
@@ -629,6 +641,8 @@ function toTaskView(task: TaskItem): Task {
     createdAt: task.created_at,
     updatedAt: task.updated_at,
     error: task.error ?? null,
+    modelProvider: task.model_provider ?? null,
+    modelModel: task.model_model ?? null,
   };
 }
 
@@ -871,6 +885,11 @@ class RpcApi implements ShufaApi {
 
   async cancelTask(taskId: string): Promise<void> {
     await rpc().tasks.cancel({ id: taskId });
+  }
+
+  async setTaskModel(taskId: string, provider: string, model: string): Promise<Task> {
+    const out = await rpc().tasks.setModel({ task_id: taskId, provider, model });
+    return toTaskView(out.task);
   }
 
   /** 结果页公开元数据走公开 HTTP 面（/api/results/{public_id}，匿名可读）。 */

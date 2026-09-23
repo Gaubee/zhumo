@@ -291,6 +291,38 @@ export class TaskService {
     this.emitStatus(sessionId, row.id, 'failed', reason);
   }
 
+  /**
+   * 聊天中切换任务模型（走查 R6）：更新任务级覆盖列 + idle 会话热切
+   * （dispose → resume 以新 agentOptions 重建，历史保留）。running 拒绝
+   * （对齐 skill-creator-v2「本轮结束后再切换」）；校验只要求命中已配路由
+   * （key 不强制——发送失败自有错误链呈现）。
+   */
+  async setModel(
+    user: UserRow,
+    input: { taskId: string; provider: string; model: string },
+  ): Promise<TaskItem> {
+    const task = this.requireOwnedTask(user, input.taskId);
+    if (isAwaitingRun(task.status)) {
+      throw new Error('任务运行中，本轮结束后再切换模型');
+    }
+    const bundle = buildRoutesBundle(this.deps.db);
+    const route = bundle.routes.find((candidate) => candidate.provider === input.provider);
+    if (!route || !route.models.some((entry) => entry.id === input.model)) {
+      throw new Error(`所选模型不在已配置路由中：${input.provider} / ${input.model}`);
+    }
+    updateTask(this.deps.db, task.id, { modelProvider: input.provider, modelModel: input.model });
+    const sessionId = task.agent_session_id;
+    if (sessionId && this.deps.sessions.isLive(sessionId)) {
+      await this.deps.sessions.disposeLive(sessionId);
+      await this.deps.sessions.resumeTaskSession(task.id, {
+        sessionId,
+        framesFile: this.framesFileOf(task),
+      });
+      this.rebind(task);
+    }
+    return this.toItem(getTaskById(this.deps.db, task.id) ?? task);
+  }
+
   async cancel(user: UserRow, id: string): Promise<TaskItem> {
     const task = this.requireOwnedTask(user, id);
     if (task.agent_session_id && this.deps.sessions.isLive(task.agent_session_id)) {
@@ -554,6 +586,8 @@ export class TaskService {
       agent_session_id: row.agent_session_id,
       result_id: row.result_id,
       error: row.error ?? null,
+      model_provider: row.model_provider ?? null,
+      model_model: row.model_model ?? null,
       created_at: row.created_at,
       updated_at: row.updated_at,
     };

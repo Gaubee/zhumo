@@ -31,6 +31,7 @@ import {
   SettingGetInputSchema,
   SettingPutInputSchema,
   TaskCancelInputSchema,
+  TaskSetModelInputSchema,
   TaskCreateInputSchema,
   TaskFollowupInputSchema,
   TaskGetInputSchema,
@@ -606,6 +607,22 @@ const tasksCancel = requireActiveUser
     }
   });
 
+/** 聊天中切换任务模型（走查 R6）。 */
+const tasksSetModel = requireActiveUser
+  .input(TaskSetModelInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      const task = await requireTaskService(context).setModel(context.user as UserRow, {
+        taskId: input.task_id,
+        provider: input.provider,
+        model: input.model,
+      });
+      return { task };
+    } catch (error) {
+      return taskOwnedException(error);
+    }
+  });
+
 const tasksFollowup = requireActiveUser
   .input(TaskFollowupInputSchema)
   .handler(async ({ context, input }) => {
@@ -702,6 +719,7 @@ export const router = {
     create: tasksCreate,
     get: tasksGet,
     cancel: tasksCancel,
+    setModel: tasksSetModel,
     followup: tasksFollowup,
   },
 
