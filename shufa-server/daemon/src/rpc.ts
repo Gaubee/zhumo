@@ -465,13 +465,31 @@ const adminModelsCatalog = requireAdmin.handler(({ context }) => {
   return modelCatalog(context.db);
 });
 
+/**
+ * 模型配置守卫（五轮 R2）：管理员，或「安装向导语境」——管理员已建但
+ * setup_completed 未标记（向导步 2 的 ModelsConfig 在无登录会话下读写；
+ * createAdmin 不建会话，走查实证 2026-09-24：向导步 2 曾恒 403 只剩错误卡）。
+ * 窗口风险与 setupGated 同级（安装流程内、局域网部署）；完成安装后恢复
+ * 仅管理员。仅限 models get/save/test 三端点——用户/站点管理不适用。
+ */
+const requireAdminOrWizard = base.use(async ({ context, next }) => {
+  const inWizard =
+    !needsSetup(context.config) && getSetting(context.db, 'setup_completed') !== '1';
+  if (inWizard) return next();
+  const user = context.user ?? (await authenticate(context.secret, context.db, context.token));
+  if (!user || user.role !== 'admin') {
+    throw new ORPCError('FORBIDDEN', { message: '需要管理员权限' });
+  }
+  return next({ context: { ...context, user } });
+});
+
 /** 多路由配置读面（五轮）：密钥只投影 hasKey。 */
-const adminModelsGet = requireAdmin.handler(({ context }): ModelsConfigOutput => {
+const adminModelsGet = requireAdminOrWizard.handler(({ context }): ModelsConfigOutput => {
   return loadModelsConfig(context.db);
 });
 
 /** 多路由配置写面：apiKey 空/缺省=保留旧值；保存后桥接面随新会话生效。 */
-const adminModelsSave = requireAdmin
+const adminModelsSave = requireAdminOrWizard
   .input(ModelsSaveInputSchema)
   .handler(async ({ context, input }) => {
     saveModelsConfig(context.db, input);
@@ -486,7 +504,7 @@ const adminModelsSave = requireAdmin
   });
 
 /** 连接测试（五轮 · 一）：apiKey 直传优先，缺省从已存密钥注入。 */
-const adminModelsTest = requireAdmin
+const adminModelsTest = requireAdminOrWizard
   .input(ModelsTestInputSchema)
   .handler(async ({ context, input }): Promise<ModelsTestOutput> => {
     const apiKey =

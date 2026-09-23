@@ -22,6 +22,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import IconFolder from "@lucide/svelte/icons/folder";
+  import IconChevronDown from "@lucide/svelte/icons/chevron-down";
   import IconLogIn from "@lucide/svelte/icons/log-in";
   import IconSettings from "@lucide/svelte/icons/settings";
   import IconUsers from "@lucide/svelte/icons/users";
@@ -422,24 +423,45 @@
             </div>
           </div>
         {:else}
-          <!-- 设置（五轮 · 二：高度链——页级滚动只属于整页；ModelsConfig 卡片
-               撑满剩余视口（内容内部自滚），不再被流式卡片高度塌缩）。 -->
-          <div class="h-full overflow-y-auto p-4">
-            <div class="mx-auto flex max-w-2xl flex-col gap-4">
-              <section class="space-y-2">
-                <h2 class="text-sm font-medium">准备步骤重跑</h2>
-                <PrepStepsAccordion
-                  steps={wizardSteps}
-                  running={runningStep}
-                  onrun={runStep}
-                  oncancel={cancelStep}
-                />
-              </section>
-              <section class="flex min-h-[28rem] flex-col rounded-lg border bg-card p-4 lg:h-[calc(100vh-11rem)] lg:min-h-[32rem]">
+          <!-- 设置（五轮 R2：纯 flex 链——卡片列 min-h-full 撑满视口，Models 卡
+               flex-1 拿全部剩余且内部自滚。准备步骤/站点安全为低频配置，默认
+               折叠（details）把版面让给高频的模型配置；calc 视口公式与固定
+               rem/px 钳制全部移除）。 -->
+          <div class="flex h-full min-h-0 flex-col overflow-y-auto p-4">
+            <div class="mx-auto flex min-h-full w-full max-w-2xl flex-col gap-4">
+              <details class="group shrink-0 rounded-lg border bg-card">
+                <summary
+                  class="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium"
+                >
+                  准备步骤重跑
+                  <IconChevronDown
+                    class="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180"
+                    aria-hidden="true"
+                  />
+                </summary>
+                <div class="space-y-2 px-4 pb-4">
+                  <PrepStepsAccordion
+                    steps={wizardSteps}
+                    running={runningStep}
+                    onrun={runStep}
+                    oncancel={cancelStep}
+                  />
+                </div>
+              </details>
+              <section class="flex min-h-0 flex-1 flex-col rounded-lg border bg-card p-4">
                 <ModelsConfig />
               </section>
-              <section class="space-y-3 rounded-lg border bg-card p-4">
-                <h2 class="text-sm font-medium">站点与安全</h2>
+              <details class="group shrink-0 rounded-lg border bg-card">
+                <summary
+                  class="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium"
+                >
+                  站点与安全
+                  <IconChevronDown
+                    class="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180"
+                    aria-hidden="true"
+                  />
+                </summary>
+                <div class="space-y-3 px-4 pb-4">
                 <label class="flex flex-col gap-1 text-xs">
                   <span class="text-muted-foreground">站点域名（对外链接拼接基址）</span>
                   <Input
@@ -495,7 +517,8 @@
                     {/if}
                   </div>
                 </div>
-              </section>
+                </div>
+              </details>
             </div>
           </div>
         {/if}

@@ -209,7 +209,10 @@
   }
 </script>
 
-<div class="mx-auto flex min-h-screen w-full max-w-2xl flex-col px-4 py-8">
+<!-- h-screen（定高，非 min-h-screen）：min-height 拉伸的高度对子孙百分比不
+     definite——步 2 ModelsConfig 的 h-full 会断链成内容高（五轮 R2 实证）。
+     main overflow-y-auto 兜底步 0/1 内容超视口；步 2 由 ModelsConfig 内部自滚。 -->
+<div class="mx-auto flex h-screen w-full max-w-2xl flex-col px-4 py-8">
   <header class="mb-6">
     <h1 class="text-xl font-semibold tracking-wide">朱墨 · 安装向导</h1>
     <p class="mt-1 text-xs text-muted-foreground">
@@ -241,9 +244,12 @@
     {/each}
   </ol>
 
-  <main class="flex-1 rounded-xl border border-border bg-card p-5">
+  <!-- 高度链：main 持有剩余视口（min-h-0 允许收缩），步 2 的 ModelsConfig
+       经 flex-1 拿到 main 的全部剩余高度（内部 tab 内容自滚）——不再硬编码
+       像素高度（h-[420px] 移除，五轮 R2）。 -->
+  <main class="flex min-h-0 flex-1 flex-col overflow-y-auto rounded-xl border border-border bg-card p-5">
     {#if step === 0}
-      <div class="mx-auto flex max-w-sm flex-col gap-3">
+      <div class="mx-auto flex max-w-sm shrink-0 flex-col gap-3">
         <h2 class="text-sm font-medium">创建管理员账号</h2>
         <label class="flex flex-col gap-1 text-xs">
           <span class="text-muted-foreground">用户名</span>
@@ -267,7 +273,7 @@
         </label>
       </div>
     {:else if step === 1}
-      <div class="space-y-3">
+      <div class="shrink-0 space-y-3">
         <h2 class="text-sm font-medium">准备运行环境</h2>
         <p class="text-xs text-muted-foreground">
           嗅探到已安装的命令与已下载的文件会默认跳过；可展开单项强制重跑。
@@ -275,7 +281,7 @@
         <PrepStepsAccordion {steps} running={runningStep} onrun={runStep} oncancel={cancelStep} />
       </div>
     {:else}
-      <div class="h-[420px]">
+      <div class="flex min-h-0 flex-1 flex-col">
         <ModelsConfig />
       </div>
     {/if}

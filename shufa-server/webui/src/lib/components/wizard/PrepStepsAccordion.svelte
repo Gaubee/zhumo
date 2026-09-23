@@ -106,6 +106,8 @@
    * 状态文案按 kind 分型：命令类=待执行/执行中/已安装，下载类=待下载/下载中/
    * 已下载（走查 2026-09-24 · 二轮：running 不再统一「进行中」）。isRunning 为
    * 父组件乐观值（pending 但刚点过运行）时同样按 kind 显示运行文案。
+   * 五轮 R2：done 且嗅探来源 → 「已就绪（嗅探）」单 badge 完整表达（此前
+   * detected 徽章与状态徽章并排，出现「已安装（嗅探） 已安装」双份语义）。
    */
   function statusLabel(step: WizardStep, isRunning: boolean): string {
     // 三轮：下载运行中带两位小数百分比（「下载中 nn.nn%」）；无进度行时纯文案。
@@ -122,6 +124,7 @@
       case "running":
         return runningLabel;
       case "done":
+        if (step.detected) return "已就绪（嗅探）";
         return step.kind === "command" ? "已安装" : "已下载";
       case "failed":
         return "失败";
@@ -130,22 +133,16 @@
     }
   }
 
-  /** 嗅探徽章 kind-aware：命令=已安装（嗅探），下载=已下载（嗅探）。 */
-  function detectedLabel(step: WizardStep): string {
-    return step.kind === "command" ? "已安装（嗅探）" : "已下载（嗅探）";
-  }
-
   /** 按钮文字（三轮）：命令=运行；下载=.download 残差存在=恢复下载，否则开始下载。 */
   function actionLabel(step: WizardStep): string {
     if (step.kind === "command") return "运行";
     return step.resumable ? "恢复下载" : "开始下载";
   }
 
-  /** done 态且未开强制开关时按钮旁的说明行（kind-aware）。 */
+  /** done 态且未开强制开关时按钮旁的说明行（五轮 R2：只留动作引导——状态已由
+   * badge 单点呈现，不再重复「已安装/已下载」前缀）。 */
   function rerunHint(step: WizardStep): string {
-    return step.kind === "command"
-      ? "已安装；重跑请先开启强制开关。"
-      : "已下载；重新下载请先开启「覆盖下载」。";
+    return step.kind === "command" ? "重跑请先开启强制开关。" : "重新下载请先开启「覆盖下载」。";
   }
 
   /** 体积展示：≥1024MB 折算 GB 一位小数，否则整 MB。 */
@@ -195,9 +192,6 @@
         <span class="flex min-w-0 flex-1 flex-col items-start gap-1">
           <span class="flex w-full items-center gap-2">
             <span class="truncate font-medium">{step.title}</span>
-            {#if step.detected}
-              <Badge variant="secondary" class="shrink-0 text-[10px]">{detectedLabel(step)}</Badge>
-            {/if}
             <Badge
               variant={step.status === "done"
                 ? "secondary"
