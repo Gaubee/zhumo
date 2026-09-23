@@ -236,13 +236,16 @@ export function whisperCacheReady(repo: string): boolean {
   return walk(snapshots);
 }
 
-/** 预热中断判定（「恢复下载」依据）：blobs 下存在 .incomplete 分块。 */
+/** 预热中断判定（「恢复下载」依据）：blobs 下存在未落位残差——自管下载器的
+ * `.download` 或 hf_hub 旧会话遗留的 `.incomplete`。 */
 export function whisperCachePartial(repo: string): boolean {
   const dir = whisperCacheRepoDir(repo);
   if (!existsSync(dir)) return false;
   const blobs = path.join(dir, 'blobs');
   if (!existsSync(blobs)) return false;
-  return readdirSync(blobs).some((name) => name.endsWith('.incomplete'));
+  return readdirSync(blobs).some(
+    (name) => name.endsWith('.download') || name.endsWith('.incomplete'),
+  );
 }
 
 /** 幂等种子落库（不覆盖既有状态）。 */
