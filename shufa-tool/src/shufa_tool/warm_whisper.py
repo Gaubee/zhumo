@@ -99,6 +99,9 @@ def adopt_orphans(blobs: Path, specs: list[FileSpec]) -> int:
             continue  # 非 hf 会话命名，不动
         for spec in specs:
             if spec.blob_name == oid and spec.size > 0:
+                if blob_complete(blobs, spec):
+                    tmp.unlink(missing_ok=True)  # blob 已完整：孤儿是死重，直接清理
+                    break
                 dest = blobs / f"{spec.blob_name}.download"
                 size = min(tmp.stat().st_size, spec.size)  # 超长截断（脏尾保护）
                 with tmp.open("rb") as src, dest.open("wb") as out:
