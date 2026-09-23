@@ -255,6 +255,24 @@ describe('TaskService 创建链', () => {
     expect(sessions.emitted.some((f) => f.kind === 'status' && (f.payload as { status: string }).status === 'cancelled')).toBe(true);
   });
 
+  it('走查 R3：markSessionFailed 错误明文落库 + failed 状态帧携带详情；list/get 回放 error', async () => {
+    const item = await service.create(user, {
+      prompt: 'x',
+      video: { filename: 'v.mp4', data_base64: Buffer.from('bytes').toString('base64') },
+    });
+    service.markSessionFailed(`task-1`, '404 {"path":"/v4/v1/messages"}（PI_AI_ERROR）');
+    // 库内明文（列表/详情兜底真源——历史帧没有错误详情时仍可见）。
+    const listed = await service.list(user);
+    expect(listed.find((t) => t.id === item.id)?.error).toContain('/v4/v1/messages');
+    const detail = await service.get(user, item.id, 0);
+    expect(detail.task.error).toContain('PI_AI_ERROR');
+    // 状态帧携带详情（前端转录错误卡片的数据源）。
+    const failedFrame = sessions.emitted.find(
+      (f) => f.kind === 'status' && (f.payload as { status: string }).status === 'failed',
+    );
+    expect((failedFrame?.payload as { error?: string }).error).toContain('PI_AI_ERROR');
+  });
+
   it('rpc 接线：tasks.list 走服务；未装配 tasks 返回 501', async () => {
     const client = clientFor(env.context({ user, tasks: service, secret: TEST_SECRET }));
     await service.create(user, {

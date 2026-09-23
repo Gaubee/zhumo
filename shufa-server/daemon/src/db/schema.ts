@@ -99,4 +99,11 @@ CREATE TABLE IF NOT EXISTS results (
 CREATE INDEX IF NOT EXISTS idx_results_owner ON results(owner_id);
 `,
   },
+  {
+    // AgentChat 走查 R3（2026-09-24）：failed 必须可见——错误明文落库。
+    version: 3,
+    up: `
+ALTER TABLE tasks ADD COLUMN error TEXT;
+`,
+  },
 ];

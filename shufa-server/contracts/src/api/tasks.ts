@@ -22,6 +22,8 @@ export const TaskItemSchema = z.object({
   video_resource_id: IdSchema.nullable(),
   agent_session_id: z.string().nullable(),
   result_id: IdSchema.nullable(),
+  /** 失败原因明文（走查 R3：failed 必须可见；null = 无失败/未失败）。 */
+  error: z.string().nullable(),
   created_at: IsoDateTimeSchema,
   updated_at: IsoDateTimeSchema,
 });

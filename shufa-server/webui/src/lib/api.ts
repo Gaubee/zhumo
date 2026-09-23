@@ -470,6 +470,7 @@ class MockApi implements ShufaApi {
       prompt,
       videoName: video?.name ?? "演示素材.mp4",
       model: model ? `${model.provider}/${model.model}` : undefined,
+      error: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -627,6 +628,7 @@ function toTaskView(task: TaskItem): Task {
     videoName: task.video_resource_id !== null ? "素材视频" : "未附视频",
     createdAt: task.created_at,
     updatedAt: task.updated_at,
+    error: task.error ?? null,
   };
 }
 

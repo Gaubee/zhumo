@@ -24,6 +24,9 @@ export interface TaskRow {
   /** 任务级模型覆盖（五轮活动模型；NULL=跟随默认模型）。 */
   model_provider: string | null;
   model_model: string | null;
+  /** 失败原因（AgentChat 走查 R3：failed 必须可见——turn-end error 明文落库，
+   * 列表 badge/详情转录都可回放；resume 成功拉回 running 时清空）。 */
+  error: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -50,6 +53,7 @@ export function createTask(
     result_id: null,
     model_provider: input.modelProvider ?? null,
     model_model: input.modelModel ?? null,
+    error: null,
     created_at: nowIso(),
     updated_at: nowIso(),
   };
@@ -90,6 +94,7 @@ export function updateTask(
     status?: TaskStatus;
     agentSessionId?: string | null;
     resultId?: string | null;
+    error?: string | null;
   },
 ): TaskRow | null {
   if (patch.status !== undefined) {
@@ -109,6 +114,13 @@ export function updateTask(
   if (patch.resultId !== undefined) {
     db.prepare('UPDATE tasks SET result_id = ?, updated_at = ? WHERE id = ?').run(
       patch.resultId,
+      nowIso(),
+      id,
+    );
+  }
+  if (patch.error !== undefined) {
+    db.prepare('UPDATE tasks SET error = ?, updated_at = ? WHERE id = ?').run(
+      patch.error,
       nowIso(),
       id,
     );

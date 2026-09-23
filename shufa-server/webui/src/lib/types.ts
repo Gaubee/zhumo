@@ -247,6 +247,8 @@ export interface Task {
   updatedAt: string;
   /** 任务使用的模型（五轮：provider/model 展示）。 */
   model?: string;
+  /** 失败原因明文（走查 R3：failed 必须可见；null = 无）。 */
+  error: string | null;
 }
 
 /** 结果页信息（/r/{public_id}，公开）。 */

@@ -143,6 +143,19 @@
           </Badge>
           <Button size="sm" variant="outline" onclick={openComposer}>新建任务</Button>
         </div>
+        {#if selected.status === "failed"}
+          <!-- 失败摘要行（走查 R3：任务列表点开即见原因——历史任务的帧里可能
+               没有错误详情，库内 error 是兜底真源）。 -->
+          <div
+            class="flex items-start gap-2 border-b border-destructive/40 bg-destructive/10 px-4 py-1.5"
+            role="alert"
+          >
+            <span class="mt-px shrink-0 text-[11px] font-medium text-destructive">失败原因</span>
+            <span class="min-w-0 flex-1 font-mono text-[11px] leading-relaxed break-all text-destructive/90">
+              {selected.error ?? "未知错误（无详情记录——可在对话中重发触发重试）"}
+            </span>
+          </div>
+        {/if}
         <!-- 素材视频展示位 -->
         <div class="flex items-center gap-3 border-b border-border bg-card/50 px-4 py-2">
           <div

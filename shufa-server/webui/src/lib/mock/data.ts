@@ -146,6 +146,7 @@ export const mockDb = {
       prompt: "分析这段草书的连笔与使转，给出练习建议",
       videoName: "草书演示.mp4",
       createdAt: "2026-09-23T09:12:00.000Z",
+      error: null,
       updatedAt: "2026-09-23T09:14:00.000Z",
     },
     {
@@ -155,6 +156,7 @@ export const mockDb = {
       prompt: "点评这页楷书的间架结构",
       videoName: "楷书入门-横竖点.mp4",
       createdAt: "2026-09-22T14:00:00.000Z",
+      error: null,
       updatedAt: "2026-09-22T14:06:00.000Z",
     },
     {
@@ -164,6 +166,7 @@ export const mockDb = {
       prompt: "分析示范视频里的起笔角度与收笔",
       videoName: "行书示范-起笔.mp4",
       createdAt: "2026-09-21T08:30:00.000Z",
+      error: null,
       updatedAt: "2026-09-21T08:41:00.000Z",
     },
   ] as Task[],

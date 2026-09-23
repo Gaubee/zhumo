@@ -276,7 +276,9 @@ export class TaskService {
   // ---------------------------------------------------------------- cancel / resume
 
   /**
-   * 会话失败收敛（W7 联调补）：agent turn 以 error 终止 → 任务 failed + 状态帧。
+   * 会话失败收敛（W7 联调补 + 走查 R3）：agent turn 以 error 终止 → 任务 failed
+   * + 错误明文落库 + 状态帧携带详情（前端转录渲染错误卡片——此前 turn-end 的
+   * error payload 被前端丢弃，用户「看不到任何异常」）。
    * 仅 running/queued 任务收敛（终态不覆盖）；无 live 会话时 emit 静默（回放面仍有行状态）。
    */
   markSessionFailed(sessionId: string, reason: string): void {
@@ -285,8 +287,8 @@ export class TaskService {
       .get(sessionId) as TaskRow | undefined;
     if (!row || (row.status !== 'running' && row.status !== 'queued')) return;
     console.warn(`[tasks] agent 会话失败（task=${row.id}）：${reason}`);
-    updateTask(this.deps.db, row.id, { status: 'failed' });
-    this.emitStatus(sessionId, row.id, 'failed');
+    updateTask(this.deps.db, row.id, { status: 'failed', error: reason });
+    this.emitStatus(sessionId, row.id, 'failed', reason);
   }
 
   async cancel(user: UserRow, id: string): Promise<TaskItem> {
@@ -333,11 +335,11 @@ export class TaskService {
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         console.warn(`[tasks] 续聊复活失败（task=${task.id}）：${detail}`);
-        updateTask(this.deps.db, task.id, { status: 'failed' });
-        this.emitStatus(sessionId, task.id, 'failed');
+        updateTask(this.deps.db, task.id, { status: 'failed', error: `会话恢复失败：${detail}` });
+        this.emitStatus(sessionId, task.id, 'failed', `会话恢复失败：${detail}`);
         throw new ORPCError('BAD_REQUEST', { message: `会话恢复失败：${detail}` });
       }
-      updateTask(this.deps.db, task.id, { status: 'running' });
+      updateTask(this.deps.db, task.id, { status: 'running', error: null });
       this.emitStatus(sessionId, task.id, 'running');
     }
 
@@ -356,8 +358,8 @@ export class TaskService {
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         console.warn(`[tasks] 续聊复活失败（task=${task.id}）：${detail}`);
-        updateTask(this.deps.db, task.id, { status: 'failed' });
-        this.emitStatus(sessionId, task.id, 'failed');
+        updateTask(this.deps.db, task.id, { status: 'failed', error: `会话恢复失败：${detail}` });
+        this.emitStatus(sessionId, task.id, 'failed', `会话恢复失败：${detail}`);
         throw new ORPCError('BAD_REQUEST', { message: `会话恢复失败：${detail}` });
       }
     }
@@ -378,7 +380,7 @@ export class TaskService {
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       console.warn(`[tasks] 会话复活失败（task=${task.id}）：${detail}`);
-      updateTask(this.deps.db, task.id, { status: 'failed' });
+      updateTask(this.deps.db, task.id, { status: 'failed', error: `会话恢复失败：${detail}` });
     }
   }
 
@@ -501,8 +503,11 @@ export class TaskService {
 
   // ---------------------------------------------------------------- internals
 
-  private emitStatus(sessionId: string, taskId: string, status: TaskStatus): void {
-    this.deps.sessions.emit(sessionId, { kind: 'status', payload: { task_id: taskId, status } });
+  private emitStatus(sessionId: string, taskId: string, status: TaskStatus, error?: string): void {
+    this.deps.sessions.emit(sessionId, {
+      kind: 'status',
+      payload: { task_id: taskId, status, ...(error !== undefined ? { error } : {}) },
+    });
   }
 
   private framesFileOf(task: TaskRow): string {
@@ -548,6 +553,7 @@ export class TaskService {
       video_resource_id: row.video_resource_id,
       agent_session_id: row.agent_session_id,
       result_id: row.result_id,
+      error: row.error ?? null,
       created_at: row.created_at,
       updated_at: row.updated_at,
     };

@@ -134,10 +134,20 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       const entry = live.get(session.id);
       if (!entry) return;
       // turn/end reason.kind='error'：agent 运行失败（如 LLM 不可达）→ 失败回调。
+      // 走查 R3：reason.error.message/code 一并提取（此前只传字面 "error"，
+      // 用户「任务失败看不到任何异常」——404/网络错误等明文直达任务记录）。
       if (event.type === 'turn/end') {
         const checked = TurnEndEventSchema.safeParse(event.data);
         if (checked.success && checked.data.reason?.kind === 'error') {
-          deps.onSessionFailure?.(session.id, checked.data.reason.kind);
+          const error = (checked.data.reason as { error?: { message?: string; code?: string } })
+            .error;
+          const detail =
+            error?.message !== undefined
+              ? error.code !== undefined
+                ? `${error.message}（${error.code}）`
+                : error.message
+              : checked.data.reason.kind;
+          deps.onSessionFailure?.(session.id, detail);
         }
       }
       if (event.type === 'assistant/chunk') {

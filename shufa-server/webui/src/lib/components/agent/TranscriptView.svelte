@@ -9,6 +9,7 @@
 -->
 <script lang="ts">
   import IconArrowDown from "@lucide/svelte/icons/arrow-down";
+  import IconTriangleAlert from "@lucide/svelte/icons/triangle-alert";
   import MarkdownRender from "markstream-svelte";
   import "markstream-svelte/index.css";
   import AgentToolRow from "./AgentToolRow.svelte";
@@ -70,10 +71,11 @@
     {:else}
       {#each items as item (item.seq)}
         {#if item.kind === "user"}
-          <!-- 用户消息：右对齐气泡 -->
+          <!-- 用户消息：右对齐气泡；内容走 markstream（走查 R3：markdown 输入
+               不再以 rawText 展示；保留 max-h 滚动防长 prompt 淹没对话）。 -->
           <div class="flow-item ml-auto max-w-[85%]">
-            <div class="bubble-user max-h-40 overflow-y-auto px-3.5 py-2 text-[13px] leading-5 whitespace-pre-wrap">
-              {item.text}
+            <div class="bubble-user max-h-64 overflow-y-auto px-3.5 py-2 text-[13px] leading-5">
+              <MarkdownRender content={item.text} />
             </div>
           </div>
         {:else if item.kind === "assistant"}
@@ -92,6 +94,21 @@
           />
         {:else if item.kind === "status"}
           <div class="flow-item px-1 text-[11px] text-muted-foreground">{item.text}</div>
+        {:else if item.kind === "error"}
+          <!-- 失败明文卡片（走查 R3：failed 必须可见——协议 404/网络错误等
+               直接入对话流，不再只剩一枚失败徽章）。 -->
+          <div
+            class="flow-item flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2"
+            role="alert"
+          >
+            <IconTriangleAlert class="mt-px h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden="true" />
+            <div class="min-w-0">
+              <p class="text-xs font-medium text-destructive">任务失败</p>
+              <p class="mt-0.5 font-mono text-[11px] leading-relaxed break-all text-destructive/90">
+                {item.text}
+              </p>
+            </div>
+          </div>
         {:else if item.kind === "turn-end"}
           <div class="flow-item flex h-5 items-center gap-1.5">
             <span class="turn-pill">本轮完成</span>
