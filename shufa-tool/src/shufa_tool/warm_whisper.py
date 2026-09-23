@@ -98,7 +98,11 @@ def main() -> int:
         print(f"[失败] {exc}", file=sys.stderr)
         return 4
     stop.set()
-    watcher.join(timeout=3)  # 让最后一拍进度行落地（终态行由 daemon 追加）
+    watcher.join(timeout=3)  # 让最后一拍进度行落地
+    # 终局进度行：下载快于轮询周期时，最后一拍可能停在 0.0MB——用实际落盘
+    # 体积补一条 100% 行（daemon 侧 appendProgress 原位替换，完成态文案不失真）。
+    final_mb = dir_size_mb(target)
+    print(f"已下载 {final_mb:.1f}MB / {final_mb:.1f}MB（100%）", flush=True)
     print(f"预热完成：{path}")
     return 0
 
