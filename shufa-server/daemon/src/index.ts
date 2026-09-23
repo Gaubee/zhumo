@@ -16,7 +16,7 @@ import { toNodeHandler } from '@modelcontextprotocol/node';
 import { ensureAnonymousUser, hashPassword } from './auth.js';
 import { ANONYMOUS_USERNAME } from '@zhumo/contracts';
 import type { AppConfig } from './config.js';
-import { loadConfig } from './config.js';
+import { loadConfig, volatileRootWarning } from './config.js';
 import { openDatabase } from './db/database.js';
 import { BlobStore } from './db/blobs.js';
 import { createUser, listUsers } from './db/store.js';
@@ -33,6 +33,14 @@ import { defaultWizardSeeds, installWizardSeeds, WizardRunner } from './wizard.j
 
 async function main(): Promise<void> {
   const config: AppConfig = loadConfig();
+  // 走查四轮（2026-09-25）：.env 的 SHUFA_WHISPER_REPO 透传子进程——capability
+  // 层 runShell 继承 process.env，管线 audio.transcribe 读它取向导选定的模型。
+  if (config.fileEnv.SHUFA_WHISPER_REPO) {
+    process.env.SHUFA_WHISPER_REPO = config.fileEnv.SHUFA_WHISPER_REPO;
+  }
+  // 走查四轮：/tmp 易失目录护栏（macOS 3 天清理 / Linux 常为 tmpfs）。
+  const volatile = volatileRootWarning(config.dataRoot);
+  if (volatile) console.warn(`[boot] 警告：${volatile}`);
   const db = openDatabase(config.dataRoot);
   const secret = resolveSecret(config);
 
@@ -55,7 +63,10 @@ async function main(): Promise<void> {
     dataRoot: config.dataRoot,
     shufaToolDir: resolveShufaToolDir(config.envFile),
   };
-  const wizard = new WizardRunner(db, defaultWizardSeeds(wizardContext));
+  const wizard = new WizardRunner(db, defaultWizardSeeds(wizardContext), {
+    envFile: config.envFile,
+    shufaToolDir: wizardContext.shufaToolDir,
+  });
   installWizardSeeds(db, defaultWizardSeeds(wizardContext));
   await wizard.sniffAll(); // 开机被动嗅探：已装依赖直接呈现「已安装」（走查 R1）
 

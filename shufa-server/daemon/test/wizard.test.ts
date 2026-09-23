@@ -4,7 +4,8 @@
  * 原始需求 2026-09-23（PRODUCT_DESIGN.md §1）；走查修订 2026-09-22。
  */
 import http from 'node:http';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { WHISPER_MODEL_CATALOG, WHISPER_MIRRORS } from '@zhumo/contracts';
 import { getWizardStep, listWizardSteps, updateWizardProgress } from '../src/db/store.js';
@@ -12,8 +13,11 @@ import {
   capStepLog,
   defaultWizardSeeds,
   downloadTargetPath,
+  hfHubDir,
   installWizardSeeds,
   resolveWhisperUrl,
+  whisperCachePartial,
+  whisperCacheReady,
   WizardRunner,
 } from '../src/wizard.js';
 import { createServices } from './helpers.js';
@@ -427,12 +431,19 @@ describe('wizard 种子定义（走查 R3/R4/R5/R6）', () => {
     }
   });
 
-  test('R6：whisper 默认 URL = 官方源 base，标题为「可选型号 + 镜像源」', () => {
-    const seeds = defaultWizardSeeds(ctx);
+  test('四轮：whisper 仅 darwin/arm64；默认 = 官方源 large-v3-turbo 模型页；python-env 带 transcribe extra', () => {
+    const seeds = defaultWizardSeeds(ctx, 'darwin', 'arm64');
     const whisper = seeds.find((s) => s.id === 'whisper-model')!;
-    const base = WHISPER_MODEL_CATALOG.find((m) => m.id === 'base')!;
-    expect(whisper.url).toBe(`${WHISPER_MIRRORS[0].base}/${base.file}`);
-    expect(whisper.title).toBe('whisper 转写模型（可选型号 + 镜像源）');
+    const model = WHISPER_MODEL_CATALOG.find((m) => m.id === 'whisper-large-v3-turbo')!;
+    expect(whisper.url).toBe(`${WHISPER_MIRRORS[0].base}/${model.repo}`);
+    expect(whisper.title).toBe('whisper 转写模型（mlx · 可选型号 + 镜像源）');
+    expect(whisper.targetDir).toBe(hfHubDir());
+    // mlx-whisper 无 Intel/Windows/Linux 构建：其他平台不展示该步骤。
+    expect(defaultWizardSeeds(ctx, 'darwin', 'x64').find((s) => s.id === 'whisper-model')).toBeUndefined();
+    expect(defaultWizardSeeds(ctx, 'linux', 'arm64').find((s) => s.id === 'whisper-model')).toBeUndefined();
+    expect(defaultWizardSeeds(ctx, 'win32', 'arm64').find((s) => s.id === 'whisper-model')).toBeUndefined();
+    // --extra transcribe：基础 sync 不含可选依赖（反而卸掉 mlx-whisper/torch）。
+    expect(seeds.find((s) => s.id === 'python-env')?.command).toContain('--extra transcribe');
   });
 });
 
@@ -440,55 +451,68 @@ describe('wizard whisper 参数化（走查 R6）', () => {
   const cnBase = WHISPER_MIRRORS.find((m) => m.id === 'cn')!.base;
   const officialBase = WHISPER_MIRRORS[0].base;
 
-  test('resolveWhisperUrl：base/official 与 large-v3-turbo/cn 组装', () => {
-    expect(resolveWhisperUrl(null, {})).toBe(`${officialBase}/ggml-base.bin`);
-    expect(resolveWhisperUrl(null, { model: 'large-v3-turbo', mirror: 'cn' })).toBe(
-      `${cnBase}/ggml-large-v3-turbo.bin`,
+  test('resolveWhisperUrl（四轮）：模型页 = ${base}/${repo}；缺省 large-v3-turbo/official', () => {
+    expect(resolveWhisperUrl(null, {})).toBe(`${officialBase}/mlx-community/whisper-large-v3-turbo`);
+    expect(resolveWhisperUrl(null, { model: 'whisper-tiny', mirror: 'cn' })).toBe(
+      `${cnBase}/mlx-community/whisper-tiny`,
     );
     // 只给一半：另一半从行上既有 url 反推。
-    expect(resolveWhisperUrl(`${cnBase}/ggml-small.bin`, { model: 'tiny' })).toBe(
-      `${cnBase}/ggml-tiny.bin`,
+    expect(resolveWhisperUrl(`${cnBase}/mlx-community/whisper-small`, { model: 'whisper-tiny' })).toBe(
+      `${cnBase}/mlx-community/whisper-tiny`,
     );
-    expect(resolveWhisperUrl(`${officialBase}/ggml-medium.bin`, { mirror: 'cn' })).toBe(
-      `${cnBase}/ggml-medium.bin`,
+    expect(resolveWhisperUrl(`${officialBase}/mlx-community/whisper-base`, { mirror: 'cn' })).toBe(
+      `${cnBase}/mlx-community/whisper-base`,
     );
   });
 
-  test('run 参数组装 URL 持久化回行；嗅探按组装后的 URL 推导目标文件', async () => {
+  test('run（四轮）：模型页持久化回行；嗅探按 HF 缓存；选型回写 .env SHUFA_WHISPER_REPO', async () => {
     const s = createServices();
+    // HF 缓存隔离到临时目录（hfHubDir 读 HF_HOME），预置 tiny/turbo 两仓权重。
+    const hfHome = mkdtempSync(path.join(tmpdir(), 'zhumo-hf-'));
+    const prevHfHome = process.env.HF_HOME;
+    process.env.HF_HOME = hfHome;
+    const presetCache = (repo: string): void => {
+      const snap = path.join(hfHome, 'hub', `models--${repo.replace(/\//g, '--')}`, 'snapshots', 'abc');
+      mkdirSync(snap, { recursive: true });
+      writeFileSync(path.join(snap, 'model.safetensors'), 'x');
+    };
+    presetCache('mlx-community/whisper-large-v3-turbo');
+    presetCache('mlx-community/whisper-tiny');
+    presetCache('mlx-community/whisper-base');
+    presetCache('mlx-community/whisper-small');
     try {
-      const models = path.join(s.config.dataRoot, 'models');
-      mkdirSync(models, { recursive: true });
-      // 预置嗅探文件 → 全程「文件已存在跳过」，不触网。
-      writeFileSync(path.join(models, 'ggml-base.bin'), 'sniff');
-      writeFileSync(path.join(models, 'ggml-large-v3-turbo.bin'), 'sniff');
-
-      // base/official：与种子默认一致。
-      const v1 = await s.wizard.run('whisper-model', false, { model: 'base', mirror: 'official' });
-      expect(v1.url).toBe(`${officialBase}/ggml-base.bin`);
+      // 缺省（turbo/official）：与种子一致，缓存嗅探命中 → done + 选型落 .env。
+      const v1 = await s.wizard.run('whisper-model', false, {
+        model: 'whisper-large-v3-turbo',
+        mirror: 'official',
+      });
+      expect(v1.url).toBe(`${officialBase}/mlx-community/whisper-large-v3-turbo`);
       expect(v1.status).toBe('done');
+      expect(v1.last_log).toContain('嗅探：模型已在 HF 缓存');
+      expect(readFileSync(s.config.envFile, 'utf8')).toContain(
+        'SHUFA_WHISPER_REPO=mlx-community/whisper-large-v3-turbo',
+      );
 
-      // large-v3-turbo/cn：URL 更新 → 复位 pending 后嗅探按新 URL 命中预置文件。
+      // tiny/cn：URL 更新 → 复位 pending 后按新 URL 命中缓存。
       updateWizardProgress(s.db, 'whisper-model', { status: 'pending', lastLog: null });
       const v2 = await s.wizard.run('whisper-model', false, {
-        model: 'large-v3-turbo',
+        model: 'whisper-tiny',
         mirror: 'cn',
       });
-      expect(v2.url).toBe(`${cnBase}/ggml-large-v3-turbo.bin`);
+      expect(v2.url).toBe(`${cnBase}/mlx-community/whisper-tiny`);
       expect(v2.status).toBe('done');
-      expect(v2.last_log).toContain('ggml-large-v3-turbo.bin');
-      expect(getWizardStep(s.db, 'whisper-model')?.url).toBe(`${cnBase}/ggml-large-v3-turbo.bin`);
+      expect(getWizardStep(s.db, 'whisper-model')?.url).toBe(`${cnBase}/mlx-community/whisper-tiny`);
 
       // 只换型号：镜像从行上 url 反推（保持 cn）。
       updateWizardProgress(s.db, 'whisper-model', { status: 'pending', lastLog: null });
-      const v3 = await s.wizard.run('whisper-model', false, { model: 'base' });
-      expect(v3.url).toBe(`${cnBase}/ggml-base.bin`);
+      const v3 = await s.wizard.run('whisper-model', false, { model: 'whisper-base' });
+      expect(v3.url).toBe(`${cnBase}/mlx-community/whisper-base`);
 
       // 已 done 的行传新参数：选择持久化（small），但早退不重跑（last_log 不变）。
       updateWizardProgress(s.db, 'whisper-model', { status: 'done', lastLog: '历史日志' });
-      const v4 = await s.wizard.run('whisper-model', false, { model: 'small' });
+      const v4 = await s.wizard.run('whisper-model', false, { model: 'whisper-small' });
       expect(v4.status).toBe('done');
-      expect(v4.url).toBe(`${cnBase}/ggml-small.bin`);
+      expect(v4.url).toBe(`${cnBase}/mlx-community/whisper-small`);
       expect(v4.last_log).toBe('历史日志');
 
       // 未知型号：参数层报错，行状态与 url 不被污染。
@@ -496,9 +520,36 @@ describe('wizard whisper 参数化（走查 R6）', () => {
         '未知的 whisper 模型型号',
       );
       expect(getWizardStep(s.db, 'whisper-model')?.status).toBe('done');
-      expect(getWizardStep(s.db, 'whisper-model')?.url).toBe(`${cnBase}/ggml-small.bin`);
+      expect(getWizardStep(s.db, 'whisper-model')?.url).toBe(`${cnBase}/mlx-community/whisper-small`);
     } finally {
+      if (prevHfHome === undefined) delete process.env.HF_HOME;
+      else process.env.HF_HOME = prevHfHome;
       s.dispose();
+    }
+  });
+
+  test('whisperCacheReady/Partial（四轮）：snapshots 权重 = 就绪；blobs .incomplete = 残差', () => {
+    const hfHome = mkdtempSync(path.join(tmpdir(), 'zhumo-hf2-'));
+    const prevHfHome = process.env.HF_HOME;
+    process.env.HF_HOME = hfHome;
+    try {
+      const repo = 'mlx-community/whisper-tiny';
+      expect(whisperCacheReady(repo)).toBe(false);
+      expect(whisperCachePartial(repo)).toBe(false);
+      const cacheDir = path.join(hfHome, 'hub', `models--${repo.replace(/\//g, '--')}`);
+      mkdirSync(path.join(cacheDir, 'blobs'), { recursive: true });
+      // 只有 .incomplete：残差（恢复下载），未就绪。
+      writeFileSync(path.join(cacheDir, 'blobs', 'abc.incomplete'), 'x');
+      expect(whisperCacheReady(repo)).toBe(false);
+      expect(whisperCachePartial(repo)).toBe(true);
+      // snapshots 出现权重：就绪（残差与否不再关心——.incomplete 会被 hf 清理）。
+      const snap = path.join(cacheDir, 'snapshots', 'rev1');
+      mkdirSync(snap, { recursive: true });
+      writeFileSync(path.join(snap, 'model.safetensors'), 'x');
+      expect(whisperCacheReady(repo)).toBe(true);
+    } finally {
+      if (prevHfHome === undefined) delete process.env.HF_HOME;
+      else process.env.HF_HOME = prevHfHome;
     }
   });
 });
@@ -508,7 +559,7 @@ describe('wizard 种子迁移（走查）', () => {
     const s = createServices();
     try {
       const ts = '2026-01-01T00:00:00.000Z';
-      const cnUrl = `${WHISPER_MIRRORS.find((m) => m.id === 'cn')!.base}/ggml-small.bin`;
+      const cnUrl = `${WHISPER_MIRRORS.find((m) => m.id === 'cn')!.base}/mlx-community/whisper-small`;
       // 伪造存量库：webui-install 行、旧命令的 done ffmpeg、自选镜像的 done whisper。
       s.db.prepare(
         `INSERT INTO wizard_steps (id, kind, title, command, url, target_dir, status, last_log, updated_at)
@@ -534,11 +585,11 @@ describe('wizard 种子迁移（走查）', () => {
       expect(whisper.url).toBe(cnUrl); // done 行 url 不被种子覆盖（保住自选镜像）
       expect(whisper.status).toBe('done');
 
-      // pending 行 url 跟随种子：复位后重迁移 → 回默认官方 base。
+      // pending 行 url 跟随种子：复位后重迁移 → 回默认官方 turbo 模型页（四轮）。
       updateWizardProgress(s.db, 'whisper-model', { status: 'pending' });
       installWizardSeeds(s.db, defaultWizardSeeds({ dataRoot: s.config.dataRoot, shufaToolDir: s.root + '/shufa-tool' }));
-      const base = WHISPER_MODEL_CATALOG.find((m) => m.id === 'base')!;
-      expect(getWizardStep(s.db, 'whisper-model')?.url).toBe(`${WHISPER_MIRRORS[0].base}/${base.file}`);
+      const turbo = WHISPER_MODEL_CATALOG.find((m) => m.id === 'whisper-large-v3-turbo')!;
+      expect(getWizardStep(s.db, 'whisper-model')?.url).toBe(`${WHISPER_MIRRORS[0].base}/${turbo.repo}`);
     } finally {
       s.dispose();
     }

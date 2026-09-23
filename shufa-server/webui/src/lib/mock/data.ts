@@ -226,8 +226,8 @@ export const mockDb = {
       id: "whisper-model",
       kind: "download",
       title: "whisper 语音模型",
-      url: `${WHISPER_MIRRORS[0].base}/${WHISPER_MODEL_CATALOG[1].file}`,
-      targetDir: `~/.shufa/models/whisper/${WHISPER_MODEL_CATALOG[1].file}`,
+      url: `${WHISPER_MIRRORS[0].base}/${WHISPER_MODEL_CATALOG[0].repo}`,
+      targetDir: "~/.cache/huggingface/hub",
       status: "pending",
       lastLog: "",
       progress: 0,
@@ -379,14 +379,14 @@ export async function runWizardStepMock(
     if (stepId === "whisper-model") {
       const model =
         WHISPER_MODEL_CATALOG.find((candidate) => candidate.id === params?.model) ??
-        WHISPER_MODEL_CATALOG[1];
+        WHISPER_MODEL_CATALOG[0];
       const mirror =
         WHISPER_MIRRORS.find((candidate) => candidate.id === params?.mirror) ?? WHISPER_MIRRORS[0];
-      step.url = `${mirror.base}/${model.file}`;
-      selectedLine = `已选择 ${model.id}（${model.file}） · ${mirror.label}`;
+      step.url = `${mirror.base}/${model.repo}`;
+      selectedLine = `已选择 ${model.repo} · ${mirror.label}`;
     }
-    const file = step.url?.split("/").pop() ?? "";
-    const sizeMb = WHISPER_MODEL_CATALOG.find((candidate) => candidate.file === file)?.sizeMb ?? 148;
+    const repo = step.url?.split("/").slice(-2).join("/") ?? "";
+    const sizeMb = WHISPER_MODEL_CATALOG.find((candidate) => candidate.repo === repo)?.sizeMb ?? 65;
     const prefix = selectedLine.length > 0 ? `${selectedLine}\n` : "";
     for (let progress = 0; progress <= 100; progress += 20) {
       await sleep(400);

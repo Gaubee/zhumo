@@ -47,22 +47,24 @@ export const BootstrapOutputSchema = z.object({
 export type BootstrapOutput = z.infer<typeof BootstrapOutputSchema>;
 
 /**
- * whisper.cpp 转写模型目录（走查 R6，2026-09-22）：型号 → ggml 文件名 + 体积参考。
- * daemon 下载步骤按 id 组装 URL；webui 设置页渲染同一常量做选择器。
+ * whisper 转写模型目录（走查四轮，2026-09-25）：管线真消费方是 mlx-whisper
+ * （audio.transcribe → HF 仓库 mlx-community/whisper-*，落 HF 标准缓存
+ * ~/.cache/huggingface/hub，与 transformers 等生态共享）。此前向导下载的
+ * whisper.cpp ggml 文件无任何消费方，已退役。体积为 fp16 权重近似值。
  */
 export const WHISPER_MODEL_CATALOG = [
-  { id: 'tiny', file: 'ggml-tiny.bin', sizeMb: 78, memoryHint: '约 0.4GB 内存 · 最快' },
-  { id: 'base', file: 'ggml-base.bin', sizeMb: 148, memoryHint: '约 0.6GB 内存 · 默认推荐' },
-  { id: 'small', file: 'ggml-small.bin', sizeMb: 488, memoryHint: '约 1.2GB 内存' },
-  { id: 'medium', file: 'ggml-medium.bin', sizeMb: 1534, memoryHint: '约 2.8GB 内存' },
-  { id: 'large-v3-turbo', file: 'ggml-large-v3-turbo.bin', sizeMb: 1620, memoryHint: '约 3.2GB 内存 · 推荐（效果接近 large）' },
-  { id: 'large-v3', file: 'ggml-large-v3.bin', sizeMb: 3094, memoryHint: '约 5GB 内存 · 效果最好' },
+  { id: 'whisper-tiny', repo: 'mlx-community/whisper-tiny', sizeMb: 65, memoryHint: '约 0.3GB 内存 · 最快' },
+  { id: 'whisper-base', repo: 'mlx-community/whisper-base', sizeMb: 142, memoryHint: '约 0.5GB 内存 · 基线' },
+  { id: 'whisper-small', repo: 'mlx-community/whisper-small', sizeMb: 466, memoryHint: '约 1GB 内存' },
+  { id: 'whisper-large-v3-turbo', repo: 'mlx-community/whisper-large-v3-turbo', sizeMb: 1620, memoryHint: '约 2.4GB 内存 · 默认推荐' },
+  { id: 'whisper-large-v3-2023', repo: 'mlx-community/whisper-large-v3-2023', sizeMb: 3090, memoryHint: '约 4.5GB 内存 · 效果最好' },
 ] as const;
 
-/** whisper 模型镜像源（走查 R6）：官方 HuggingFace + 国内 hf-mirror。 */
+/** whisper 镜像源（走查四轮）：base = HF_ENDPOINT 值，亦是模型页 URL 前缀
+ * （HF_ENDPOINT 是 huggingface_hub 官方文档的镜像机制）。 */
 export const WHISPER_MIRRORS = [
-  { id: 'official', label: '官方源（HuggingFace）', base: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main' },
-  { id: 'cn', label: '国内镜像（hf-mirror.com）', base: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main' },
+  { id: 'official', label: '官方源（HuggingFace）', base: 'https://huggingface.co' },
+  { id: 'cn', label: '国内镜像（hf-mirror.com）', base: 'https://hf-mirror.com' },
 ] as const;
 
 export const WizardStepSchema = z.object({
@@ -93,7 +95,7 @@ export const WizardRunInputSchema = z.object({
   /** 强制执行：嗅探跳过与「已完成」都重跑；download 步骤强制=覆盖下载
    * （丢弃 .download 残差从头下载，走查 2026-09-24 · 三轮）。 */
   force: z.boolean().default(false),
-  /** download 参数化（whisper-model）：模型型号（WHISPER_MODEL_CATALOG.id），缺省保持行上既有。 */
+  /** download 参数化（whisper-model）：模型型号（WHISPER_MODEL_CATALOG.id → mlx 仓库），缺省保持行上既有。 */
   model: z.string().optional(),
   /** download 参数化（whisper-model）：镜像源，缺省保持行上既有。 */
   mirror: z.enum(['official', 'cn']).optional(),

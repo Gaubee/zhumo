@@ -45,14 +45,15 @@ export function createServices(seeds?: WizardSeedInput[]): TestServices {
     '<!doctype html><html><body>shufa-spa</body></html>',
   );
   const envFile = path.join(root, 'app', '.env');
-  const config = loadConfig({ envFile, processEnv: {} });
+  // 四轮起 DATA_ROOT 缺省 = OS 数据目录（共享目录！）；测试隔离须显式指回临时根。
+  const config = loadConfig({ envFile, processEnv: { DATA_ROOT: path.join(root, 'app', 'data') } });
   const shufaToolDir = path.join(root, 'shufa-tool');
   mkdirSync(shufaToolDir, { recursive: true });
   writeFileSync(path.join(shufaToolDir, 'pyproject.toml'), '[project]\n', 'utf8');
   const db = openDatabase(config.dataRoot);
   ensureAnonymousUser(db);
   const wizardSeeds = seeds ?? defaultWizardSeeds({ dataRoot: config.dataRoot, shufaToolDir });
-  const wizard = new WizardRunner(db, wizardSeeds);
+  const wizard = new WizardRunner(db, wizardSeeds, { envFile });
   installWizardSeeds(db, wizardSeeds);
   const blobs = new BlobStore(config.dataRoot, db);
   return {

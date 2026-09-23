@@ -9,6 +9,7 @@
  *   [4] .env 键值回写（保留注释与行序；向导第 1 步落 ADMIN_* 与 JWT_SECRET 用）。
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -38,7 +39,7 @@ export const DEFAULT_ENV_TEMPLATE = [
   'LLM_BASE_URL=',
   'LLM_API_KEY=',
   'LLM_MODEL=',
-  'DATA_ROOT=./data',
+  '#DATA_ROOT=（留空 = 系统数据目录：macOS ~/Library/Application Support/zhumo，Linux ~/.local/share/zhumo，Windows %LOCALAPPDATA%\zhumo）',
   '# 监听地址（§8 未列，daemon 约定：默认 127.0.0.1:8217，避开 6173 分析页）',
   '#HOST=127.0.0.1',
   '#PORT=8217',
@@ -123,10 +124,11 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
   const host = pick('HOST') || '127.0.0.1';
   // 默认 8217：6173 被既有 shufa-serve 分析页服务占用（2026-09-23 实证冲突）。
   const port = Number.parseInt(pick('PORT') || '8217', 10);
-  const dataRoot = path.resolve(
-    path.dirname(envFile),
-    pick('DATA_ROOT') || './data',
-  );
+  // 走查四轮（2026-09-25）：DATA_ROOT 缺省改 OS 数据目录（应用数据与代码分离；
+  // 显式相对值仍按 .env 所在目录解析，兼容既有部署）。
+  const dataRoot = pick('DATA_ROOT')
+    ? path.resolve(path.dirname(envFile), pick('DATA_ROOT'))
+    : defaultDataRoot();
   const siteBaseUrl = pick('SITE_BASE_URL') || `http://${host}:${port}`;
   // webuiDir 解析：envFile 可能放仓库根（.env）也可能放子目录（runtime/w7b.env、
   // daemon/.env）——候选按 index.html 存在性择优（实证 2026-09-23：仓库根
@@ -153,6 +155,37 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     port: Number.isFinite(port) ? port : 8217,
     webuiDir,
   };
+}
+
+/**
+ * DATA_ROOT 的 OS 惯例缺省（走查四轮，2026-09-25）：应用数据（SQLite/任务/
+ * 结果页）与代码分离、与模型缓存分离。macOS 按 App Support、Linux 按 XDG、
+ * Windows 按 LocalAppData——与 Electron 等桌面应用同规。
+ */
+export function defaultDataRoot(platform: NodeJS.Platform = process.platform): string {
+  const home = os.homedir();
+  if (platform === 'darwin') {
+    return path.join(home, 'Library', 'Application Support', 'zhumo');
+  }
+  if (platform === 'win32') {
+    const local = process.env.LOCALAPPDATA ?? path.join(home, 'AppData', 'Local');
+    return path.join(local, 'zhumo');
+  }
+  const xdg = process.env.XDG_DATA_HOME ?? path.join(home, '.local', 'share');
+  return path.join(xdg, 'zhumo');
+}
+
+/**
+ * 易失目录护栏（走查四轮）：DATA_ROOT 落 /tmp 类目录时数据随时消失
+ * （macOS 3 天未访问清理、Linux 常为 tmpfs）——启动时警告，不阻断。
+ */
+export function volatileRootWarning(dataRoot: string, tmpdir: string = os.tmpdir()): string | null {
+  const resolved = path.resolve(dataRoot);
+  const volatileRoots = [path.resolve(tmpdir), '/tmp', '/var/tmp', '/private/tmp'];
+  if (volatileRoots.some((root) => resolved === root || resolved.startsWith(`${root}${path.sep}`))) {
+    return `DATA_ROOT 位于易失目录（${resolved}）——/tmp 会被系统定期清理（macOS 约 3 天、Linux 常为内存盘），数据库与任务数据可能丢失；建议改用系统数据目录或显式稳定路径`;
+  }
+  return null;
 }
 
 /** §1 安装向导进入条件：ADMIN_USERNAME/ADMIN_PASSWORD 任一为空。 */

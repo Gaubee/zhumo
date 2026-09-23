@@ -8,11 +8,11 @@
  *   [3] 两级都不存在 → 回退一级候选（不抛错，boot 日志可见路径诊断）。
  */
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir as home, tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from '../src/config.js';
+import { defaultDataRoot, loadConfig, volatileRootWarning } from '../src/config.js';
 
 function makeRepoLayout(envDir: 'root' | 'sub'): string {
   const root = mkdtempSync(path.join(tmpdir(), 'shufa-config-'));
@@ -35,6 +35,28 @@ describe('loadConfig webuiDir 解析', () => {
     const envFile = makeRepoLayout('sub');
     const config = loadConfig({ envFile, processEnv: {} });
     expect(config.webuiDir).toBe(path.resolve(path.dirname(envFile), '..', 'webui', 'dist'));
+  });
+
+  it('四轮：DATA_ROOT 缺省 = OS 数据目录；显式值仍按 .env 目录解析', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'shufa-config-'));
+    const envFile = path.join(root, '.env');
+    // 缺省（模板已注释化 DATA_ROOT）→ darwin = ~/Library/Application Support/zhumo。
+    const def = loadConfig({ envFile: path.join(root, 'a', '.env'), processEnv: {} });
+    expect(def.dataRoot).toBe(path.join(home(), 'Library', 'Application Support', 'zhumo'));
+    // 显式相对值 → 相对 .env 所在目录（既有部署兼容）。
+    const explicit = loadConfig({ envFile, processEnv: { DATA_ROOT: './mydata' } });
+    expect(explicit.dataRoot).toBe(path.join(root, 'mydata'));
+  });
+
+  it('四轮：defaultDataRoot 三平台 + volatileRootWarning 易失目录护栏', () => {
+    expect(defaultDataRoot('darwin')).toBe(
+      path.join(home(), 'Library', 'Application Support', 'zhumo'),
+    );
+    expect(defaultDataRoot('linux')).toBe(path.join(home(), '.local', 'share', 'zhumo'));
+    expect(defaultDataRoot('win32')).toContain('zhumo');
+    expect(volatileRootWarning('/tmp/zhumo/data', '/tmp')).toMatch(/易失目录/);
+    expect(volatileRootWarning('/var/tmp/x')).toMatch(/易失目录/);
+    expect(volatileRootWarning('/Users/kzf/zhumo-data', '/tmp')).toBeNull();
   });
 
   it('两级都无 webui/dist：不抛错，落模块位置兜底候选（webui 与 daemon 恒为兄弟包）', () => {

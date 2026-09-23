@@ -13,12 +13,14 @@
  *   [5] whisper 步骤参数化：型号×镜像组装 URL 并持久化回行。
  */
 import { spawn } from 'node:child_process';
-import { createWriteStream, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { WizardKind, WizardStep } from '@zhumo/contracts';
 import { WHISPER_MODEL_CATALOG, WHISPER_MIRRORS } from '@zhumo/contracts';
+import { saveEnvValues } from './config.js';
 import type { SqliteDb } from './db/database.js';
 import {
   getWizardStep,
@@ -125,27 +127,25 @@ export function capStepLog(text: string): string {
 export const WHISPER_STEP_ID = 'whisper-model';
 
 /**
- * 首发步骤清单（§1；走查修订 2026-09-22；2026-09-23 dsh 步骤退役——内核是
- * `@deepseek-ai/dsh-*` SDK 进程内嵌（随 `pnpm install` 就位），不是系统依赖，
- * 全局安装一个用不到的 CLI 是误导）。安装类命令为常见环境默认值，存量库可经
- * 种子迁移获得修订。三平台差异只在命令层：darwin=brew、win32=winget、
- * linux=apt-get；probe 均为跨平台命令。
+ * 首发步骤清单（§1；走查修订 2026-09-22；2026-09-23 dsh 步骤退役；走查四轮
+ * 2026-09-25：whisper 步骤改为预热管线真消费的 mlx-community 模型，且仅
+ * darwin/arm64 出现——mlx-whisper 无 Intel/Windows/Linux 构建，其他平台管线
+ * 本就降级跳过转录，展示一个永远跑不了的步骤是误导）。安装类命令为常见环境
+ * 默认值，存量库可经种子迁移获得修订（不在册行删除）。三平台差异只在命令层：
+ * darwin=brew、win32=winget、linux=apt-get；probe 均为跨平台命令。
  */
-export function defaultWizardSeeds(ctx: WizardContext): WizardSeedInput[] {
-  const modelsDir = path.join(ctx.dataRoot, 'models');
-  const platform = process.platform;
+export function defaultWizardSeeds(
+  ctx: WizardContext,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): WizardSeedInput[] {
   const installFfmpeg =
     platform === 'darwin'
       ? 'brew install ffmpeg'
       : platform === 'win32'
         ? 'winget install -e --id Gyan.FFmpeg'
         : 'sudo apt-get install -y ffmpeg';
-  // whisper 默认取官方源 + base 模型（R6：型号/镜像可经 run 参数切换并持久化）。
-  const defaultModel = WHISPER_MODEL_CATALOG.find((m) => m.id === 'base');
-  if (!defaultModel) throw new Error('WHISPER_MODEL_CATALOG 缺少 base 模型定义');
-  // python 分析环境（2026-09-23，迁移暂停后的部署补课）：管线工具经 `uv run`
-  // 调用，向导把依赖预热显性化——首次分析不再隐式下载依赖。uv sync 幂等。
-  return [
+  const steps: WizardSeedInput[] = [
     {
       id: 'ffmpeg',
       kind: 'command',
@@ -158,19 +158,77 @@ export function defaultWizardSeeds(ctx: WizardContext): WizardSeedInput[] {
       id: 'python-env',
       kind: 'command',
       title: 'Python 分析环境（uv sync 预热依赖）',
-      command: `uv sync --project "${ctx.shufaToolDir}"`,
+      // --extra transcribe（走查四轮）：基础 sync 不含可选依赖，反而会卸掉
+      // mlx-whisper/torch——转录能力静默消失。extra 自带平台标记，非 darwin
+      // 上是空集，恒可安全传入。
+      command: `uv sync --project "${ctx.shufaToolDir}" --extra transcribe`,
       probe: 'uv --version',
       targetDir: ctx.shufaToolDir,
     },
-    {
+  ];
+  // whisper 预热步骤（四轮）：默认官方源 + large-v3-turbo（与 audio.py 缺省一致）。
+  const defaultModel = WHISPER_MODEL_CATALOG.find((m) => m.id === 'whisper-large-v3-turbo');
+  if (defaultModel && platform === 'darwin' && arch === 'arm64') {
+    steps.push({
       id: WHISPER_STEP_ID,
       kind: 'download',
-      title: 'whisper 转写模型（可选型号 + 镜像源）',
+      title: 'whisper 转写模型（mlx · 可选型号 + 镜像源）',
       command: null,
-      url: `${WHISPER_MIRRORS[0].base}/${defaultModel.file}`,
-      targetDir: modelsDir,
-    },
-  ];
+      url: `${WHISPER_MIRRORS[0].base}/${defaultModel.repo}`,
+      targetDir: hfHubDir(),
+    });
+  }
+  return steps;
+}
+
+/** HF 缓存根目录展示（与 warm_whisper.py 的 hub_root 同一解析规则）。 */
+export function hfHubDir(): string {
+  const hfHome = process.env.HF_HOME;
+  const home = hfHome ? hfHome : path.join(os.homedir(), '.cache', 'huggingface');
+  return path.join(home, 'hub');
+}
+
+/** 仓库在 HF 缓存中的目录名（models--org--name）。 */
+export function whisperCacheRepoDir(repo: string): string {
+  return path.join(hfHubDir(), `models--${repo.replace(/\//g, '--')}`);
+}
+
+/** 从行 url（模型页 https://host/org/name）反推仓库全名。 */
+export function whisperRepoFromUrl(url: string | null): string | null {
+  if (!url) return null;
+  const m = /^https?:\/\/[^/]+\/([^/]+\/[^/]+)$/.exec(url.trim());
+  return m?.[1] ?? null;
+}
+
+/** 预热完成判定：snapshots 下存在权重文件。mlx 仓库新格式 .safetensors、
+ * 老格式 weights.npz 都认（实证 whisper-tiny 即 npz）。 */
+const WHISPER_WEIGHT_EXTS = ['.safetensors', '.npz'];
+export function whisperCacheReady(repo: string): boolean {
+  const dir = whisperCacheRepoDir(repo);
+  if (!existsSync(dir)) return false;
+  const snapshots = path.join(dir, 'snapshots');
+  if (!existsSync(snapshots)) return false;
+  const walk = (d: string): boolean => {
+    for (const entry of readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, entry.name);
+      if (entry.isDirectory()) {
+        if (walk(full)) return true;
+      } else if (WHISPER_WEIGHT_EXTS.some((ext) => entry.name.endsWith(ext))) {
+        return true;
+      }
+    }
+    return false;
+  };
+  return walk(snapshots);
+}
+
+/** 预热中断判定（「恢复下载」依据）：blobs 下存在 .incomplete 分块。 */
+export function whisperCachePartial(repo: string): boolean {
+  const dir = whisperCacheRepoDir(repo);
+  if (!existsSync(dir)) return false;
+  const blobs = path.join(dir, 'blobs');
+  if (!existsSync(blobs)) return false;
+  return readdirSync(blobs).some((name) => name.endsWith('.incomplete'));
 }
 
 /** 幂等种子落库（不覆盖既有状态）。 */
@@ -201,7 +259,14 @@ export class WizardRunner {
   constructor(
     private readonly db: SqliteDb,
     private readonly seeds: WizardSeedInput[],
-    private readonly options: { shell?: string; fetchImpl?: typeof fetch } = {},
+    private readonly options: {
+      shell?: string;
+      fetchImpl?: typeof fetch;
+      /** .env 路径（四轮：whisper 选型持久化 SHUFA_WHISPER_REPO 用）。 */
+      envFile?: string;
+      /** shufa-tool 仓库根（四轮：warm_whisper 经 `uv run --project` 调用）。 */
+      shufaToolDir?: string;
+    } = {},
   ) {}
 
   /** 全量步骤视图（setup.steps 与 admin.wizard.steps 共用）。 */
@@ -258,6 +323,13 @@ export class WizardRunner {
         updateWizardStepUrl(this.db, id, url);
         row = getWizardStep(this.db, id) ?? row;
       }
+      // 四轮：显式选型即落 .env（SHUFA_WHISPER_REPO）——daemon 启动时透传给
+      // 管线，转录用向导选的模型；url 恰与行一致（缺省重选）也要落，向导与
+      // 管线从此同一事实源。
+      if (params?.model !== undefined && this.options.envFile) {
+        const { repo } = whisperRunArgsFromUrl(row.url);
+        if (repo) saveEnvValues(this.options.envFile, { SHUFA_WHISPER_REPO: repo });
+      }
     }
     if (!force && row.status === 'done') return toView(row);
 
@@ -293,6 +365,19 @@ export class WizardRunner {
             log.append(POST_PROBE_FAILED_MESSAGE);
             updateWizardProgress(this.db, id, { status: 'failed' });
           }
+        }
+      } else if (id === WHISPER_STEP_ID && row.kind === 'download') {
+        // 四轮：whisper 预热走 warm_whisper 子进程（HF 标准缓存 + 断点续传），
+        // 非泛型 HTTP 下载。终态行 + 后验（缓存有权重）与命令步骤同型。
+        const code = await this.runWhisperWarm(id, row, log, state, force);
+        if (code !== 0) {
+          updateWizardProgress(this.db, id, { status: 'failed' });
+        } else if (whisperCacheReady(whisperRunArgsFromUrl(row.url).repo)) {
+          log.append(`[完成] 退出码 0`);
+          updateWizardProgress(this.db, id, { status: 'done' });
+        } else {
+          log.append(POST_PROBE_FAILED_MESSAGE);
+          updateWizardProgress(this.db, id, { status: 'failed' });
         }
       } else {
         // 下载终态（完成行/失败行）同样追加；文件存在 + 尺寸校验即后验（R6 保持）。
@@ -337,6 +422,14 @@ export class WizardRunner {
 
   /** 返回跳过原因文案；不跳过返回 null。 */
   private async sniff(row: WizardStepRow, seed: WizardSeedInput | null): Promise<string | null> {
+    if (row.id === WHISPER_STEP_ID && row.kind === 'download') {
+      // 四轮：HF 缓存探测（snapshots 下有权重即就绪——含手工预置/其他工具共享）。
+      const { repo } = whisperRunArgsFromUrl(row.url);
+      if (whisperCacheReady(repo)) {
+        return `嗅探：模型已在 HF 缓存，跳过（${whisperCacheRepoDir(repo)}）`;
+      }
+      return null;
+    }
     if (row.kind === 'download') {
       const file = downloadTargetPath(row.url ?? '', row.target_dir);
       if (file && existsSync(file)) return `嗅探：文件已存在，跳过（${file}）`;
@@ -395,6 +488,66 @@ export class WizardRunner {
       for (const line of String(chunk).split(/\r?\n/)) {
         const trimmed = line.trim();
         if (trimmed) log.append(trimmed);
+      }
+    };
+    child.stdout.on('data', onLine);
+    child.stderr.on('data', onLine);
+    return new Promise<number>((resolve, reject) => {
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (state.cancelled) reject(new WizardCancelledError());
+        else resolve(code ?? -1);
+      });
+    });
+  }
+
+  /**
+   * whisper 预热 runner（走查四轮）：`uv run --project <shufa-tool> python -m
+   * shufa_tool.warm_whisper`——huggingface_hub 官方路径（断点续传/校验免费），
+   * 镜像经 HF_ENDPOINT。进度行（已下载 …）原位替换，其余逐行追加；取消 = 组杀
+   * （与命令步骤同型，killProcessTree）；force 透传脚本端清缓存（覆盖下载）。
+   */
+  private async runWhisperWarm(
+    id: string,
+    row: WizardStepRow,
+    log: StepLogWriter,
+    state: { cancelled: boolean },
+    force: boolean,
+  ): Promise<number> {
+    const toolDir = this.options.shufaToolDir;
+    if (!toolDir) throw new Error('向导上下文缺少 shufaToolDir（warm_whisper 无法调用）');
+    const { repo, endpoint } = whisperRunArgsFromUrl(row.url);
+    const command = [
+      'uv',
+      'run',
+      '--project',
+      JSON.stringify(toolDir),
+      'python',
+      '-m',
+      'shufa_tool.warm_whisper',
+      '--repo',
+      JSON.stringify(repo),
+      '--endpoint',
+      JSON.stringify(endpoint),
+      ...(force ? ['--force'] : []),
+    ].join(' ');
+    const child = spawn(command, {
+      cwd: toolDir,
+      shell: this.options.shell ?? true,
+      detached: process.platform !== 'win32',
+    });
+    this.active.set(id, {
+      kill: () => {
+        state.cancelled = true;
+        killProcessTree(child);
+      },
+    });
+    const onLine = (chunk: Buffer | string): void => {
+      for (const line of String(chunk).split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (trimmed.startsWith(DOWNLOAD_PROGRESS_PREFIX)) log.appendProgress(trimmed);
+        else log.append(trimmed);
       }
     };
     child.stdout.on('data', onLine);
@@ -529,7 +682,12 @@ export function toView(row: WizardStepRow | null): WizardStep {
     last_log: row.last_log,
     updated_at: row.updated_at,
     // 走查 2026-09-24 · 三轮：.download 残差存在性（UI「恢复下载」依据）。
-    resumable: row.kind === 'download' && downloadResumable(row.url, row.target_dir),
+    // 四轮：whisper 步骤的残差 = HF blobs 下的 .incomplete 分块。
+    resumable:
+      row.kind === 'download' &&
+      (row.id === WHISPER_STEP_ID
+        ? whisperCachePartial(whisperRunArgsFromUrl(row.url).repo)
+        : downloadResumable(row.url, row.target_dir)),
   };
 }
 
@@ -550,11 +708,11 @@ export function downloadTargetPath(url: string, targetDir: string): string | nul
   }
 }
 
-/** 从行 url 文件名反推 whisper 型号（识别不出回退 null → 调用方取 base）。 */
+/** 从行 url（模型页）反推 whisper 型号（识别不出回退 null）。 */
 function whisperModelIdFromUrl(url: string | null): string | null {
-  if (!url) return null;
-  const file = url.split('/').pop() ?? '';
-  return WHISPER_MODEL_CATALOG.find((m) => m.file === file)?.id ?? null;
+  const repo = whisperRepoFromUrl(url);
+  if (!repo) return null;
+  return WHISPER_MODEL_CATALOG.find((m) => m.repo === repo)?.id ?? null;
 }
 
 /** 从行 url 前缀反推镜像源（识别不出回退 null → 调用方取 official）。 */
@@ -565,15 +723,17 @@ function whisperMirrorIdFromUrl(url: string | null): 'official' | 'cn' | null {
 }
 
 /**
- * whisper URL 组装（走查 R6）：params 只给一半时，另一半从行上既有 url 反推
- * （换型号不动镜像、换镜像不动型号）；行上无痕迹分别回退 base / official。
+ * whisper 模型页 URL 组装（走查四轮）：`${mirror.base}/${repo}`——base 即
+ * HF_ENDPOINT（official=https://huggingface.co，cn=https://hf-mirror.com）。
+ * params 只给一半时，另一半从行上既有 url 反推（换型号不动镜像、换镜像不动
+ * 型号）；行上无痕迹回退 large-v3-turbo / official（与 audio.py 缺省一致）。
  * 未知型号抛错（由 run() 的 failed 路径或调用方直接感知）。
  */
 export function resolveWhisperUrl(
   rowUrl: string | null,
   params: { model?: string; mirror?: 'official' | 'cn' },
 ): string {
-  const modelId = params.model ?? whisperModelIdFromUrl(rowUrl) ?? 'base';
+  const modelId = params.model ?? whisperModelIdFromUrl(rowUrl) ?? 'whisper-large-v3-turbo';
   const model = WHISPER_MODEL_CATALOG.find((m) => m.id === modelId);
   if (!model) {
     throw new Error(
@@ -582,7 +742,20 @@ export function resolveWhisperUrl(
   }
   const mirrorId = params.mirror ?? whisperMirrorIdFromUrl(rowUrl) ?? 'official';
   const mirror = WHISPER_MIRRORS.find((m) => m.id === mirrorId) ?? WHISPER_MIRRORS[0];
-  return `${mirror.base}/${model.file}`;
+  return `${mirror.base}/${model.repo}`;
+}
+
+/** 行 url → { repo, endpoint, mirrorId }（warm runner 的完整入参组）。 */
+export function whisperRunArgsFromUrl(rowUrl: string | null): {
+  repo: string;
+  endpoint: string;
+  mirrorId: 'official' | 'cn';
+} {
+  const modelId = whisperModelIdFromUrl(rowUrl) ?? 'whisper-large-v3-turbo';
+  const model = WHISPER_MODEL_CATALOG.find((m) => m.id === modelId)!;
+  const mirrorId = whisperMirrorIdFromUrl(rowUrl) ?? 'official';
+  const mirror = WHISPER_MIRRORS.find((m) => m.id === mirrorId) ?? WHISPER_MIRRORS[0];
+  return { repo: model.repo, endpoint: mirror.base, mirrorId };
 }
 
 /** Content-Range 解析（`bytes N-M/total`）；非标准格式返回 null。 */

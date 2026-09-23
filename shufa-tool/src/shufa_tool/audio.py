@@ -6,6 +6,7 @@ HTML 仅呈现视觉产物。同音字修正表用于书法教学高频误转（
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,13 +46,22 @@ def _apply_fixes(text: str) -> str:
     return text
 
 
-def transcribe(wav: Path, model_repo: str = "mlx-community/whisper-large-v3-turbo") -> Transcript | None:
-    """mlx-whisper 转录；未安装则返回 None（调用方降级）。"""
+DEFAULT_MODEL_REPO = "mlx-community/whisper-large-v3-turbo"
+
+
+def transcribe(wav: Path, model_repo: str | None = None) -> Transcript | None:
+    """mlx-whisper 转录；未安装则返回 None（调用方降级）。
+
+    仓库选择（走查四轮）：显式实参 > SHUFA_WHISPER_REPO（向导预热时由 daemon
+    从 .env 透传）> 默认 large-v3-turbo。模型已由向导 warm_whisper 预热进
+    HF 标准缓存，此处不再触发隐式下载。
+    """
+    repo = model_repo or os.environ.get("SHUFA_WHISPER_REPO", DEFAULT_MODEL_REPO)
     try:
         import mlx_whisper  # type: ignore[import-not-found]
     except ImportError:
         return None
-    raw = mlx_whisper.transcribe(str(wav), path_or_hf_repo=model_repo, language="zh")
+    raw = mlx_whisper.transcribe(str(wav), path_or_hf_repo=repo, language="zh")
     segs = []
     for s in raw.get("segments", []):
         segs.append({

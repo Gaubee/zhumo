@@ -59,8 +59,8 @@
   /** 每步独立的强制开关（纯视图状态，不落库）。 */
   let forceMap = $state<Record<string, boolean>>({});
 
-  /** whisper-model 步骤的模型/镜像选择（默认 base + official）。 */
-  let whisperModel = $state("base");
+  /** whisper-model 步骤的模型/镜像选择（默认 large-v3-turbo + official，与种子一致）。 */
+  let whisperModel = $state("whisper-large-v3-turbo");
   let whisperMirror = $state<WhisperMirrorId>("official");
 
   // ---- BUG1：步骤日志 <pre> 自动滚底（仅当用户没往上滚时） ----
@@ -98,7 +98,8 @@
     const mirror = WHISPER_MIRRORS.find((candidate) => candidate.id === whisperMirror);
     const model = WHISPER_MODEL_CATALOG.find((candidate) => candidate.id === whisperModel);
     if (mirror === undefined || model === undefined) return "";
-    return `${mirror.base}/${model.file}`;
+    // 四轮：来源 = 模型页（${mirror.base}/${repo}）；下载走 HF_ENDPOINT + HF 标准缓存。
+    return `${mirror.base}/${model.repo}`;
   });
 
   /**
