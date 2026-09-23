@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="shufa-server/webui/public/icon.svg" alt="朱墨 LOGO" width="140" />
+</p>
+
 # 朱墨（Zhumo）
 
 书法讲评视频分析平台。上传一段老师讲评习字的视频，agent 编排计算机视觉管线：
