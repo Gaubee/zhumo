@@ -30,16 +30,25 @@ def cache_repo_dir(repo: str) -> Path:
     return hub_root() / "hub" / ("models--" + repo.replace("/", "--"))
 
 
-def dir_size_mb(path: Path) -> float:
-    """目录体积（MB）。跳过符号链接——snapshots/ 里是 blobs 的软链，不跳会双计。"""
+def dir_size_bytes(path: Path) -> int:
+    """目录体积（字节）。跳过符号链接——snapshots/ 里是 blobs 的软链，不跳会
+    双计。整段遍历包 try：.incomplete → blob 改名等并发变动会让 rglob 生成器
+    中途抛错，此时返回已累计值而非让轮询线程死亡（走查 2026-09-26）。"""
     total = 0
-    for p in path.rglob("*"):
-        try:
-            if p.is_file() and not p.is_symlink():
-                total += p.stat().st_size
-        except OSError:
-            continue
-    return total / 1024 / 1024
+    try:
+        for p in path.rglob("*"):
+            try:
+                if p.is_file() and not p.is_symlink():
+                    total += p.stat().st_size
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return total
+
+
+def dir_size_mb(path: Path) -> float:
+    return dir_size_bytes(path) / 1024 / 1024
 
 
 def main() -> int:
@@ -55,6 +64,12 @@ def main() -> int:
     # 关掉 huggingface_hub 自带 tqdm（Fetching N files 条走 stderr 且含 \r，
     # 会污染向导日志；进度由本脚本统一输出）。
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+    # 禁用 Xet 传输（走查 2026-09-26 实证三连）：① 字节进 ~/.cache/huggingface/xet
+    # 分块缓存、blobs/.incomplete 恒 0 字节——进度失真；② CAS 端点直连
+    # cas-server.xethub.hf.co，绕过 HF_ENDPOINT 镜像；③ 曾「零字节成功」留下
+    # 悬空软链（blobs/<etag> → 不存在的 blobs/<sha> 分片）。普通 HTTP 路径的
+    # 进度/断点续传/镜像行为全部正确。
+    os.environ["HF_HUB_DISABLE_XET"] = "1"
 
     try:
         from huggingface_hub import snapshot_download
@@ -78,11 +93,23 @@ def main() -> int:
         print(f"总量探测失败（进度将不显示百分比）：{exc}")
 
     stop = threading.Event()
+    # 进度量取（走查 2026-09-26）：官方端点的 xet 后端仓库走 Xet 传输——字节先进
+    # ~/.cache/huggingface/xet 分块缓存，blobs 里的 .incomplete 恒 0 字节，只量仓库
+    # 目录会「流量在跑进度恒 0」（mini 实证）。改为两目录的基线增量：各自记开场
+    # 基线，只报增量——历史分块缓存（dedup 复用）不会把起点抬高。
+    xet_dir = hub_root().parent / "xet"
+    baseline_repo = dir_size_bytes(target) if target.exists() else 0
+    baseline_xet = dir_size_bytes(xet_dir) if xet_dir.exists() else 0
+
+    def downloaded_mb() -> float:
+        repo = (dir_size_bytes(target) if target.exists() else 0) - baseline_repo
+        xet = (dir_size_bytes(xet_dir) if xet_dir.exists() else 0) - baseline_xet
+        return (max(0, repo) + max(0, xet)) / 1024 / 1024
 
     def poll() -> None:
         while not stop.is_set():
             time.sleep(2)
-            done = dir_size_mb(target) if target.exists() else 0.0
+            done = downloaded_mb()
             if total_mb and total_mb > 0:
                 pct = min(100, round(done / total_mb * 100))
                 print(f"已下载 {done:.1f}MB / {total_mb:.1f}MB（{pct}%）", flush=True)
@@ -99,6 +126,13 @@ def main() -> int:
         return 4
     stop.set()
     watcher.join(timeout=3)  # 让最后一拍进度行落地
+    # 完成自检（走查 2026-09-26）：防「零字节成功」——权重文件必须解析到真实
+    # 且非空的目标（悬空软链在此拦截，退出码 5）。
+    weights = [p for p in Path(path).iterdir() if p.name.endswith((".safetensors", ".npz"))]
+    ok = weights and all(w.is_file() and w.stat().st_size > 0 for w in weights)
+    if not ok:
+        print("[失败] 预热完成但权重文件缺失或为空（悬空缓存？请重跑）", file=sys.stderr)
+        return 5
     # 终局进度行：下载快于轮询周期时，最后一拍可能停在 0.0MB——用实际落盘
     # 体积补一条 100% 行（daemon 侧 appendProgress 原位替换，完成态文案不失真）。
     final_mb = dir_size_mb(target)

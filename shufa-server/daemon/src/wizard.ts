@@ -221,7 +221,13 @@ export function whisperCacheReady(repo: string): boolean {
       const full = path.join(d, entry.name);
       if (entry.isDirectory()) {
         if (walk(full)) return true;
-      } else if (WHISPER_WEIGHT_EXTS.some((ext) => entry.name.endsWith(ext))) {
+      } else if (
+        WHISPER_WEIGHT_EXTS.some((ext) => entry.name.endsWith(ext)) &&
+        // 走查 2026-09-26：snapshots 里的权重常态是软链——必须解析目标真实存在
+        // 才算就绪（xet「零字节成功」会留 blobs/<etag> → 不存在分片的悬空链，
+        // 仅按文件名判定会把损坏缓存误标已下载）。existsSync 跟随软链。
+        existsSync(full)
+      ) {
         return true;
       }
     }

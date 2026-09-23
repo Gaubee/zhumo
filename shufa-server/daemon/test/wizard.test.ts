@@ -4,7 +4,7 @@
  * 原始需求 2026-09-23（PRODUCT_DESIGN.md §1）；走查修订 2026-09-22。
  */
 import http from 'node:http';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { WHISPER_MODEL_CATALOG, WHISPER_MIRRORS } from '@zhumo/contracts';
@@ -552,6 +552,17 @@ describe('wizard whisper 参数化（走查 R6）', () => {
       const snap = path.join(cacheDir, 'snapshots', 'rev1');
       mkdirSync(snap, { recursive: true });
       writeFileSync(path.join(snap, 'model.safetensors'), 'x');
+      expect(whisperCacheReady(repo)).toBe(true);
+
+      // 悬空软链不算就绪（xet 零字节成功实证：blobs/<etag> 指向不存在的分片）。
+      const broken = path.join(snap, 'weights.npz');
+      rmSync(path.join(snap, 'model.safetensors'));
+      symlinkSync('../../blobs/deadbeef', broken);
+      expect(whisperCacheReady(repo)).toBe(false);
+      // 软链指向真实 blob → 就绪（snapshots 权重常态是软链）。
+      writeFileSync(path.join(cacheDir, 'blobs', 'realblob'), 'xx');
+      rmSync(broken);
+      symlinkSync('../../blobs/realblob', broken);
       expect(whisperCacheReady(repo)).toBe(true);
     } finally {
       if (prevHfHome === undefined) delete process.env.HF_HOME;
