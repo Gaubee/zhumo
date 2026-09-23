@@ -24,6 +24,7 @@
     catalogLoading,
     routes,
     saveRoutes,
+    lastSaveError,
     onadded,
     onclose,
   }: {
@@ -32,6 +33,8 @@
     catalogLoading: boolean;
     routes: DshModelRoute[];
     saveRoutes: (next: DshModelRoute[]) => Promise<boolean>;
+    /** 父级最近一次保存失败原因（服务端 zod/网络错误明文，走查 R4 透传）。 */
+    lastSaveError: () => string | null;
     onadded: (provider: string) => void;
     /** 零路由时 pick 态的返回口（有路由时点任意 tab 即退出，由父级处理）。 */
     onclose?: () => void;
@@ -125,7 +128,9 @@
     const ok = await saveRoutes([...routes, route]);
     creating = false;
     if (!ok) {
-      rejection = "创建失败，请重试。";
+      // saveRoutes 已把服务端错误写父级 error；此处给面板内联同样明文
+      //（走查 R4：此前只报「创建失败，请重试」吞掉 zod 详情）。
+      rejection = lastSaveError() ?? "创建失败，请重试。";
       return;
     }
     onadded(route.provider);
@@ -164,7 +169,7 @@
     const ok = await saveRoutes([...routes, route]);
     creating = false;
     if (!ok) {
-      rejection = "创建失败，请重试。";
+      rejection = lastSaveError() ?? "创建失败，请重试。";
       return;
     }
     onadded(route.provider);

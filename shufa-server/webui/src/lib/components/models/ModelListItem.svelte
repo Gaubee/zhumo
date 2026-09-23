@@ -94,9 +94,12 @@
     onchange({ ...model, ...patch });
   }
 
-  /** id 命中目录候选的富预填（手触位不覆盖；换 id 时手触位复位）。 */
+  /** id 每次输入都回传（走查 R4 实证修复：此前只在命中目录候选时 emit，
+   * 自定义端点新建路由的模型 id 恒为空串 → 服务端 zod 400「Too small」，
+   * 创建路由 100% 失败）；命中候选时叠加富预填（手触位不覆盖）。 */
   function onIdInput(value: string): void {
     idText = value;
+    emit({ id: value.trim() });
     const hit = candidates.find((entry) => entry.id === value.trim());
     if (hit === undefined) return;
     if (!nameTouched && hit.name !== undefined) nameText = hit.name;
@@ -267,7 +270,7 @@
         <Input
           class="h-8 font-mono text-xs"
           aria-label="模型 id"
-          placeholder="glm-5.3-flash"
+          placeholder="模型 id，如 glm-5.3-flash"
           list={listId}
           bind:ref={idInput}
           bind:value={idText}

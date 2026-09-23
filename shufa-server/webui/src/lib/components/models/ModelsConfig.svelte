@@ -105,14 +105,20 @@
    * 统一写路径：全量 routes 落库（default 保留现值）→ 重建读面。
    * NewTab pick 卡即点即建 / RouteTabContent Save / 密钥旁路 / 删除路由共用。
    */
+  /** 最近一次保存失败原因（走查 R4：面板内联透传服务端 zod/网络错误，
+   * 不再只报笼统「创建失败，请重试」）。 */
+  let lastSaveError = $state<string | null>(null);
+
   async function saveRoutes(next: DshModelRoute[]): Promise<boolean> {
     if (settings === null) return false;
     try {
       await api.saveModels({ routes: next, default: settings.default });
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      lastSaveError = e instanceof Error ? e.message : String(e);
+      error = lastSaveError;
       return false;
     }
+    lastSaveError = null;
     error = null;
     await load();
     onsaved?.();
@@ -152,6 +158,14 @@
       removeTarget = null;
     }
   }
+
+  // tab 内容容器（selected/newOpen 切换即滚顶）。
+  let contentScrollEl = $state<HTMLElement | null>(null);
+  $effect(() => {
+    void selected;
+    void newOpen;
+    if (contentScrollEl !== null) contentScrollEl.scrollTop = 0;
+  });
 
   // ---- tab 条横滚（滚轮纵转横；可滚时才劫持，否则交还页面滚动）。 ----
   let stripEl = $state<HTMLElement | null>(null);
@@ -377,8 +391,12 @@
       </button>
     </div>
 
-    <!-- tab 内容（滚动只发生在此容器内）。 -->
-    <div class="min-h-0 flex-1 overflow-y-auto pr-0.5">
+    <!-- tab 内容（滚动只发生在此容器内；selected 变化滚顶——走查 R4：
+         跨 tab 保留滚动会让标题行/保存按钮滚出视野）。 -->
+    <div
+      class="min-h-0 flex-1 overflow-y-auto pr-0.5"
+      bind:this={contentScrollEl}
+    >
       {#if newOpen}
         {#key newTabSession}
           <NewRouteTab
@@ -387,6 +405,7 @@
             catalogLoading={catalogLoading}
             {routes}
             {saveRoutes}
+            lastSaveError={() => lastSaveError}
             onadded={(provider) => void onRouteAdded(provider)}
             onclose={() => (newOpen = false)}
           />
@@ -401,6 +420,7 @@
             onCredentialFocused={() => (pendingKeyFocus = null)}
             onremove={() => requestRemove(selectedRoute?.provider)}
             {saveRoutes}
+            lastSaveError={() => lastSaveError}
           />
         {/key}
       {:else}

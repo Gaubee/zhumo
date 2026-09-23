@@ -37,6 +37,7 @@
     onCredentialFocused,
     onremove,
     saveRoutes,
+    lastSaveError,
   }: {
     route: DshModelRoute;
     routes: DshModelRoute[];
@@ -48,6 +49,8 @@
     onremove?: () => void;
     /** 父级持久化回调（全量 routes 落库并刷新读面）。 */
     saveRoutes: (next: DshModelRoute[]) => Promise<boolean>;
+    /** 父级最近一次保存失败原因（走查 R4：内联透传服务端错误明文）。 */
+    lastSaveError: () => string | null;
   } = $props();
 
   // Endpoint 草稿（全局 Save；tab 切换重挂载自然重置）。
@@ -125,7 +128,7 @@
     );
     saving = false;
     if (!ok) {
-      rejection = "保存失败，请重试。";
+      rejection = lastSaveError() ?? "保存失败，请重试。";
       return;
     }
     keyDraft = "";
@@ -147,7 +150,7 @@
     );
     saving = false;
     if (!ok) {
-      rejection = "密钥保存失败，请重试。";
+      rejection = lastSaveError() ?? "密钥保存失败，请重试。";
       return;
     }
     rejection = null;
