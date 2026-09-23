@@ -176,6 +176,21 @@
     }
   }
 
+  /**
+   * 取消运行中的步骤（走查 2026-09-24）：服务端组杀/断流后 runStep 的长调用
+   * 自行 settle（终态 pending）并触发其 finally 刷新；这里立即刷一次让徽章
+   * 尽快离开「执行中/下载中」。取消请求本身失败（如竞态下已结束）不打断向导。
+   */
+  async function cancelStep(id: string): Promise<void> {
+    try {
+      await api.cancelWizardStep(id);
+    } catch {
+      /* 已结束/网络抖动静默：轮询与 runStep 收尾会把状态带正 */
+    } finally {
+      await refreshSteps();
+    }
+  }
+
   async function finish(): Promise<void> {
     busy = true;
     error = null;
@@ -257,7 +272,7 @@
         <p class="text-xs text-muted-foreground">
           嗅探到已安装的命令与已下载的文件会默认跳过；可展开单项强制重跑。
         </p>
-        <PrepStepsAccordion {steps} running={runningStep} onrun={runStep} />
+        <PrepStepsAccordion {steps} running={runningStep} onrun={runStep} oncancel={cancelStep} />
       </div>
     {:else}
       <div class="h-[420px]">

@@ -327,6 +327,15 @@ export async function replayAgentTurn(taskId: string, prompt: string): Promise<v
  * params 与真 API 同签名：whisper-model 步骤携带选中模型/镜像，mock 据此回写
  * 来源 URL（镜像 base + 模型文件，组装规则与后端一致）并回显选择。
  */
+/** mock 取消标记（走查 2026-09-24）：运行循环逐拍感知，置回 pending。 */
+const mockCancelled = new Set<string>();
+
+export async function cancelWizardStepMock(stepId: string): Promise<void> {
+  const step = mockDb.wizardSteps.find((s) => s.id === stepId);
+  if (!step || step.status !== "running") return;
+  mockCancelled.add(stepId);
+}
+
 export async function runWizardStepMock(
   stepId: string,
   force: boolean,
@@ -347,6 +356,13 @@ export async function runWizardStepMock(
           : ["added 312 packages, and audited 313 packages in 21s", "found 0 vulnerabilities"];
     for (const line of ["$ " + (step.command ?? ""), ...script]) {
       await sleep(500);
+      if (mockCancelled.delete(stepId)) {
+        step.status = "pending";
+        step.lastLog += "\n[中断] 用户取消";
+        step.updatedAt = now();
+        for (const listener of stepListeners) listener({ at: now(), seq: 0, kind: "status" });
+        return;
+      }
       step.lastLog = (step.lastLog.length > 0 ? step.lastLog + "\n" : "") + line;
       step.updatedAt = now();
       for (const listener of stepListeners) listener({ at: now(), seq: 0, kind: "status" });
@@ -368,6 +384,13 @@ export async function runWizardStepMock(
     const prefix = selectedLine.length > 0 ? `${selectedLine}\n` : "";
     for (let progress = 0; progress <= 100; progress += 20) {
       await sleep(400);
+      if (mockCancelled.delete(stepId)) {
+        step.status = "pending";
+        step.lastLog += "\n[中断] 用户取消（已下载部分保留，可续传）";
+        step.updatedAt = now();
+        for (const listener of stepListeners) listener({ at: now(), seq: 0, kind: "status" });
+        return;
+      }
       step.progress = progress;
       step.lastLog = `${prefix}已下载 ${((sizeMb * progress) / 100).toFixed(1)}MB / ${sizeMb.toFixed(1)}MB（${progress}%）`;
       step.updatedAt = now();

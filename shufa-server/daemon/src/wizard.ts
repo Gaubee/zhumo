@@ -327,7 +327,7 @@ export class WizardRunner {
    * shell 孙进程），下载 abort。run() 的 catch 收尾置回 pending。未在运行 →
    * CONFLICT（前端按钮只在 running 态可见，兜底语义）。
    */
-  cancel(id: string): { ok: true } {
+  async cancel(id: string): Promise<{ ok: true }> {
     if (!getWizardStep(this.db, id)) throw new WizardError('NOT_FOUND', `向导步骤不存在：${id}`);
     const handle = this.active.get(id);
     if (!handle) throw new WizardError('CONFLICT', `步骤未在执行中：${id}`);

@@ -8,6 +8,10 @@
   2. done 态按钮默认 disabled，勾选强制开关才 enable，并在按钮附近给说明行。
   3. 嗅探徽章 kind-aware（已安装（嗅探）/ 已下载（嗅探））。
   4. whisper-model 步骤内嵌模型/镜像选择器，选中值随 onrun params 传出。
+  走查修订 [2026-09-24 · 二轮]：
+  1. running 徽章/按钮按 kind 分型（命令=执行中，下载=下载中），运行中按钮变
+     「中断」（oncancel），不再禁用等待。
+  2. title 摘要区只留命令尾行/下载 URL——进度条只在展开面板里渲染一条。
   朱墨前端改造 [2026-09-24]（BUG1+3 实时日志与进度）：
   1. 展开面板 lastLog 全量 <pre> 自动滚底（用户上滚即停，回底恢复跟随）。
   2. 下载步骤进度条 + current/total 文案（12.3MB / 148.0MB（8%））；终态保留
@@ -26,6 +30,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Switch } from "$lib/components/ui/switch";
   import IconPlay from "@lucide/svelte/icons/play";
+  import IconSquare from "@lucide/svelte/icons/square";
   import { WHISPER_MIRRORS, WHISPER_MODEL_CATALOG } from "@zhumo/contracts";
   import type { WhisperMirrorId, WhisperModelOption, WizardRunParams, WizardStep } from "$lib/types";
 
@@ -33,12 +38,15 @@
     steps,
     running = null,
     onrun,
+    oncancel,
   }: {
     steps: WizardStep[];
     /** 运行中的步骤 id（父组件持有，跨组件复用时状态上收）。 */
     running?: string | null;
     /** params 仅 whisper-model 步骤携带（model/mirror），其余步骤不传。 */
     onrun: (id: string, force: boolean, params?: WizardRunParams) => void;
+    /** 取消运行中的步骤（走查 2026-09-24）；未提供时中断按钮隐藏、退回禁用态。 */
+    oncancel?: (id: string) => void;
   } = $props();
 
   /** 每步独立的强制开关（纯视图状态，不落库）。 */
@@ -87,16 +95,18 @@
   });
 
   /**
-   * 状态文案按 kind 分型：命令类=待执行/已安装，下载类=待下载/已下载；
-   * running 一律「进行中」，skipped「已跳过」，失败统一「失败」。
+   * 状态文案按 kind 分型：命令类=待执行/执行中/已安装，下载类=待下载/下载中/
+   * 已下载（走查 2026-09-24 · 二轮：running 不再统一「进行中」）。isRunning 为
+   * 父组件乐观值（pending 但刚点过运行）时同样按 kind 显示运行文案。
    */
   function statusLabel(step: WizardStep, isRunning: boolean): string {
-    if (isRunning) return "进行中";
+    const runningLabel = step.kind === "command" ? "执行中" : "下载中";
+    if (isRunning) return runningLabel;
     switch (step.status) {
       case "pending":
         return step.kind === "command" ? "待执行" : "待下载";
       case "running":
-        return "进行中";
+        return runningLabel;
       case "done":
         return step.kind === "command" ? "已安装" : "已下载";
       case "failed":
@@ -184,27 +194,15 @@
               {statusLabel(step, isRunning)}
             </Badge>
           </span>
-          <!-- summary 内嵌实时预览：命令=尾行日志，下载=进度条（未开始时显示文案占位，避免空条） -->
-          {#if step.kind === "command"}
-            <span
-              class="w-full truncate rounded bg-muted/60 px-1.5 py-0.5 text-left font-mono text-[11px] text-muted-foreground"
-            >
-              {step.lastLog.length > 0 ? lastLine(step.lastLog) : (step.command ?? "")}
-            </span>
-          {:else if step.status === "running" || step.progress > 0}
-            <span class="flex h-1.5 w-full overflow-hidden rounded-full bg-muted">
-              <span
-                class="h-full rounded-full transition-all duration-300 {step.status === 'failed'
-                  ? 'bg-destructive'
-                  : 'bg-primary'}"
-                style="width: {step.progress}%"
-              ></span>
-            </span>
-          {:else}
-            <span class="w-full truncate rounded bg-muted/60 px-1.5 py-0.5 text-left font-mono text-[11px] text-muted-foreground">
-              {step.url ?? ""}
-            </span>
-          {/if}
+          <!-- summary 内嵌预览（走查 2026-09-24 · 二轮：title 不再放进度条——展开
+               面板已有唯一进度条，title 只留命令尾行/下载 URL 的 mono 摘要） -->
+          <span
+            class="w-full truncate rounded bg-muted/60 px-1.5 py-0.5 text-left font-mono text-[11px] text-muted-foreground"
+          >
+            {step.kind === "command"
+              ? (step.lastLog.length > 0 ? lastLine(step.lastLog) : (step.command ?? ""))
+              : (step.url ?? "")}
+          </span>
         </span>
       </Accordion.Trigger>
       <Accordion.Content>
@@ -238,11 +236,12 @@
               <span>命令：<span class="font-mono text-foreground">{step.command}</span></span>
             {/if}
           </div>
-          {#if step.kind === "download" && step.progressText}
-            <!-- BUG1：下载进度条 + current/total 文案；终态保留（100% / 失败红条），不清空。 -->
+          {#if step.kind === "download"}
+            <!-- BUG1：下载进度条 + current/total 文案；终态保留（100% / 失败红条），不清空。
+                 未开始（无进度文案）显示占位，保持面板结构稳定。 -->
             <div class="flex flex-col gap-1">
               <div class="flex items-center justify-between gap-2">
-                <span class="font-mono text-foreground">{step.progressText}</span>
+                <span class="font-mono text-foreground">{step.progressText ?? "未开始下载"}</span>
                 {#if step.status === "failed"}
                   <span class="text-destructive">下载失败</span>
                 {/if}
@@ -307,14 +306,28 @@
               />
               <span>{step.kind === "command" ? "强制执行（嗅探已装也重跑）" : "强制下载（已存在也重下）"}</span>
             </label>
-            <Button
-              size="sm"
-              disabled={isRunning || rerunLocked}
-              onclick={() => runStep(step, force)}
-            >
-              <IconPlay />
-              {isRunning ? "执行中…" : actionLabel(step)}
-            </Button>
+            {#if isRunning}
+              {#if oncancel}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  class="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  onclick={() => oncancel(step.id)}
+                >
+                  <IconSquare class="size-3 fill-current" />
+                  中断
+                </Button>
+              {:else}
+                <Button size="sm" disabled>
+                  {step.kind === "command" ? "执行中…" : "下载中…"}
+                </Button>
+              {/if}
+            {:else}
+              <Button size="sm" disabled={rerunLocked} onclick={() => runStep(step, force)}>
+                <IconPlay />
+                {actionLabel(step)}
+              </Button>
+            {/if}
           </div>
           {#if rerunLocked && !isRunning}
             <p class="text-right text-[11px] text-muted-foreground">{rerunHint(step)}</p>

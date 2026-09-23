@@ -19,6 +19,16 @@ import {
 import { createServices } from './helpers.js';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 
+/** 轮询等待条件为真（本 vitest 版本无 expect.waitFor）。 */
+async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (cond()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`waitFor 超时（${timeoutMs}ms）`);
+}
+
 function seedsIn(svc: ReturnType<typeof createServices>) {
   const target = path.join(svc.root, 'downloads');
   return {
@@ -240,6 +250,91 @@ describe('wizard 命令步骤', () => {
       // 2026-09-23：dsh 步骤退役——内核是 SDK 进程内嵌（pnpm install 就位），非系统依赖。
       expect(rows.find((r) => r.id === 'dsh')).toBeUndefined();
       expect(defaultWizardSeeds({ dataRoot: s.config.dataRoot, shufaToolDir: s.root + '/shufa-tool' }).length).toBe(3);
+    } finally {
+      s.dispose();
+    }
+  });
+});
+
+describe('wizard 取消（走查 2026-09-24）', () => {
+  test('运行中的命令步骤可取消：组杀 → 回 pending + [中断] 行，run() 正常 settle', async () => {
+    const s = createServices();
+    try {
+      const { target } = seedsIn(s);
+      const seeds = [
+        {
+          id: 'long-cmd',
+          kind: 'command' as const,
+          title: '长命令（取消面）',
+          command: 'echo tick && sleep 30 && echo tock',
+          targetDir: target,
+        },
+      ];
+      const runner = new WizardRunner(s.db, seeds);
+      installWizardSeeds(s.db, seeds);
+      const pending = runner.run('long-cmd', true);
+      // 等 running 落库（开始执行…行写出）再取消。
+      await waitFor(() => getWizardStep(s.db, 'long-cmd')?.status === 'running');
+      await expect(runner.cancel('long-cmd')).resolves.toEqual({ ok: true });
+      const view = await pending;
+      expect(view.status).toBe('pending');
+      expect(view.last_log ?? '').toContain('[中断] 用户取消');
+      // 取消后互斥释放：可再次发起。
+      await expect(runner.cancel('long-cmd')).rejects.toMatchObject({ code: 'CONFLICT' });
+    } finally {
+      s.dispose();
+    }
+  });
+
+  test('运行中的下载可取消：abort → 回 pending，.download 残留供续传', async () => {
+    const s = createServices();
+    try {
+      const { target } = seedsIn(s);
+      // 慢速源：每 50ms 发 1KB，取消窗口充裕。
+      const server = http.createServer((_req, res) => {
+        res.writeHead(200, { 'content-length': '102400' });
+        const timer = setInterval(() => res.write(Buffer.alloc(1024)), 50);
+        res.on('close', () => clearInterval(timer));
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const port = (server.address() as { port: number }).port;
+      const seeds = [
+        {
+          id: 'slow-dl',
+          kind: 'download' as const,
+          title: '慢速下载（取消面）',
+          command: null,
+          url: `http://127.0.0.1:${port}/model-slow.bin`,
+          targetDir: target,
+        },
+      ];
+      const runner = new WizardRunner(s.db, seeds);
+      installWizardSeeds(s.db, seeds);
+      const pending = runner.run('slow-dl', true);
+      await waitFor(() => getWizardStep(s.db, 'slow-dl')?.status === 'running');
+      // 等到有实际字节落盘再取消（保证 .download 残留非空）。
+      const tmp = `${path.join(target, 'model-slow.bin')}.download`;
+      await waitFor(() => existsSync(tmp));
+      runner.cancel('slow-dl');
+      const view = await pending;
+      expect(view.status).toBe('pending');
+      expect(view.last_log ?? '').toContain('[中断] 用户取消');
+      expect(view.last_log ?? '').toContain('可续传');
+      expect(existsSync(tmp)).toBe(true);
+      server.close();
+    } finally {
+      s.dispose();
+    }
+  });
+
+  test('cancel 未知步骤 NOT_FOUND；未运行 CONFLICT', async () => {
+    const s = createServices();
+    try {
+      const { seeds } = seedsIn(s);
+      const runner = new WizardRunner(s.db, seeds);
+      installWizardSeeds(s.db, seeds);
+      await expect(runner.cancel('nope')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      await expect(runner.cancel('dl')).rejects.toMatchObject({ code: 'CONFLICT' });
     } finally {
       s.dispose();
     }

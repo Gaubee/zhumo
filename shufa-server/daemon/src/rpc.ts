@@ -35,6 +35,7 @@ import {
   TaskFollowupInputSchema,
   TaskGetInputSchema,
   UpdateUserInputSchema,
+  WizardCancelInputSchema,
   WizardRunInputSchema,
 } from '@zhumo/contracts';
 import { ANONYMOUS_USERNAME } from '@zhumo/contracts';
@@ -222,6 +223,12 @@ const setupSteps = setupGated.handler(async ({ context }) => {
 
 const setupRunStep = setupGated.input(WizardRunInputSchema).handler(async ({ context, input }) => {
   return context.wizard.run(input.id, input.force, { model: input.model, mirror: input.mirror });
+});
+
+// 取消运行中的步骤（走查 2026-09-24）：不经 setupGated——与 complete 同因，
+// needs_setup 建管理员后即翻 false，而准备步骤在完成安装前仍可取消重跑。
+const setupCancelStep = base.input(WizardCancelInputSchema).handler(async ({ context, input }) => {
+  return context.wizard.cancel(input.id);
 });
 
 // 完成标记不能挂 setupGated：needs_setup 在建管理员后即翻 false，complete 会恒
@@ -428,6 +435,12 @@ const adminWizardRun = requireActiveAdmin
     return context.wizard.run(input.id, input.force, { model: input.model, mirror: input.mirror });
   });
 
+const adminWizardCancel = requireActiveAdmin
+  .input(WizardCancelInputSchema)
+  .handler(async ({ context, input }) => {
+    return context.wizard.cancel(input.id);
+  });
+
 // ---------------------------------------------------------------- models 目录（走查 BUG4）
 
 /** 预设目录：builtin（pi-ai 内嵌）恒在 + models.dev 缓存追加（公开面，无敏感值）。 */
@@ -555,6 +568,7 @@ export const router = {
     createAdmin: setupCreateAdmin,
     steps: setupSteps,
     runStep: setupRunStep,
+    cancelStep: setupCancelStep,
     complete: setupComplete,
   },
 
@@ -583,6 +597,7 @@ export const router = {
     wizard: {
       steps: adminWizardSteps,
       runStep: adminWizardRun,
+      cancelStep: adminWizardCancel,
     },
     models: {
       catalog: adminModelsCatalog,

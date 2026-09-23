@@ -193,6 +193,17 @@
     }
   }
 
+  /** 取消运行中的步骤（走查 2026-09-24）：与 SetupPage.cancelStep 同型。 */
+  async function cancelStep(id: string): Promise<void> {
+    try {
+      await api.cancelWizardStep(id);
+    } catch {
+      /* 已结束/竞态静默：轮询与 runStep 收尾会把状态带正 */
+    } finally {
+      await refreshWizardSteps();
+    }
+  }
+
   /** BUG1：真后端无推送——运行期间每 1s 轮询；runningStep 清空即停；卸载回收定时器。 */
   async function refreshWizardSteps(): Promise<void> {
     try {
@@ -416,7 +427,12 @@
             <div class="mx-auto max-w-2xl space-y-4">
               <section class="space-y-2">
                 <h2 class="text-sm font-medium">准备步骤重跑</h2>
-                <PrepStepsAccordion steps={wizardSteps} running={runningStep} onrun={runStep} />
+                <PrepStepsAccordion
+                  steps={wizardSteps}
+                  running={runningStep}
+                  onrun={runStep}
+                  oncancel={cancelStep}
+                />
               </section>
               <section class="rounded-lg border bg-card p-4">
                 <ModelsConfig />

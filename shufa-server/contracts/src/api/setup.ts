@@ -96,6 +96,10 @@ export const WizardRunInputSchema = z.object({
 });
 export type WizardRunInput = z.infer<typeof WizardRunInputSchema>;
 
+/** 取消运行中的向导步骤（走查 2026-09-24）：命令组杀/下载 abort，状态回 pending。 */
+export const WizardCancelInputSchema = z.object({ id: IdSchema });
+export type WizardCancelInput = z.infer<typeof WizardCancelInputSchema>;
+
 export const CreateAdminInputSchema = z.object({
   username: z.string().min(1).max(64),
   password: z.string().min(6).max(128),

@@ -51,6 +51,7 @@ import {
   onTaskFrame,
   onWizardStepChange,
   replayAgentTurn,
+  cancelWizardStepMock,
   runWizardStepMock,
 } from "$lib/mock/data";
 import { mockResources } from "$lib/mock/resources";
@@ -93,6 +94,7 @@ interface ShufaRpc {
     createAdmin(input: CreateAdminRpcInput): Promise<TokenOutput>;
     steps(): Promise<WizardStepsOutput>;
     runStep(input: WizardRunInput): Promise<ContractWizardStep>;
+    cancelStep(input: { id: string }): Promise<{ ok: true }>;
     complete(): Promise<{ ok: true }>;
   };
   auth: {
@@ -125,6 +127,7 @@ interface ShufaRpc {
     wizard: {
       steps(): Promise<WizardStepsOutput>;
       runStep(input: WizardRunInput): Promise<ContractWizardStep>;
+      cancelStep(input: { id: string }): Promise<{ ok: true }>;
     };
   };
   tasks: {
@@ -155,6 +158,8 @@ export interface ShufaApi {
   getWizardSteps(): Promise<WizardStep[]>;
   /** params 仅 whisper-model 步骤携带（model/mirror），其余步骤不传。 */
   runWizardStep(id: string, force: boolean, params?: WizardRunParams): Promise<void>;
+  /** 取消运行中的步骤（走查 2026-09-24）：命令组杀/下载 abort，状态回 pending。 */
+  cancelWizardStep(id: string): Promise<void>;
   subscribeWizardSteps(onChange: () => void): () => void;
   completeSetup(): Promise<void>;
   listUsers(): Promise<UserInfo[]>;
@@ -286,6 +291,10 @@ class MockApi implements ShufaApi {
 
   async runWizardStep(id: string, force: boolean, params?: WizardRunParams): Promise<void> {
     void runWizardStepMock(id, force, params);
+  }
+
+  async cancelWizardStep(id: string): Promise<void> {
+    await cancelWizardStepMock(id);
   }
 
   subscribeWizardSteps(onChange: () => void): () => void {
@@ -647,6 +656,16 @@ class RpcApi implements ShufaApi {
     } catch (error) {
       if (!isForbiddenOrUnauthorized(error)) throw error;
       await rpc().admin.wizard.runStep(input);
+    }
+  }
+
+  async cancelWizardStep(id: string): Promise<void> {
+    // 与 runStep 同型的 setup 优先回退（完成后 setup 面 403 → admin 面）。
+    try {
+      await rpc().setup.cancelStep({ id });
+    } catch (error) {
+      if (!isForbiddenOrUnauthorized(error)) throw error;
+      await rpc().admin.wizard.cancelStep({ id });
     }
   }
 
