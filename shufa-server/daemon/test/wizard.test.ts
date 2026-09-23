@@ -444,6 +444,12 @@ describe('wizard 种子定义（走查 R3/R4/R5/R6）', () => {
     expect(defaultWizardSeeds(ctx, 'win32', 'arm64').find((s) => s.id === 'whisper-model')).toBeUndefined();
     // --extra transcribe：基础 sync 不含可选依赖（反而卸掉 mlx-whisper/torch）。
     expect(seeds.find((s) => s.id === 'python-env')?.command).toContain('--extra transcribe');
+    // 探测验 venv 内容而非 uv 存在性（--no-sync 快速失败），mlx 平台含 transcribe imports。
+    const probe = seeds.find((s) => s.id === 'python-env')?.probe ?? '';
+    expect(probe).toContain('--no-sync');
+    expect(probe).toContain('huggingface_hub');
+    expect(probe).toContain('mlx_whisper');
+    expect(defaultWizardSeeds(ctx, 'linux', 'arm64').find((s) => s.id === 'python-env')?.probe ?? '').not.toContain('mlx_whisper');
   });
 });
 

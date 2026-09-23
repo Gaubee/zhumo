@@ -145,6 +145,14 @@ export function defaultWizardSeeds(
       : platform === 'win32'
         ? 'winget install -e --id Gyan.FFmpeg'
         : 'sudo apt-get install -y ffmpeg';
+  // python-env 探测（四轮实证修正）：`uv --version` 只证明 uv 在，不证明 venv
+  // 就绪——全新克隆上 sniff 误报「已安装」，whisper 预热直接炸「huggingface_hub
+  // 未安装」。改验 venv 真实内容（--no-sync 不触发隐式安装，缺则快速失败）；
+  // transcribe 相关 import 只在 mlx 平台要求（extra 在其他平台是空集）。
+  const pyProbeImports =
+    platform === 'darwin' && arch === 'arm64'
+      ? 'import cv2, numpy, huggingface_hub, mlx_whisper'
+      : 'import cv2, numpy';
   const steps: WizardSeedInput[] = [
     {
       id: 'ffmpeg',
@@ -162,7 +170,7 @@ export function defaultWizardSeeds(
       // mlx-whisper/torch——转录能力静默消失。extra 自带平台标记，非 darwin
       // 上是空集，恒可安全传入。
       command: `uv sync --project "${ctx.shufaToolDir}" --extra transcribe`,
-      probe: 'uv --version',
+      probe: `uv run --no-sync --project "${ctx.shufaToolDir}" python -c "${pyProbeImports}"`,
       targetDir: ctx.shufaToolDir,
     },
   ];
