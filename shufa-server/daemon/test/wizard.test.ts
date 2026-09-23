@@ -9,6 +9,7 @@ import path from 'node:path';
 import { WHISPER_MODEL_CATALOG, WHISPER_MIRRORS } from '@zhumo/contracts';
 import { getWizardStep, listWizardSteps, updateWizardProgress } from '../src/db/store.js';
 import {
+  capStepLog,
   defaultWizardSeeds,
   downloadTargetPath,
   installWizardSeeds,
@@ -35,8 +36,24 @@ function seedsIn(svc: ReturnType<typeof createServices>) {
         id: 'probe-miss',
         kind: 'command' as const,
         title: '嗅探未命中（真实执行）',
+        // 走查 BUG1 后验语义：命令安装产物 + probe 验证产物 → 成功后验通过。
+        command: 'echo installed-ok && touch installed.marker',
+        probe: 'test -f installed.marker',
+        targetDir: target,
+      },
+      {
+        id: 'probe-fail-after',
+        kind: 'command' as const,
+        title: '命令成功但后验不通过',
         command: 'echo installed-ok',
         probe: 'false',
+        targetDir: target,
+      },
+      {
+        id: 'multi-log',
+        kind: 'command' as const,
+        title: '多行输出',
+        command: 'echo alpha && echo beta && echo gamma',
         targetDir: target,
       },
       {
@@ -91,7 +108,7 @@ describe('wizard 命令步骤', () => {
     }
   });
 
-  test('嗅探未命中 → 真实执行命令，last-line-log 逐行入库', async () => {
+  test('嗅探未命中 → 真实执行；成功后验通过 → done；全量日志含输出与终态行', async () => {
     const s = createServices();
     try {
       const { seeds } = seedsIn(s);
@@ -99,13 +116,100 @@ describe('wizard 命令步骤', () => {
       installWizardSeeds(s.db, seeds);
       const view = await runner.run('probe-miss', false);
       expect(view.status).toBe('done');
-      expect(view.last_log).toContain('installed-ok');
+      const log = view.last_log ?? '';
+      // 走查 BUG1：全量日志（开始行 + 命令输出 + 终态行）不再只有最后一行。
+      expect(log).toContain('开始执行…');
+      expect(log).toContain('installed-ok');
+      expect(log).toContain('[完成] 退出码 0');
+      expect(log.indexOf('开始执行…')).toBeLessThan(log.indexOf('installed-ok'));
+      expect(log.indexOf('installed-ok')).toBeLessThan(log.indexOf('[完成] 退出码 0'));
     } finally {
       s.dispose();
     }
   });
 
-  test('命令失败 → failed + 退出码入库；force 重跑嗅探命中的步骤', async () => {
+  test('BUG1 后验嗅探（失败分支）：命令退出 0 但 probe 不通过 → failed + 追加说明', async () => {
+    const s = createServices();
+    try {
+      const { seeds } = seedsIn(s);
+      const runner = new WizardRunner(s.db, seeds);
+      installWizardSeeds(s.db, seeds);
+      const view = await runner.run('probe-fail-after', false);
+      expect(view.status).toBe('failed');
+      const log = view.last_log ?? '';
+      expect(log).toContain('installed-ok');
+      expect(log).toContain('[完成] 退出码 0');
+      expect(log).toContain(
+        '命令执行成功但嗅探未通过（依赖可能未进入当前 PATH，或需重开终端），请检查后强制重试',
+      );
+      expect(log.indexOf('[完成] 退出码 0')).toBeLessThan(log.indexOf('命令执行成功但嗅探未通过'));
+    } finally {
+      s.dispose();
+    }
+  });
+
+  test('BUG1 全量追加与历史保留：重跑不清空上一轮日志', async () => {
+    const s = createServices();
+    try {
+      const { seeds } = seedsIn(s);
+      const runner = new WizardRunner(s.db, seeds);
+      installWizardSeeds(s.db, seeds);
+      const first = await runner.run('multi-log', false);
+      expect(first.status).toBe('done');
+      expect(first.last_log).toContain('alpha');
+      expect(first.last_log).toContain('beta');
+      expect(first.last_log).toContain('gamma');
+
+      // force 重跑：上一轮输出仍在（不许丢历史），并新增第二轮终态行。
+      const second = await runner.run('multi-log', true);
+      expect(second.status).toBe('done');
+      const log = second.last_log ?? '';
+      expect(log.split('alpha').length - 1).toBe(2); // 两轮各一条
+      expect(log.split('[完成] 退出码 0').length - 1).toBe(2);
+    } finally {
+      s.dispose();
+    }
+  });
+
+  test('BUG1 日志截断：64KB 上限截头标注（单元）与大输出落库（集成）', async () => {
+    // 单元：capStepLog 截头保尾 + 标注 + 字节上限。
+    const marker = '…（日志已截断）';
+    const big = `${'a'.repeat(30_000)}\n${'中'.repeat(25_000)}\nTAIL-LINE`;
+    const capped = capStepLog(big);
+    expect(Buffer.byteLength(capped, 'utf8')).toBeLessThanOrEqual(64 * 1024);
+    expect(capped.startsWith(marker)).toBe(true);
+    expect(capped.endsWith('TAIL-LINE')).toBe(true);
+    // 小日志原样通过。
+    expect(capStepLog('hello')).toBe('hello');
+
+    // 集成：>64KB 命令输出 → 落库日志被截断且终态行仍追加在尾。
+    const s = createServices();
+    try {
+      const target = path.join(s.root, 'downloads');
+      const seeds = [
+        {
+          id: 'flood',
+          kind: 'command' as const,
+          title: '超长输出',
+          // 4000 行 ×29B ≈ 116KB > 64KB 上限（行数控制写库次数，避免测试拖慢）。
+          command: 'yes flood-padding-line-0123456789 | head -n 4000',
+          targetDir: target,
+        },
+      ];
+      const runner = new WizardRunner(s.db, seeds);
+      installWizardSeeds(s.db, seeds);
+      const view = await runner.run('flood', false);
+      expect(view.status).toBe('done');
+      const log = view.last_log ?? '';
+      expect(Buffer.byteLength(log, 'utf8')).toBeLessThanOrEqual(64 * 1024);
+      expect(log.startsWith(marker)).toBe(true);
+      expect(log.endsWith('[完成] 退出码 0')).toBe(true);
+    } finally {
+      s.dispose();
+    }
+  });
+
+  test('命令失败 → failed + 终态行入库；force 重跑嗅探命中的步骤', async () => {
     const s = createServices();
     try {
       const { seeds } = seedsIn(s);
@@ -349,6 +453,26 @@ describe('wizard 下载步骤（真实 HTTP）', () => {
       const forced = await runner.run('dl', true);
       expect(forced.status).toBe('done');
       expect(readFileSync(file).byteLength).toBe(payload.byteLength);
+    } finally {
+      s.dispose();
+    }
+  });
+
+  test('BUG3 进度行原位替换：同一下载只留最新进度，历史与终态行保留', async () => {
+    const s = createServices();
+    try {
+      const target = path.join(s.root, 'models-progress');
+      const runner = new WizardRunner(s.db, dlSeeds(target));
+      installWizardSeeds(s.db, dlSeeds(target));
+      const view = await runner.run('dl', false);
+      expect(view.status).toBe('done');
+      const log = view.last_log ?? '';
+      // 3MB 载荷产生多条 MB 粒度进度更新，但落库日志里进度行只保留最后一条。
+      expect((log.match(/已下载 /g) ?? []).length).toBe(1);
+      // 历史非进度日志保留 + 完成终态行追加在尾（含路径与体积）。
+      expect(log).toContain('开始执行…');
+      expect(log).toContain('下载完成：');
+      expect(log.indexOf('已下载 ')).toBeLessThan(log.indexOf('下载完成：'));
     } finally {
       s.dispose();
     }

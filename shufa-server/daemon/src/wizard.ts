@@ -1,12 +1,12 @@
 /**
  * 安装向导引擎（PRODUCT_DESIGN.md §1 准备步骤、§4 setup/admin.wizard 路由）。
  * 原始需求 2026-09-23（W2'）；走查修订 2026-09-22（R3 dsh 包名 / R4 删 webui-install /
- * R5 三平台种子 / R6 whisper 型号+镜像+断点续传）。
- * last_log 逐行更新、进度写库；嗅探默认跳过、force 强制。
+ * R5 三平台种子 / R6 whisper 型号+镜像+断点续传）；走查修订 2026-09-23
+ * （BUG1 全量日志+终态行+后验嗅探 / BUG3 下载进度行原位替换）。
  * 正交意图：
  *   [1] 种子清单（按 OS 派生）与迁移落库（定义字段更新、下线行删除、运行态保留）。
- *   [2] 命令步骤：shell 执行 + last-line-log 逐行入库。
- *   [3] 下载步骤：HTTP(S) 断点续传（.download + Range 206）+ 进度入库，原子落位。
+ *   [2] 命令步骤：shell 执行 + 全量日志逐行追加（64KB 截断）+ 终态行 + 成功后验嗅探。
+ *   [3] 下载步骤：HTTP(S) 断点续传（.download + Range 206）+ 进度行原位替换，原子落位。
  *   [4] 嗅探跳过 / force 重跑 / 同步互斥（并发 run 同一步骤拒绝）。
  *   [5] whisper 步骤参数化：型号×镜像组装 URL 并持久化回行。
  */
@@ -52,6 +52,72 @@ export interface WizardSeedInput {
 }
 
 const MB = 1024 * 1024;
+
+/** 单步日志上限（走查 BUG1）：超出截断头部并标注。 */
+export const WIZARD_LOG_MAX_BYTES = 64 * 1024;
+export const WIZARD_LOG_TRUNCATION_MARKER = '…（日志已截断）';
+/** 下载进度行前缀（走查 BUG3）：同一下载会话内原位替换，不刷屏。 */
+export const DOWNLOAD_PROGRESS_PREFIX = '已下载 ';
+/** 命令成功但后验嗅探未通过的失败说明（走查 BUG1：如实反映 PATH/验证现状）。 */
+export const POST_PROBE_FAILED_MESSAGE =
+  '命令执行成功但嗅探未通过（依赖可能未进入当前 PATH，或需重开终端），请检查后强制重试';
+
+/**
+ * 单步全量日志写入面（走查 BUG1/BUG3）：last_log 从「仅最新一行」改为全量追加，
+ * 64KB 截头；下载进度行特殊——同一下载会话内替换上一条进度行，非进度日志
+ * （命令输出、终态行、嗅探说明）永久保留。单步同时只有一个 run（running 集合互斥），
+ * 状态机无并发竞争。
+ */
+class StepLogWriter {
+  private text: string;
+  private progressOpen = false;
+
+  constructor(
+    private readonly db: SqliteDb,
+    private readonly id: string,
+    initial: string | null,
+  ) {
+    this.text = initial ?? '';
+  }
+
+  /** 追加一条普通日志（命令输出 / 终态行 / 嗅探说明）。 */
+  append(line: string): void {
+    this.write(line, false);
+  }
+
+  /** 追加下载进度行：上一条仍是进度行时原位替换。 */
+  appendProgress(line: string): void {
+    this.write(line, true);
+  }
+
+  private write(line: string, isProgress: boolean): void {
+    if (isProgress && this.progressOpen) {
+      const nl = this.text.lastIndexOf('\n');
+      this.text = nl === -1 ? line : `${this.text.slice(0, nl + 1)}${line}`;
+    } else {
+      this.text = this.text ? `${this.text}\n${line}` : line;
+    }
+    this.progressOpen = isProgress;
+    this.text = capStepLog(this.text);
+    updateWizardProgress(this.db, this.id, { lastLog: this.text });
+  }
+}
+
+/** 64KB 截头（走查 BUG1）：丢弃最老的行，头部标注截断标记；对齐换行与 UTF-8 字符边界。 */
+export function capStepLog(text: string): string {
+  let bytes = Buffer.from(text, 'utf8');
+  if (bytes.byteLength <= WIZARD_LOG_MAX_BYTES) return text;
+  const markerBytes = Buffer.byteLength(WIZARD_LOG_TRUNCATION_MARKER, 'utf8');
+  const budget = WIZARD_LOG_MAX_BYTES - markerBytes - 1;
+  bytes = bytes.subarray(bytes.byteLength - budget);
+  // 对齐到下一换行（避免半行 + 多字节字符残片）。
+  const nl = bytes.indexOf(0x0a);
+  if (nl >= 0) bytes = bytes.subarray(nl + 1);
+  let start = 0;
+  while (start < bytes.byteLength && (bytes[start]! & 0xc0) === 0x80) start += 1;
+  bytes = bytes.subarray(start);
+  return `${WIZARD_LOG_TRUNCATION_MARKER}\n${bytes.toString('utf8')}`;
+}
 
 /** whisper 下载步骤 id（R6 参数化的作用面）。 */
 export const WHISPER_STEP_ID = 'whisper-model';
@@ -152,7 +218,11 @@ export class WizardRunner {
         this.sniff(row, seed),
         new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
       ]);
-      if (reason) updateWizardProgress(this.db, row.id, { status: 'done', lastLog: reason });
+      if (reason) {
+        const log = new StepLogWriter(this.db, row.id, row.last_log);
+        log.append(reason);
+        updateWizardProgress(this.db, row.id, { status: 'done' });
+      }
     }
   }
 
@@ -160,8 +230,10 @@ export class WizardRunner {
    * 执行一步。返回终态视图：
    * - 已 done 且未 force：原样返回（跳过语义）；whisper 参数仍会先持久化，
    *   保证「已完成后换型号/镜像」的选择不丢，实际下载发生在下次 run。
-   * - 嗅探通过且未 force：置 done（last_log 记录跳过原因）。
-   * - 否则真实执行命令/下载，进度逐行写库。
+   * - 嗅探通过且未 force：置 done（日志追加跳过原因，历史保留）。
+   * - 否则真实执行命令/下载：全量日志逐行追加；命令结束后无论成败追加终态行
+   *   （[完成] 退出码 0 / [失败] 退出码 N）；命令成功再做一次后验嗅探——
+   *   通过 → done，不通过 → failed + 追加说明（走查 BUG1，2026-09-23）。
    * params（走查 R6）：whisper-model 步骤提供 model/mirror 时按 catalog+mirror
    * 组装 URL 并持久化回行；未提供时用行上既有 url。
    */
@@ -188,22 +260,44 @@ export class WizardRunner {
     if (!force) {
       const skipReason = await this.sniff(row, seed);
       if (skipReason) {
-        updateWizardProgress(this.db, id, { status: 'done', lastLog: skipReason });
+        const log = new StepLogWriter(this.db, id, row.last_log);
+        log.append(skipReason);
+        updateWizardProgress(this.db, id, { status: 'done' });
         return toView(getWizardStep(this.db, id));
       }
     }
 
     this.running.add(id);
+    const log = new StepLogWriter(this.db, id, row.last_log);
     try {
-      updateWizardProgress(this.db, id, { status: 'running', lastLog: '开始执行…' });
-      const finalLog =
-        row.kind === 'command'
-          ? await this.runCommand(id, row)
-          : await this.runDownload(id, row);
-      updateWizardProgress(this.db, id, { status: 'done', lastLog: finalLog });
+      updateWizardProgress(this.db, id, { status: 'running' });
+      log.append('开始执行…');
+      if (row.kind === 'command') {
+        const code = await this.runCommand(id, row, log);
+        // 终态行（走查 BUG1）：无论成败都追加，退出码如实入库。
+        log.append(code === 0 ? '[完成] 退出码 0' : `[失败] 退出码 ${code}`);
+        if (code !== 0) {
+          updateWizardProgress(this.db, id, { status: 'failed' });
+        } else {
+          // 后验嗅探（走查 BUG1）：命令成功 ≠ 依赖就绪（PATH 未生效等），重跑
+          // probe 如实反映——不通过则 failed + 说明，引导用户强制重试。
+          if (await this.probePasses(row, seed)) {
+            updateWizardProgress(this.db, id, { status: 'done' });
+          } else {
+            log.append(POST_PROBE_FAILED_MESSAGE);
+            updateWizardProgress(this.db, id, { status: 'failed' });
+          }
+        }
+      } else {
+        // 下载终态（完成行/失败行）同样追加；文件存在 + 尺寸校验即后验（R6 保持）。
+        const doneLine = await this.runDownload(id, row, log);
+        log.append(doneLine);
+        updateWizardProgress(this.db, id, { status: 'done' });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      updateWizardProgress(this.db, id, { status: 'failed', lastLog: message });
+      log.append(`[失败] ${message}`);
+      updateWizardProgress(this.db, id, { status: 'failed' });
     } finally {
       this.running.delete(id);
     }
@@ -224,41 +318,53 @@ export class WizardRunner {
     return null;
   }
 
-  /** 命令步骤：工作目录取 target_dir（目录不存在退到其父级/家目录）。 */
-  private async runCommand(id: string, row: WizardStepRow): Promise<string> {
+  /**
+   * 后验嗅探（走查 BUG1）：命令成功后重跑 probe 验证依赖真实就绪；
+   * 无 probe 定义的命令步骤视为通过（退出码即事实）。download 步骤的后验
+   * 是「文件存在 + 尺寸校验」，在 runDownload 内完成，不走这里。
+   */
+  private async probePasses(row: WizardStepRow, seed: WizardSeedInput | null): Promise<boolean> {
+    if (row.kind === 'download') {
+      const file = downloadTargetPath(row.url ?? '', row.target_dir);
+      return file !== null && existsSync(file);
+    }
+    const probe = seed?.probe ?? null;
+    if (!probe) return true;
+    return (
+      (await runShellCapture(probe, path.dirname(row.target_dir), this.options.shell)) === 0
+    );
+  }
+
+  /** 命令步骤：工作目录取 target_dir（目录不存在退到其父级/家目录）。全量输出逐行入日志。 */
+  private async runCommand(id: string, row: WizardStepRow, log: StepLogWriter): Promise<number> {
     if (!row.command) throw new Error('步骤缺少 command 定义');
     const cwd = workDirFor(row.target_dir);
     const child = spawn(row.command, {
       cwd,
       shell: this.options.shell ?? true,
     });
-    let lastLine = '';
     const onLine = (chunk: Buffer | string): void => {
       for (const line of String(chunk).split(/\r?\n/)) {
         const trimmed = line.trim();
-        if (trimmed) {
-          lastLine = trimmed;
-          updateWizardProgress(this.db, id, { lastLog: trimmed });
-        }
+        if (trimmed) log.append(trimmed);
       }
     };
     child.stdout.on('data', onLine);
     child.stderr.on('data', onLine);
-    const code = await new Promise<number>((resolve, reject) => {
+    return new Promise<number>((resolve, reject) => {
       child.on('error', reject);
-      child.on('close', resolve);
+      child.on('close', (code) => resolve(code ?? -1));
     });
-    if (code !== 0) throw new Error(`命令退出码 ${code}（最后一行：${lastLine || '无输出'}）`);
-    return lastLine || '命令执行完成';
   }
 
   /**
    * 下载步骤：断点续传（走查 R6）。临时文件 `<target>.download`：启动时若存在
    * 即带 `Range: bytes=N-` 续传（206 → append，total 取 Content-Range；200 →
    * 服务端不支持 Range，从头覆盖写）。失败/中断保留 .download 供下次续传；
-   * 尺寸校验通过后原子改名落位。
+   * 尺寸校验通过后原子改名落位。进度行走 appendProgress（走查 BUG3：同一下载
+   * 会话内原位替换，历史非进度日志保留）；完成行由 run() 追加。
    */
-  private async runDownload(id: string, row: WizardStepRow): Promise<string> {
+  private async runDownload(id: string, row: WizardStepRow, log: StepLogWriter): Promise<string> {
     if (!row.url) throw new Error('步骤缺少 url 定义');
     const target = downloadTargetPath(row.url, row.target_dir);
     if (!target) throw new Error(`无法从 url 推导目标文件名：${row.url}`);
@@ -301,16 +407,15 @@ export class WizardRunner {
     const source = Readable.fromWeb(response.body as import('node:stream/web').ReadableStream);
     source.on('data', (chunk: Buffer) => {
       received += chunk.byteLength;
-      // 进度写库按 MB 粒度节流，避免小包高频打sqlite；分母含续传基数。
+      // 进度写库按 MB 粒度节流，避免小包高频打 sqlite；分母含续传基数。
+      // 进度行走原位替换（BUG3）：同一下载会话只保留最新一条进度，不刷屏。
       const done = baseSize + received;
       const mb = Math.floor(done / MB);
       if (mb !== lastLoggedMb) {
         lastLoggedMb = mb;
         const totalText = Number.isFinite(total) ? `${(total / MB).toFixed(1)}MB` : '未知大小';
         const pct = Number.isFinite(total) && total > 0 ? `（${Math.round((done / total) * 100)}%）` : '';
-        updateWizardProgress(this.db, id, {
-          lastLog: `已下载 ${(done / MB).toFixed(1)}MB / ${totalText}${pct}`,
-        });
+        log.appendProgress(`已下载 ${(done / MB).toFixed(1)}MB / ${totalText}${pct}`);
       }
     });
     await pipeline(source, createWriteStream(tmp, { flags: append ? 'a' : 'w' }));

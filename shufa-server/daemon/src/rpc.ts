@@ -4,17 +4,22 @@
  * /admin 全量端点；tasks 四端点接 TaskService（创建含视频直传、详情含帧回放）；
  * res 六端点接 ResourceService（树/建目/改名/移动/删除/上传，认证 + 仅本人资源，
  * admin 可带 owner 参数）。token 经 WS upgrade ?token= 查询参数进入 context。
+ * 走查修订 2026-09-23：BUG2 bootstrap.setup_progress / BUG5 禁用读写分离 +
+ * admin.users.delete 级联 + __anonymous__ 三禁 / BUG6 匿名默认关 / BUG4 models 目录。
  * 正交意图：
- *   [1] context 与守卫中间件（requireAuth / requireAdmin / setupGated）。
+ *   [1] context 与守卫中间件（requireAuth / requireAdmin / requireActiveUser / setupGated）。
  *   [2] 公开与认证端点：bootstrap、setup 全族、auth 全族、me。
- *   [3] admin 端点：用户 CRUD、settings、改密、向导重跑。
- *   [4] tasks 四端点与 res 六端点（服务未装配时 501）。
+ *   [3] admin 端点：用户 CRUD（含删除级联）、settings、改密、向导重跑、models 目录。
+ *   [4] tasks 四端点与 res 六端点（服务未装配时 501；写操作挂 requireActiveUser）。
  */
 import { ORPCError, os } from '@orpc/server';
+import { rmSync } from 'node:fs';
+import path from 'node:path';
 import {
   ChangePasswordInputSchema,
   CreateAdminInputSchema,
   CreateUserInputSchema,
+  DeleteUserInputSchema,
   LoginInputSchema,
   RefreshInputSchema,
   ResDeleteInputSchema,
@@ -35,25 +40,30 @@ import {
 import { ANONYMOUS_USERNAME } from '@zhumo/contracts';
 import type {
   BootstrapOutput,
+  DeleteUserOutput,
   SettingKey,
   UserInfo,
 } from '@zhumo/contracts';
 import type { SqliteDb } from './db/database.js';
 import {
   createUser,
+  deleteUserRow,
   getUserByUsername,
   getUserById,
+  hasNonAnonymousUser,
   listSettings,
   listUsers,
   getSetting,
   putSetting,
   updateUserCredentials,
+  wizardProgressStats,
   type UserRow,
 } from './db/store.js';
 import {
   authenticate,
   hashPassword,
   isAllowAnonymous,
+  SETTING_ALLOW_ANONYMOUS,
   signJwt,
   verifyPassword,
 } from './auth.js';
@@ -63,6 +73,8 @@ import type { WizardRunner } from './wizard.js';
 import { resolveModelRouteInfo } from './tasks/service.js';
 import type { TaskService } from './tasks/service.js';
 import type { ResourceService } from './resources.js';
+import type { BlobStore } from './db/blobs.js';
+import { modelCatalog, refreshModelsDevCache } from './models-catalog.js';
 import { lanUrls } from './lan.js';
 
 /** 每个 WS 连接（或测试调用）注入的初始 context。 */
@@ -80,6 +92,10 @@ export interface RpcContext {
   tasks?: TaskService;
   /** W5 资源管理器服务（未装配时 res 端点 501）。 */
   resources?: ResourceService;
+  /** 内容寻址存储（admin.users.delete 的 blob 引用释放需要；未装配时删除 501）。 */
+  blobs?: BlobStore;
+  /** models.dev 刷新的 fetch 注入口（测试用；缺省全局 fetch）。 */
+  fetchImpl?: typeof fetch;
 }
 
 const base = os.$context<RpcContext>();
@@ -126,9 +142,35 @@ const requireAdmin = requireAuth.use(async ({ context, next }) => {
   return next();
 });
 
+/**
+ * 活跃用户守卫（走查 BUG5，2026-09-23 禁用语义重定义）：禁用 ≠ 不能登录——
+ * 禁用用户可登录、可读（任务列表/详情/已公开结果），仅禁止写操作。
+ * 挂在任务创建/续聊/取消、资源变更/上传、向导执行等写路由上。
+ */
+const requireActiveUser = requireAuth.use(async ({ context, next }) => {
+  if (context.user?.disabled) {
+    throw new ORPCError('FORBIDDEN', {
+      message: '账号已被禁用：不能新建任务，仍可查看已有任务',
+    });
+  }
+  return next();
+});
+
+/** requireActiveUser 的 admin 变体（admin 向导重跑等管理面写操作）。 */
+const requireActiveAdmin = requireAdmin.use(async ({ context, next }) => {
+  if (context.user?.disabled) {
+    throw new ORPCError('FORBIDDEN', {
+      message: '账号已被禁用：不能新建任务，仍可查看已有任务',
+    });
+  }
+  return next();
+});
+
 // ---------------------------------------------------------------- bootstrap / setup
 
 const bootstrap = base.handler(async ({ context }): Promise<BootstrapOutput> => {
+  // 走查 BUG2（2026-09-23）：安装进度随站点态下发，SPA 刷新后由此恢复向导位置。
+  const steps = wizardProgressStats(context.db);
   return {
     needs_setup: needsSetup(context.config),
     allow_anonymous: isAllowAnonymous(context.db),
@@ -136,6 +178,12 @@ const bootstrap = base.handler(async ({ context }): Promise<BootstrapOutput> => 
     // 走查 BUG2（2026-09-23）：模型路由透明化——provider/model/来源对外可见
     // （与 resolveModelRouteFromStore 同一读取链；api key 永不出现在此）。
     model_route: resolveModelRouteInfo(context.db, context.config),
+    setup_progress: {
+      admin_created: hasNonAnonymousUser(context.db),
+      steps_done: steps.done,
+      steps_total: steps.total,
+      model_configured: resolveModelRouteInfo(context.db, context.config) !== null,
+    },
   };
 });
 
@@ -155,6 +203,9 @@ const setupCreateAdmin = setupGated
     context.config.adminUsername = input.username;
     context.config.adminPassword = input.password;
     context.config.jwtSecret = jwtSecret;
+    // 走查 BUG6（Owner 2026-09-23 安全默认）：匿名访问缺省关闭，安装向导第 1 步
+    // 显式勾选（allow_anonymous: true）才写入开启；无论开关都落键（消除缺省歧义）。
+    putSetting(context.db, SETTING_ALLOW_ANONYMOUS, input.allow_anonymous ? '1' : '0');
     const admin = createUser(context.db, {
       username: input.username,
       passwordHash: hashPassword(input.password),
@@ -186,7 +237,8 @@ const authLogin = base.input(LoginInputSchema).handler(async ({ context, input }
   if (!user || !verifyPassword(input.password, user.password_hash)) {
     throw new ORPCError('UNAUTHORIZED', { message: '用户名或密码错误' });
   }
-  if (user.disabled) throw new ORPCError('UNAUTHORIZED', { message: '账号已禁用' });
+  // 走查 BUG5（2026-09-23）：禁用 ≠ 不能登录——签发 token，写操作由
+  // requireActiveUser 拦截（禁用用户可读任务列表/详情/已公开结果）。
   return issueToken(context, user);
 });
 
@@ -235,11 +287,20 @@ const adminUserUpdate = requireAdmin
   .handler(async ({ context, input }) => {
     const target = getUserById(context.db, input.id);
     if (!target) throw new ORPCError('NOT_FOUND', { message: `用户不存在：${input.id}` });
-    const touchesAnonymous =
-      target.username === ANONYMOUS_USERNAME &&
-      (input.role !== undefined || input.disabled !== undefined || input.password !== undefined);
-    if (touchesAnonymous) {
-      throw new ORPCError('CONFLICT', { message: '内置匿名账号不可修改' });
+    // 走查 BUG5 __anonymous__ 三禁：禁改密 / 禁禁用 / 禁改角色（匿名开合只走
+    // allow_anonymous 设置，匿名身份本身不可被后台改动）。
+    if (target.username === ANONYMOUS_USERNAME) {
+      if (input.password !== undefined) {
+        throw new ORPCError('CONFLICT', { message: '内置匿名账号不可改密' });
+      }
+      if (input.disabled !== undefined) {
+        throw new ORPCError('CONFLICT', {
+          message: '内置匿名账号不可禁用（匿名访问开关走 allow_anonymous 设置）',
+        });
+      }
+      if (input.role !== undefined) {
+        throw new ORPCError('CONFLICT', { message: '内置匿名账号不可改角色' });
+      }
     }
     const demotesSelf =
       target.id === context.user?.id &&
@@ -253,6 +314,49 @@ const adminUserUpdate = requireAdmin
       role: input.role,
     });
     return toUserInfo(getUserById(context.db, target.id) as UserRow);
+  });
+
+/**
+ * 删除用户 = 数据级联清理（走查 BUG5，2026-09-23）：results/tasks/resources 行
+ * （连带 .shufa 元数据，它存在于 resources.meta）→ users 行 → blob 引用计数递减
+ * （归零由 BlobStore 回收实体文件）→ 磁盘 DATA_ROOT/users/<username>/ 整目录。
+ * __anonymous__ 与当前登录管理员自己不可删。外键（foreign_keys=ON）决定顺序：
+ * tasks.result_id ↔ results.task_id 循环引用先解空，再按引用方向反序删行。
+ */
+const adminUserDelete = requireAdmin
+  .input(DeleteUserInputSchema)
+  .handler(async ({ context, input }): Promise<DeleteUserOutput> => {
+    const blobs = context.blobs;
+    if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配' });
+    const target = getUserById(context.db, input.id);
+    if (!target) throw new ORPCError('NOT_FOUND', { message: `用户不存在：${input.id}` });
+    if (target.username === ANONYMOUS_USERNAME) {
+      throw new ORPCError('CONFLICT', { message: '内置匿名账号不可删除' });
+    }
+    if (target.id === context.user?.id) {
+      throw new ORPCError('CONFLICT', { message: '不能删除当前登录的管理员自己' });
+    }
+    const db = context.db;
+    // 1) 解开 tasks ↔ results 的循环外键引用。
+    db.prepare('UPDATE tasks SET result_id = NULL WHERE owner_id = ?').run(target.id);
+    db.prepare('UPDATE results SET task_id = NULL WHERE owner_id = ?').run(target.id);
+    // 2) 文件资源行先收集（每行持有一个 blob 引用，逐行释放才算得清计数）。
+    const hashRows = db
+      .prepare('SELECT content_hash FROM resources WHERE owner_id = ? AND content_hash IS NOT NULL')
+      .all(target.id) as Array<{ content_hash: string }>;
+    // 3) 按外键引用方向反序删行：results → tasks → resources → users。
+    db.prepare('DELETE FROM results WHERE owner_id = ?').run(target.id);
+    db.prepare('DELETE FROM tasks WHERE owner_id = ?').run(target.id);
+    db.prepare('DELETE FROM resources WHERE owner_id = ?').run(target.id);
+    deleteUserRow(db, target.id);
+    // 4) blob 引用计数递减（归零回收实体文件与行，见 db/blobs.ts releaseRef）。
+    for (const row of hashRows) blobs.releaseRef(row.content_hash);
+    // 5) 磁盘：整目录移除（资源树/任务目录/.shufa 会话与结果包都在其中）。
+    rmSync(path.join(context.config.dataRoot, 'users', target.username), {
+      recursive: true,
+      force: true,
+    });
+    return { ok: true };
   });
 
 /** 运行时设置白名单（站点三键 + W7 联调补：llm_* 模型路由四键——settings 表
@@ -310,8 +414,30 @@ const adminWizardSteps = requireAdmin.handler(({ context }) => {
   return { steps: context.wizard.list() };
 });
 
-const adminWizardRun = requireAdmin.input(WizardRunInputSchema).handler(async ({ context, input }) => {
-  return context.wizard.run(input.id, input.force, { model: input.model, mirror: input.mirror });
+const adminWizardRun = requireActiveAdmin
+  .input(WizardRunInputSchema)
+  .handler(async ({ context, input }) => {
+    return context.wizard.run(input.id, input.force, { model: input.model, mirror: input.mirror });
+  });
+
+// ---------------------------------------------------------------- models 目录（走查 BUG4）
+
+/** 预设目录：builtin（pi-ai 内嵌）恒在 + models.dev 缓存追加（公开面，无敏感值）。 */
+const adminModelsCatalog = requireAdmin.handler(({ context }) => {
+  return modelCatalog(context.db);
+});
+
+/** models.dev 在线刷新：成功返回合并目录；网络失败中文报错且不伤 builtin/旧缓存。 */
+const adminModelsCatalogRefresh = requireAdmin.handler(async ({ context }) => {
+  try {
+    await refreshModelsDevCache(context.db, context.fetchImpl ?? fetch);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new ORPCError('BAD_REQUEST', {
+      message: `models.dev 预设刷新失败：${detail}（可稍后重试，内置预设不受影响）`,
+    });
+  }
+  return modelCatalog(context.db);
 });
 
 // ---------------------------------------------------------------- tasks（W4 实装）/ res（W5 实装）
@@ -346,7 +472,8 @@ const tasksList = requireAuth.handler(({ context }) => {
   return { tasks: requireTaskService(context).list(context.user as UserRow) };
 });
 
-const tasksCreate = requireAuth
+// 写操作挂 requireActiveUser（走查 BUG5：禁用用户禁写，list/get 保持可读）。
+const tasksCreate = requireActiveUser
   .input(TaskCreateInputSchema)
   .handler(async ({ context, input }) => {
     try {
@@ -364,21 +491,25 @@ const tasksGet = requireAuth.input(TaskGetInputSchema).handler(async ({ context,
   }
 });
 
-const tasksCancel = requireAuth.input(TaskCancelInputSchema).handler(async ({ context, input }) => {
-  try {
-    return await requireTaskService(context).cancel(context.user as UserRow, input.id);
-  } catch (error) {
-    return taskOwnedException(error);
-  }
-});
+const tasksCancel = requireActiveUser
+  .input(TaskCancelInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      return await requireTaskService(context).cancel(context.user as UserRow, input.id);
+    } catch (error) {
+      return taskOwnedException(error);
+    }
+  });
 
-const tasksFollowup = requireAuth.input(TaskFollowupInputSchema).handler(async ({ context, input }) => {
-  try {
-    return await requireTaskService(context).followup(context.user as UserRow, input);
-  } catch (error) {
-    return taskOwnedException(error);
-  }
-});
+const tasksFollowup = requireActiveUser
+  .input(TaskFollowupInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      return await requireTaskService(context).followup(context.user as UserRow, input);
+    } catch (error) {
+      return taskOwnedException(error);
+    }
+  });
 
 // ---------------------------------------------------------------- res（资源管理器，§4「认证（仅本人文件夹）」）
 
@@ -386,23 +517,24 @@ const resTree = requireAuth.input(ResTreeInputSchema).handler(({ context, input 
   return requireResourceService(context).tree(context.user as UserRow, input);
 });
 
-const resMkdir = requireAuth.input(ResMkdirInputSchema).handler(({ context, input }) => {
+// 变更面/上传挂 requireActiveUser（走查 BUG5：禁用用户禁写，树浏览保持可读）。
+const resMkdir = requireActiveUser.input(ResMkdirInputSchema).handler(({ context, input }) => {
   return { item: requireResourceService(context).mkdir(context.user as UserRow, input) };
 });
 
-const resRename = requireAuth.input(ResRenameInputSchema).handler(({ context, input }) => {
+const resRename = requireActiveUser.input(ResRenameInputSchema).handler(({ context, input }) => {
   return { item: requireResourceService(context).rename(context.user as UserRow, input) };
 });
 
-const resMove = requireAuth.input(ResMoveInputSchema).handler(({ context, input }) => {
+const resMove = requireActiveUser.input(ResMoveInputSchema).handler(({ context, input }) => {
   return { item: requireResourceService(context).move(context.user as UserRow, input) };
 });
 
-const resDelete = requireAuth.input(ResDeleteInputSchema).handler(({ context, input }) => {
+const resDelete = requireActiveUser.input(ResDeleteInputSchema).handler(({ context, input }) => {
   return requireResourceService(context).remove(context.user as UserRow, input);
 });
 
-const resUpload = requireAuth.input(ResUploadInputSchema).handler(({ context, input }) => {
+const resUpload = requireActiveUser.input(ResUploadInputSchema).handler(({ context, input }) => {
   return requireResourceService(context).upload(context.user as UserRow, input);
 });
 
@@ -431,6 +563,7 @@ export const router = {
       list: adminUserList,
       create: adminUserCreate,
       update: adminUserUpdate,
+      delete: adminUserDelete,
     },
     settings: {
       get: adminSettingGet,
@@ -442,6 +575,10 @@ export const router = {
     wizard: {
       steps: adminWizardSteps,
       runStep: adminWizardRun,
+    },
+    models: {
+      catalog: adminModelsCatalog,
+      catalogRefresh: adminModelsCatalogRefresh,
     },
   },
 

@@ -4,8 +4,10 @@
   （转录/田字格分析/旁注提取等），预设覆盖典型意图，自由文本兜底。
   R4 [2026-09-23]：生效模型路由未配置（bootstrap.modelRoute === null）时显示
   警示条并禁用创建（视频选择不受影响）。
+  朱墨前端改造 [2026-09-24]（BUG5）：会话用户已被禁用 → 同款警示条 + 禁用创建
+  （禁用账号可登录可读，仅新建任务被拦；daemon 侧双重拦截）。
   正交意图：[1] 素材视频选择；[2] 预设开场 chips；[3] 提示词编辑与创建；
-  [4] 未配置模型路由的创建阻断。
+  [4] 未配置模型路由/账号被禁用的创建阻断。
 -->
 <script lang="ts">
   import IconFile from "@lucide/svelte/icons/file";
@@ -45,13 +47,15 @@
   let sending = $derived(tasks.sending);
   /** R4：bootstrap 已加载且生效路由为 null → 管理员未配置大模型服务。 */
   let modelMissing = $derived(auth.bootstrap !== null && auth.bootstrap.modelRoute === null);
+  /** BUG5：会话用户已被禁用 → 不能新建任务（仍可查看已有任务）。 */
+  let userDisabled = $derived(auth.session !== null && auth.session.disabled);
 
   function applyPreset(presetPrompt: string): void {
     prompt = presetPrompt;
   }
 
   function submit(): void {
-    if (modelMissing) return;
+    if (modelMissing || userDisabled) return;
     const trimmed = prompt.trim();
     if (trimmed.length === 0 || video === null || sending) return;
     prompt = "";
@@ -128,6 +132,17 @@
       </div>
     {/if}
 
+    {#if userDisabled}
+      <!-- BUG5：禁用账号创建阻断（与模型未配置同款警示模式）。 -->
+      <div
+        class="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-[11px] leading-snug text-amber-700"
+        role="alert"
+      >
+        <IconTriangleAlert class="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        <span>账号已被禁用：不能新建任务，仍可查看已有任务。</span>
+      </div>
+    {/if}
+
     <div class="mt-2 flex items-center justify-between gap-2">
       <span class="text-[10px] text-muted-foreground">
         {#if tasks.error}
@@ -138,7 +153,7 @@
       </span>
       <Button
         size="sm"
-        disabled={sending || modelMissing || prompt.trim().length === 0 || video === null}
+        disabled={sending || modelMissing || userDisabled || prompt.trim().length === 0 || video === null}
         onclick={submit}
       >
         <IconSend data-icon="inline-start" />

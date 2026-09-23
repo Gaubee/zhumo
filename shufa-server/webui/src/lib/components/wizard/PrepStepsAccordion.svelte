@@ -8,6 +8,12 @@
   2. done 态按钮默认 disabled，勾选强制开关才 enable，并在按钮附近给说明行。
   3. 嗅探徽章 kind-aware（已安装（嗅探）/ 已下载（嗅探））。
   4. whisper-model 步骤内嵌模型/镜像选择器，选中值随 onrun params 传出。
+  朱墨前端改造 [2026-09-24]（BUG1+3 实时日志与进度）：
+  1. 展开面板 lastLog 全量 <pre> 自动滚底（用户上滚即停，回底恢复跟随）。
+  2. 下载步骤进度条 + current/total 文案（12.3MB / 148.0MB（8%））；终态保留
+     100% / 失败红条，不清空。
+  3. whisper 来源链接显示选中组合的预测 URL（客户端合成，选中即更新；
+     持久化仍由点击下载时后端写）。
   正交意图：
   1. 手风琴呈现（shadcn Accordion）+ 状态徽章（pending/running/done/failed/skipped）。
   2. summary 实时预览分型：command → lastLog 尾行 mono；download → 进度条。
@@ -41,6 +47,44 @@
   /** whisper-model 步骤的模型/镜像选择（默认 base + official）。 */
   let whisperModel = $state("base");
   let whisperMirror = $state<WhisperMirrorId>("official");
+
+  // ---- BUG1：步骤日志 <pre> 自动滚底（仅当用户没往上滚时） ----
+
+  /**
+   * 每步日志 <pre> 元素与吸底标记（键=step.id；缺省吸底）。
+   * 注意：手风琴收起时内容卸载，bind:this 会被置为 null——判空须含 null。
+   */
+  let logEls = $state<Record<string, HTMLPreElement | null | undefined>>({});
+  let logStick = $state<Record<string, boolean>>({});
+
+  /** 用户滚动时更新吸底标记：接近底部=跟随，往上滚=暂停自动滚动。 */
+  function onLogScroll(stepId: string): void {
+    const el = logEls[stepId];
+    if (el === null || el === undefined) return;
+    logStick[stepId] = el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
+  }
+
+  // lastLog 变化 → 吸底的步骤滚到底部（简单实现：scrollTop=scrollHeight）。
+  $effect(() => {
+    for (const step of steps) {
+      void step.lastLog.length;
+      const el = logEls[step.id];
+      if (el !== null && el !== undefined && (logStick[step.id] ?? true)) {
+        el.scrollTop = el.scrollHeight;
+      }
+    }
+  });
+
+  /**
+   * BUG3：whisper 选中模型/镜像组合的预测来源 URL（客户端合成，仅作显示，
+   * 选中立即更新；真正的持久化在点击下载时由后端写）。
+   */
+  const whisperPredictedUrl = $derived.by(() => {
+    const mirror = WHISPER_MIRRORS.find((candidate) => candidate.id === whisperMirror);
+    const model = WHISPER_MODEL_CATALOG.find((candidate) => candidate.id === whisperModel);
+    if (mirror === undefined || model === undefined) return "";
+    return `${mirror.base}/${model.file}`;
+  });
 
   /**
    * 状态文案按 kind 分型：命令类=待执行/已安装，下载类=待下载/已下载；
@@ -150,7 +194,9 @@
           {:else if step.status === "running" || step.progress > 0}
             <span class="flex h-1.5 w-full overflow-hidden rounded-full bg-muted">
               <span
-                class="h-full rounded-full bg-primary transition-all duration-300"
+                class="h-full rounded-full transition-all duration-300 {step.status === 'failed'
+                  ? 'bg-destructive'
+                  : 'bg-primary'}"
                 style="width: {step.progress}%"
               ></span>
             </span>
@@ -167,7 +213,18 @@
             <span>
               目标目录：<span class="font-mono text-foreground">{step.targetDir}</span>
             </span>
-            {#if step.url}
+            {#if step.id === "whisper-model" && whisperPredictedUrl !== ""}
+              <!-- BUG3：whisper 来源=选中模型/镜像的预测 URL（选中即更新，未运行时也显示）。 -->
+              <span>
+                来源：<a
+                  href={whisperPredictedUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  class="text-primary underline underline-offset-2">{whisperPredictedUrl}</a
+                >
+                <span class="text-[10px]">（随选中即时更新；点击下载后由后端持久化）</span>
+              </span>
+            {:else if step.url}
               <span>
                 来源：<a
                   href={step.url}
@@ -181,8 +238,29 @@
               <span>命令：<span class="font-mono text-foreground">{step.command}</span></span>
             {/if}
           </div>
+          {#if step.kind === "download" && step.progressText}
+            <!-- BUG1：下载进度条 + current/total 文案；终态保留（100% / 失败红条），不清空。 -->
+            <div class="flex flex-col gap-1">
+              <div class="flex items-center justify-between gap-2">
+                <span class="font-mono text-foreground">{step.progressText}</span>
+                {#if step.status === "failed"}
+                  <span class="text-destructive">下载失败</span>
+                {/if}
+              </div>
+              <span class="flex h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                <span
+                  class="h-full rounded-full transition-all duration-300 {step.status === 'failed'
+                    ? 'bg-destructive'
+                    : 'bg-primary'}"
+                  style="width: {step.progress}%"
+                ></span>
+              </span>
+            </div>
+          {/if}
           {#if step.lastLog.length > 0}
             <pre
+              bind:this={logEls[step.id]}
+              onscroll={() => onLogScroll(step.id)}
               class="max-h-32 overflow-y-auto rounded-md border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{step.lastLog}</pre
             >
           {/if}

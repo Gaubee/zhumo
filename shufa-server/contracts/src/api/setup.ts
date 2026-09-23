@@ -19,11 +19,26 @@ export const ModelRouteInfoSchema = z.object({
 });
 export type ModelRouteInfo = z.infer<typeof ModelRouteInfoSchema>;
 
+/** 安装进度快照（走查 BUG2，2026-09-23）：bootstrap 随站点态下发，SPA 刷新后由此
+ * 恢复安装向导所在步骤，无需新增端点。 */
+export const SetupProgressSchema = z.object({
+  /** 存在非匿名用户（管理员已建）。 */
+  admin_created: z.boolean(),
+  /** wizard_steps 中 status='done' 的条数。 */
+  steps_done: z.number().int(),
+  /** wizard_steps 总条数。 */
+  steps_total: z.number().int(),
+  /** 模型路由已配置（resolveModelRouteInfo 非 null）。 */
+  model_configured: z.boolean(),
+});
+export type SetupProgress = z.infer<typeof SetupProgressSchema>;
+
 export const BootstrapOutputSchema = z.object({
   needs_setup: z.boolean(),
   allow_anonymous: z.boolean(),
   site_name: z.string(),
   model_route: ModelRouteInfoSchema.nullable(),
+  setup_progress: SetupProgressSchema,
 });
 export type BootstrapOutput = z.infer<typeof BootstrapOutputSchema>;
 
@@ -56,7 +71,8 @@ export const WizardStepSchema = z.object({
   url: z.string().nullable(),
   target_dir: z.string(),
   status: WizardStatusSchema,
-  /** summary 内嵌实时预览：命令=最后一行日志，下载=进度行。 */
+  /** 全量执行日志（走查 BUG1，2026-09-23）：逐行追加、64KB 截断；下载进度行
+   * 原位替换（同一下载会话只留最新进度），命令输出与终态行永久保留。 */
   last_log: z.string().nullable(),
   updated_at: IsoDateTimeSchema,
 });
@@ -79,6 +95,9 @@ export type WizardRunInput = z.infer<typeof WizardRunInputSchema>;
 export const CreateAdminInputSchema = z.object({
   username: z.string().min(1).max(64),
   password: z.string().min(6).max(128),
+  /** 匿名访问开关（走查 BUG6，Owner 2026-09-23 安全默认）：缺省=关闭。
+   * 建管理员时写入 settings.allow_anonymous；安装向导 UI 提供显式开关。 */
+  allow_anonymous: z.boolean().optional(),
 });
 export type CreateAdminInput = z.infer<typeof CreateAdminInputSchema>;
 

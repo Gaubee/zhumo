@@ -5,8 +5,8 @@
  * 正交意图：
  *   [1] scrypt 口令哈希（`scrypt$salt$hash` 格式，timingSafeEqual 校验）。
  *   [2] JWT 签发与校验（jose HS256，7 天过期）。
- *   [3] 匿名账号保障与匿名开关（settings.allow_anonymous，默认开）。
- *   [4] token → 用户视图鉴权（disabled 拒绝），供 rpc 中间件消费。
+ *   [3] 匿名账号保障与匿名开关（settings.allow_anonymous；走查 BUG6 默认关）。
+ *   [4] token → 用户视图鉴权（禁用用户也放行，BUG5 语义：禁写不禁读），供 rpc 消费。
  */
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { SignJWT, jwtVerify } from 'jose';
@@ -79,11 +79,13 @@ export async function verifyJwt(secret: string, token: string): Promise<TokenCla
 // ---------------------------------------------------------------- anonymous
 
 export function isAllowAnonymous(db: SqliteDb): boolean {
-  // §2：匿名开关默认开。settings 缺省或非 '0' 均视为开。
+  // 走查 BUG6（Owner 2026-09-23 安全默认决策）：匿名开关默认**关闭**——settings
+  // 无该键或值为 '0' 均视为关，仅显式写入 '1'（安装向导勾选 / 后台开关）才开启。
+  // 原语义「缺省开」已废弃：全新安装不再默认暴露匿名入口。
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(SETTING_ALLOW_ANONYMOUS) as
     | { value: string }
     | undefined;
-  return row?.value !== '0';
+  return row?.value === '1';
 }
 
 export function setAllowAnonymous(db: SqliteDb, allowed: boolean): void {
@@ -103,7 +105,12 @@ export function ensureAnonymousUser(db: SqliteDb): UserRow {
 
 // ---------------------------------------------------------------- 鉴权入口
 
-/** token → 有效用户行；签名无效、用户缺失、被禁用、角色与库不符一律 null。 */
+/**
+ * token → 有效用户行；签名无效、用户缺失一律 null。
+ * 走查 BUG5（2026-09-23）禁用语义重定义：禁用 = 禁写不禁登录不禁读——被禁用
+ * 用户持有的 token 仍可认证（读任务列表/详情/已公开结果），写操作由 rpc 层
+ * requireActiveUser 中间件拦截，认证面不再因 disabled 拒绝。
+ */
 export async function authenticate(
   secret: string,
   db: SqliteDb,
@@ -113,6 +120,6 @@ export async function authenticate(
   const claims = await verifyJwt(secret, token);
   if (!claims) return null;
   const user = getUserById(db, claims.sub);
-  if (!user || user.disabled) return null;
+  if (!user) return null;
   return user;
 }

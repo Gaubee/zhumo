@@ -141,7 +141,7 @@ export class DaemonHttp {
       socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
       return;
     }
-    const { config, db, wizard, secret, rpcHandler, tasks, resources } = this.options;
+    const { config, db, wizard, secret, rpcHandler, tasks, resources, blobs } = this.options;
     const context: RpcContext = {
       config,
       db,
@@ -150,6 +150,7 @@ export class DaemonHttp {
       token: url.searchParams.get('token') ?? undefined,
       tasks,
       resources,
+      blobs,
     };
     this.wsServer.handleUpgrade(request, socket, head, (websocket) => {
       void rpcHandler

@@ -20,6 +20,7 @@
     "@deepseek-ai/dsh-persona": "0.1.6-alpha.1",
     "@deepseek-ai/dsh-tool-ask-user": "0.1.6-alpha.1",
     "@deepseek-ai/dsh-workspace": "0.1.6-alpha.1",
+    "@earendil-works/pi-ai": "^0.85.1",
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
     "@orpc/server": "^1.15.3",

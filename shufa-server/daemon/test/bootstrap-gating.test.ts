@@ -4,25 +4,62 @@
  */
 import { readFileSync } from 'node:fs';
 import { parseDotenv } from '../src/config.js';
-import { getSetting } from '../src/db/store.js';
+import { getSetting, putSetting, updateWizardProgress } from '../src/db/store.js';
 import { clientFor, createServices } from './helpers.js';
 import { expect } from 'vitest';
 import { test } from 'vitest';
 
-test('初始态：needs_setup=true 且 setup 端点可达', async () => {
+test('初始态：needs_setup=true 且 setup 端点可达；setup_progress 三态之「全新」', async () => {
   const s = createServices();
   try {
     const client = clientFor(s.context());
     const bootstrap = await client.bootstrap();
     expect(bootstrap.needs_setup).toBe(true);
-    expect(bootstrap.allow_anonymous).toBe(true);
+    // 走查 BUG6（Owner 2026-09-23 安全默认）：匿名默认关闭。
+    expect(bootstrap.allow_anonymous).toBe(false);
     expect(bootstrap.site_name).toBe('朱墨');
     // 走查 BUG2：settings/env 均未配置 → model_route 为 null。
     expect(bootstrap.model_route).toBeNull();
+    // 走查 BUG2：setup_progress 全新态——无管理员、零完成、模型未配置。
+    expect(bootstrap.setup_progress).toEqual({
+      admin_created: false,
+      steps_done: 0,
+      steps_total: 3,
+      model_configured: false,
+    });
 
     const { steps } = await client.setup.steps();
     expect(steps.map((step) => step.id)).toEqual(['ffmpeg', 'python-env', 'whisper-model']);
     expect(steps.every((step) => step.status === 'pending')).toBe(true);
+  } finally {
+    s.dispose();
+  }
+});
+
+test('setup_progress 三态推进：建管理员 / 完成向导步骤 / 配置模型路由', async () => {
+  const s = createServices();
+  try {
+    const client = clientFor(s.context());
+    // 态 2：管理员已建（allow_anonymous 缺省关），向导完成 1/3。
+    await client.setup.createAdmin({ username: 'boss', password: 'secret66' });
+    updateWizardProgress(s.db, 'ffmpeg', { status: 'done' });
+    let progress = (await client.bootstrap()).setup_progress;
+    expect(progress).toEqual({
+      admin_created: true,
+      steps_done: 1,
+      steps_total: 3,
+      model_configured: false,
+    });
+
+    // 态 3：settings 表 llm_* 四键齐备 → model_configured=true（env 单边不算）。
+    putSetting(s.db, 'llm_provider', 'zhipu');
+    putSetting(s.db, 'llm_base_url', 'https://x/api');
+    putSetting(s.db, 'llm_api_key', 'k1');
+    putSetting(s.db, 'llm_model', 'glm-5.3-flash');
+    progress = (await client.bootstrap()).setup_progress;
+    expect(progress.model_configured).toBe(true);
+    expect(progress.steps_done).toBe(1);
+    expect(progress.admin_created).toBe(true);
   } finally {
     s.dispose();
   }

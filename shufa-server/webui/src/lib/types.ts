@@ -22,6 +22,20 @@ export interface ModelRouteInfo {
   source: "settings" | "env";
 }
 
+/**
+ * 安装向导进度（BUG2 有状态向导，2026-09-24）。
+ * 【本地镜像】契约 BootstrapOutput.setup_progress 由 daemon 代理并行落地中，
+ * contracts 暂缺该字段——先行在此镜像形状并注明；daemon 落地后可改为直接 import。
+ * admin_created=管理员已建；steps_done/steps_total=准备步骤完成度；
+ * model_configured=大模型服务已配置。
+ */
+export interface SetupProgress {
+  admin_created: boolean;
+  steps_done: number;
+  steps_total: number;
+  model_configured: boolean;
+}
+
 /** GET /api/bootstrap（公开）：安装门控与站点信息。 */
 export interface BootstrapInfo {
   needsSetup: boolean;
@@ -29,6 +43,8 @@ export interface BootstrapInfo {
   siteName: string;
   /** 生效模型路由；null/缺省（daemon 旧实现未带字段时归一）＝未配置。 */
   modelRoute: ModelRouteInfo | null;
+  /** 安装向导进度（BUG2）；旧 daemon 未带字段时归一 null（向导退化为自由步进）。 */
+  setupProgress: SetupProgress | null;
 }
 
 export type UserRole = "admin" | "user" | "anonymous";
@@ -38,6 +54,8 @@ export interface SessionInfo {
   userId: string;
   username: string;
   role: UserRole;
+  /** BUG5：禁用用户可登录可读、禁止新建任务（daemon 拦截；前端据此禁用创建入口）。 */
+  disabled: boolean;
 }
 
 // ---- [2] 安装向导准备步骤 ----
@@ -73,6 +91,8 @@ export interface WizardStep {
   lastLog: string;
   /** 下载类：0-100 进度条。 */
   progress: number;
+  /** 下载类进度文案（BUG1）：形如「12.3MB / 148.0MB（8%）」；终态保留不清空。 */
+  progressText?: string;
   /** 嗅探结果：命令已安装 / 文件已存在（默认跳过）。 */
   detected: boolean;
   updatedAt: string;
@@ -115,6 +135,25 @@ export interface DshModelRoute {
 export interface ModelsSettings {
   routes: DshModelRoute[];
   active: { provider: string; model: string };
+}
+
+// ---- [3'] 模型预设目录（BUG4，2026-09-24） ----
+// 【本地镜像】契约 admin.models.catalog 出参由 daemon 代理并行落地中，先行镜像并注明。
+
+/** 预设路由条目：source=builtin 内置常量 | models.dev 远端拉取。 */
+export interface ModelsCatalogPreset {
+  provider: string;
+  name: string;
+  baseURL?: string;
+  api?: string;
+  models: Array<{ id: string; name?: string }>;
+  source: "builtin" | "models.dev";
+}
+
+/** admin.models.catalog / catalogRefresh 出参；fetched_at=null 表示从未拉取过 models.dev。 */
+export interface ModelsCatalog {
+  presets: ModelsCatalogPreset[];
+  fetched_at: string | null;
 }
 
 // ---- [4] 用户 / 资源 / 任务 / 结果 ----

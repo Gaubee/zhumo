@@ -11,6 +11,7 @@ import path from 'node:path';
 import { createRouterClient } from '@orpc/server';
 import { ensureAnonymousUser } from '../src/auth.js';
 import { loadConfig, type AppConfig } from '../src/config.js';
+import { BlobStore } from '../src/db/blobs.js';
 import { openDatabase, type SqliteDb } from '../src/db/database.js';
 import {
   defaultWizardSeeds,
@@ -29,6 +30,7 @@ export interface TestServices {
   db: SqliteDb;
   secret: string;
   wizard: WizardRunner;
+  blobs: BlobStore;
   /** 以该服务为基础派生连接 context（可附加 token/user）。 */
   context(extra?: Partial<RpcContext>): RpcContext;
   dispose(): void;
@@ -52,6 +54,7 @@ export function createServices(seeds?: WizardSeedInput[]): TestServices {
   const wizardSeeds = seeds ?? defaultWizardSeeds({ dataRoot: config.dataRoot, shufaToolDir });
   const wizard = new WizardRunner(db, wizardSeeds);
   installWizardSeeds(db, wizardSeeds);
+  const blobs = new BlobStore(config.dataRoot, db);
   return {
     root,
     envFile,
@@ -59,11 +62,13 @@ export function createServices(seeds?: WizardSeedInput[]): TestServices {
     db,
     secret: TEST_SECRET,
     wizard,
+    blobs,
     context: (extra) => ({
       config,
       db,
       secret: TEST_SECRET,
       wizard,
+      blobs,
       ...extra,
     }),
     dispose: () => {

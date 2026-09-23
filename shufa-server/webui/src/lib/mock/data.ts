@@ -7,6 +7,8 @@
  *   [2] 任务 agent 对话的脚本化帧流（sendTaskPrompt 触发 user→tool→assistant
  *       →turn-end 时序回放，模拟 WS 推送）。
  *   [3] 向导步骤的模拟执行（命令类逐行追加日志；下载类进度步进）。
+ * 朱墨前端改造 [2026-09-24]：匿名默认关（adminSettings 种子）；内置 __anonymous__
+ * 系统账户行；模型预设目录 mockDb.modelsCatalog（BUG4）；用户自增 id 防删除后撞号。
  * 妥协声明：帧流的时序回放写死 setTimeout 编排——真实实现是 daemon WS 推送，
  *   mock 无需抽象调度器。
  */
@@ -14,6 +16,7 @@ import type {
   AdminSettings,
   DshModelRoute,
   Frame,
+  ModelsCatalog,
   ModelsSettings,
   SessionInfo,
   Task,
@@ -38,8 +41,59 @@ export const mockDb = {
   users: [
     { id: "u-admin", username: "admin", role: "admin", disabled: false, createdAt: now() },
     { id: "u-1", username: "王老师", role: "user", disabled: false, createdAt: now() },
+    // BUG5：内置匿名账号在账号列表可见（系统账户行：隐藏改密/删除/禁用入口）。
+    { id: "u-anonymous", username: "__anonymous__", role: "anonymous", disabled: false, createdAt: now() },
   ] as UserInfo[],
-  adminSettings: { siteBaseUrl: "http://localhost:8000", allowAnonymous: true } as AdminSettings,
+  // 语义变更（2026-09-24）：匿名默认关闭（安全默认）——未开匿名前端必须登录。
+  adminSettings: { siteBaseUrl: "http://localhost:8000", allowAnonymous: false } as AdminSettings,
+  /** mock 自增用户 id（createUser 用，删除后重建不撞号）。 */
+  userIdSeq: 0,
+  /** BUG4 模型预设目录：builtin 常量 + models.dev 拉取缓存（fetched_at=null=未拉取）。 */
+  modelsCatalog: {
+    presets: [
+      {
+        provider: "zai",
+        name: "智谱 GLM",
+        baseURL: "https://api.z.ai/api/paas/v4",
+        api: "openai-completions",
+        models: [{ id: "glm-5.3-flash" }, { id: "glm-5.3" }, { id: "glm-5.3-air" }],
+        source: "builtin",
+      },
+      {
+        provider: "deepseek",
+        name: "DeepSeek",
+        baseURL: "https://api.deepseek.com/v1",
+        api: "openai-completions",
+        models: [{ id: "deepseek-chat" }, { id: "deepseek-reasoner" }],
+        source: "builtin",
+      },
+      {
+        provider: "moonshot",
+        name: "月之暗面 Kimi",
+        baseURL: "https://api.moonshot.cn/v1",
+        api: "openai-completions",
+        models: [{ id: "kimi-k2-0905-preview" }, { id: "kimi-latest" }],
+        source: "builtin",
+      },
+      {
+        provider: "openai",
+        name: "OpenAI",
+        baseURL: "https://api.openai.com/v1",
+        api: "openai-completions",
+        models: [{ id: "gpt-5.3" }, { id: "gpt-5.3-mini" }, { id: "gpt-4.1" }],
+        source: "models.dev",
+      },
+      {
+        provider: "anthropic",
+        name: "Anthropic",
+        baseURL: "https://api.anthropic.com",
+        api: "anthropic-messages",
+        models: [{ id: "claude-sonnet-4-6" }, { id: "claude-opus-4-1" }],
+        source: "models.dev",
+      },
+    ],
+    fetched_at: null,
+  } as ModelsCatalog,
   models: {
     routes: [
       {

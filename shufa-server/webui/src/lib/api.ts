@@ -3,6 +3,8 @@
  * 原始需求 [2026-09-23]；W7 联调：RpcApi 实装（@orpc/client RPCLink over
  * WebSocket 连同源 /ws/rpc?token=，JWT 存 localStorage，401 自动 refresh 一次）。
  * mock 保留为逃生口：URL 带 ?mock=1 时启用（tests/离线演示）。
+ * 朱墨前端改造 [2026-09-24]：setup_progress / 匿名默认关（createAdmin 随提交）/
+ * 账号禁用与删除 / 模型预设目录（models.dev）；下载进度解析扩展 current/total 文案。
  * 正交意图：
  *   [1] ShufaApi 接口（bootstrap/auth/setup/admin/tasks/results/res 契约，PRODUCT_DESIGN §4）。
  *   [2] mock 实现（?mock=1 时驱动 lib/mock/*；与真 API 同签名）。
@@ -58,7 +60,9 @@ import type {
   DshModelRoute,
   Frame,
   ModelRouteInfo,
+  ModelsCatalog,
   ModelsSettings,
+  SetupProgress,
   ResTreeOutput as ResTreeOutputView,
   ResUploadOutput as ResUploadOutputView,
   ResourceItem,
@@ -73,17 +77,20 @@ import type {
 /** mock 逃生口：默认走真 RPC；?mock=1 才启用 mock（联调期测试/离线演示用）。 */
 export const USE_MOCK = new URLSearchParams(location.search).has("mock");
 
-// ---- oRPC 客户端手写面（端点形状以 contracts 为准；不引 daemon 源码类型，
-//      避免 server 依赖类型穿透进 webui 类型检查） ----
+// ---- 契约宽化镜像（daemon 代理并行落地中，2026-09-24）----
+// BootstrapOutput.setup_progress / CreateAdminInput.allow_anonymous / admin.users.delete /
+// admin.models.catalog 契约字段落地后，此处宽化可收敛回契约类型；形状以改造简报为准。
+type CreateAdminRpcInput = CreateAdminInput & { allow_anonymous?: boolean };
+type BootstrapRpcOutput = BootstrapOutput & { setup_progress?: SetupProgress };
 
 interface ResItemOutputView {
   item: ResourceItem;
 }
 
 interface ShufaRpc {
-  bootstrap(): Promise<BootstrapOutput>;
+  bootstrap(): Promise<BootstrapRpcOutput>;
   setup: {
-    createAdmin(input: CreateAdminInput): Promise<TokenOutput>;
+    createAdmin(input: CreateAdminRpcInput): Promise<TokenOutput>;
     steps(): Promise<WizardStepsOutput>;
     runStep(input: WizardRunInput): Promise<ContractWizardStep>;
     complete(): Promise<{ ok: true }>;
@@ -99,6 +106,14 @@ interface ShufaRpc {
       list(): Promise<{ users: ContractUserInfo[] }>;
       create(input: CreateUserInput): Promise<ContractUserInfo>;
       update(input: UpdateUserInput): Promise<ContractUserInfo>;
+      /** BUG5：删除账号（数据级联清理：任务、资源与结果页一并移除）。 */
+      delete(input: { id: string }): Promise<{ ok: boolean }>;
+    };
+    models: {
+      /** BUG4：预设目录（builtin 常量 + models.dev 已拉取缓存）。 */
+      catalog(): Promise<ModelsCatalog>;
+      /** 强制重拉 models.dev（预设列表刷新按钮）。 */
+      catalogRefresh(): Promise<ModelsCatalog>;
     };
     settings: {
       get(input: { key: SettingKey }): Promise<{ key: string; value: string }>;
@@ -135,7 +150,8 @@ export interface ShufaApi {
   loginAnonymous(): Promise<SessionInfo>;
   logout(): Promise<void>;
   me(): Promise<SessionInfo | null>;
-  createAdmin(username: string, password: string): Promise<void>;
+  /** allowAnonymous：安装向导步 1 的「允许匿名访问」开关（BUG2）；缺省 false（安全默认）。 */
+  createAdmin(username: string, password: string, allowAnonymous?: boolean): Promise<void>;
   getWizardSteps(): Promise<WizardStep[]>;
   /** params 仅 whisper-model 步骤携带（model/mirror），其余步骤不传。 */
   runWizardStep(id: string, force: boolean, params?: WizardRunParams): Promise<void>;
@@ -144,6 +160,14 @@ export interface ShufaApi {
   listUsers(): Promise<UserInfo[]>;
   createUser(username: string, password: string, role: UserInfo["role"]): Promise<UserInfo>;
   changeUserPassword(userId: string, nextPassword: string): Promise<void>;
+  /** BUG5：禁用/启用账号（禁用可登录可读、禁止新建任务）。 */
+  setUserDisabled(userId: string, disabled: boolean): Promise<void>;
+  /** BUG5：删除账号（数据级联清理，不可恢复）。 */
+  deleteUser(userId: string): Promise<{ ok: boolean }>;
+  /** BUG4：模型预设目录（builtin + models.dev 缓存）。 */
+  getModelsCatalog(): Promise<ModelsCatalog>;
+  /** BUG4：强制重拉 models.dev 后返回新目录。 */
+  refreshModelsCatalog(): Promise<ModelsCatalog>;
   updateAdminSettings(patch: Partial<AdminSettings>): Promise<AdminSettings>;
   getModels(): Promise<ModelsSettings>;
   saveModels(next: ModelsSettings): Promise<void>;
@@ -179,6 +203,18 @@ function toMockModelRoute(): ModelRouteInfo | null {
   return { provider: route.provider, model: active.model, source: "settings" };
 }
 
+/** mock setup_progress（BUG2）：由内存库状态实时投影（管理员/步骤完成度/模型配置）。 */
+function toMockSetupProgress(): SetupProgress {
+  return {
+    admin_created: mockDb.users.some((user) => user.role === "admin"),
+    steps_done: mockDb.wizardSteps.filter(
+      (step) => step.status === "done" || step.status === "skipped",
+    ).length,
+    steps_total: mockDb.wizardSteps.length,
+    model_configured: mockDb.models.active.model.length > 0,
+  };
+}
+
 class MockApi implements ShufaApi {
   async getBootstrap(): Promise<BootstrapInfo> {
     // dev 覆盖（仅 mock 层；真 API 无此逻辑）：?installed=1 跳过安装门控，
@@ -186,7 +222,7 @@ class MockApi implements ShufaApi {
     const devParams = new URLSearchParams(location.search);
     if (devParams.has("installed")) mockDb.installed = true;
     if (devParams.get("as") === "admin") {
-      mockDb.session = { userId: "u-admin", username: "admin", role: "admin" };
+      mockDb.session = { userId: "u-admin", username: "admin", role: "admin", disabled: false };
     }
     return {
       needsSetup: !mockDb.installed,
@@ -194,22 +230,28 @@ class MockApi implements ShufaApi {
       siteName: mockDb.siteName,
       // mock 与真 API 同形：路由清空后前台进入「未配置」阻断态（R4 自测口）。
       modelRoute: toMockModelRoute(),
+      setupProgress: toMockSetupProgress(),
     };
   }
 
   async login(username: string, password: string): Promise<SessionInfo> {
     // 演示口令：admin/admin123、王老师/user123；真实实现走 POST /api/auth/login（scrypt 校验）。
+    // 语义变更（BUG5）：禁用账号可登录可读，仅新建任务被拦（前端+daemon 双重拦截）。
     const known: Record<string, string> = { admin: "admin123", 王老师: "user123" };
     if (known[username] !== password) fail("用户名或密码错误");
     const user = mockDb.users.find((u) => u.username === username) ?? fail("账号不存在");
-    if (user.disabled) fail("账号已被禁用");
-    mockDb.session = { userId: user.id, username: user.username, role: user.role };
+    mockDb.session = {
+      userId: user.id,
+      username: user.username,
+      role: user.role,
+      disabled: user.disabled,
+    };
     return mockDb.session;
   }
 
   async loginAnonymous(): Promise<SessionInfo> {
     if (!mockDb.adminSettings.allowAnonymous) fail("本站未开启匿名访问");
-    mockDb.session = { userId: "u-anon", username: "匿名", role: "anonymous" };
+    mockDb.session = { userId: "u-anon", username: "匿名", role: "anonymous", disabled: false };
     return mockDb.session;
   }
 
@@ -221,7 +263,8 @@ class MockApi implements ShufaApi {
     return mockDb.session;
   }
 
-  async createAdmin(username: string, _password: string): Promise<void> {
+  async createAdmin(username: string, _password: string, allowAnonymous?: boolean): Promise<void> {
+    if (mockDb.users.some((u) => u.role === "admin")) fail("管理员已存在");
     mockDb.users.unshift({
       id: "u-admin",
       username,
@@ -229,10 +272,16 @@ class MockApi implements ShufaApi {
       disabled: false,
       createdAt: new Date().toISOString(),
     });
+    // BUG2：步 1「允许匿名访问」开关随 createAdmin 提交（缺省 false=安全默认）。
+    mockDb.adminSettings.allowAnonymous = allowAnonymous ?? false;
   }
 
   async getWizardSteps(): Promise<WizardStep[]> {
-    return structuredClone(mockDb.wizardSteps);
+    // 与 RPC 面同构：进度/文案由 lastLog 统一派生（progressText 含 current/total）。
+    return structuredClone(mockDb.wizardSteps).map((step) => ({
+      ...step,
+      ...deriveStepProgress(step.status, step.lastLog),
+    }));
   }
 
   async runWizardStep(id: string, force: boolean, params?: WizardRunParams): Promise<void> {
@@ -254,7 +303,7 @@ class MockApi implements ShufaApi {
   async createUser(username: string, _password: string, role: UserInfo["role"]): Promise<UserInfo> {
     if (mockDb.users.some((u) => u.username === username)) fail("用户名已存在");
     const user: UserInfo = {
-      id: `u-${mockDb.users.length + 1}`,
+      id: `u-user-${(mockDb.userIdSeq += 1)}`,
       username,
       role,
       disabled: false,
@@ -266,6 +315,29 @@ class MockApi implements ShufaApi {
 
   async changeUserPassword(_userId: string, _nextPassword: string): Promise<void> {
     // mock：无副作用（真实实现写入 scrypt 哈希）。
+  }
+
+  async setUserDisabled(userId: string, disabled: boolean): Promise<void> {
+    const user = mockDb.users.find((candidate) => candidate.id === userId) ?? fail("账号不存在");
+    user.disabled = disabled;
+  }
+
+  async deleteUser(userId: string): Promise<{ ok: boolean }> {
+    mockDb.users.find((candidate) => candidate.id === userId) ?? fail("账号不存在");
+    mockDb.users = mockDb.users.filter((candidate) => candidate.id !== userId);
+    // 级联清理（mock 简化）：会话引用置空；任务/资源/结果的数据级联由 daemon 落实。
+    if (mockDb.session?.userId === userId) mockDb.session = null;
+    return { ok: true };
+  }
+
+  async getModelsCatalog(): Promise<ModelsCatalog> {
+    return structuredClone(mockDb.modelsCatalog);
+  }
+
+  async refreshModelsCatalog(): Promise<ModelsCatalog> {
+    // mock：模拟 models.dev 重拉成功（presets 原样，fetched_at 刷新）。
+    mockDb.modelsCatalog.fetched_at = new Date().toISOString();
+    return structuredClone(mockDb.modelsCatalog);
   }
 
   async updateAdminSettings(patch: Partial<AdminSettings>): Promise<AdminSettings> {
@@ -416,33 +488,58 @@ function isUnauthorized(error: unknown): boolean {
 
 /** 契约 ↔ W3 视图命名映射（mock 时代 camelCase 字段在此收敛为唯一出参）。 */
 function toSession(user: ContractUserInfo): SessionInfo {
-  return { userId: user.id, username: user.username, role: user.role };
+  return { userId: user.id, username: user.username, role: user.role, disabled: user.disabled };
 }
 
 function toUserView(user: ContractUserInfo): UserInfo {
   return { ...user, createdAt: user.created_at };
 }
 
+interface DownloadProgress {
+  percent: number;
+  /** 「12.3MB / 148.0MB（8%）」进度文案；解析不出为 null（命令类步骤/无进度行）。 */
+  text: string | null;
+}
+
 /**
- * 从下载类 running 日志解析进度百分比：形如「已下载 12.3MB / 148.0MB（8%）」
- * 取括号内百分比；缺百分比时按 MB 比值折算；解析不出保持 0（轨道空但不碍事）。
+ * 从下载类日志解析进度（BUG1 扩展）：后端格式「已下载 12.3MB / 148.0MB（8%）」，
+ * 同时取百分比与 current/total 文案。日志为追加式，取最后一次匹配（最新进度）；
+ * 缺百分比时按 MB 比值折算；续传时 total 不变、current 从偏移起跳，正则原样兼容。
  */
-function parseDownloadProgress(log: string): number {
+function parseDownloadProgress(log: string): DownloadProgress {
   const clamp = (value: number): number => Math.min(100, Math.max(0, Math.round(value)));
-  const percent = /（(\d+(?:\.\d+)?)%）/.exec(log);
-  if (percent !== null) {
-    const value = Number.parseFloat(percent[1] ?? "");
-    if (Number.isFinite(value)) return clamp(value);
+  const re =
+    /已下载\s*([\d.]+)\s*(KB|MB|GB)\s*\/\s*([\d.]+)\s*(KB|MB|GB)(?:\s*（(\d+(?:\.\d+)?)%）)?/g;
+  let last: RegExpExecArray | null = null;
+  for (let match = re.exec(log); match !== null; match = re.exec(log)) last = match;
+  if (last === null) return { percent: 0, text: null };
+  const current = `${last[1]}${last[2]}`;
+  const total = `${last[3]}${last[4]}`;
+  const explicit = last[5] === undefined ? null : Number.parseFloat(last[5] ?? "");
+  let percent: number;
+  if (explicit !== null && Number.isFinite(explicit)) {
+    percent = clamp(explicit);
+  } else {
+    const downloaded = Number.parseFloat(last[1] ?? "0");
+    const totalNumber = Number.parseFloat(last[3] ?? "0");
+    percent = totalNumber > 0 ? clamp((downloaded / totalNumber) * 100) : 0;
   }
-  const ratio = /已下载\s*([\d.]+)\s*(?:KB|MB|GB)\s*\/\s*([\d.]+)\s*(?:KB|MB|GB)/.exec(log);
-  if (ratio !== null) {
-    const downloaded = Number.parseFloat(ratio[1] ?? "");
-    const total = Number.parseFloat(ratio[2] ?? "");
-    if (Number.isFinite(downloaded) && Number.isFinite(total) && total > 0) {
-      return clamp((downloaded / total) * 100);
-    }
-  }
-  return 0;
+  return { percent, text: `${current} / ${total}（${percent}%）` };
+}
+
+/**
+ * 步骤进度统一派生（RPC 与 mock 共用，BUG1）：done→100（文案保留最后一行进度，
+ * 不清空）；running/failed→按日志解析（failed 保留已达到的进度，呈现失败态）；
+ * pending/skipped→0。
+ */
+function deriveStepProgress(
+  status: WizardStep["status"],
+  lastLog: string,
+): { progress: number; progressText?: string } {
+  if (status === "pending" || status === "skipped") return { progress: 0 };
+  const parsed = parseDownloadProgress(lastLog);
+  if (status === "done") return { progress: 100, progressText: parsed.text ?? undefined };
+  return { progress: parsed.percent, progressText: parsed.text ?? undefined };
 }
 
 function toWizardStepView(step: ContractWizardStep): WizardStep {
@@ -455,12 +552,7 @@ function toWizardStepView(step: ContractWizardStep): WizardStep {
     targetDir: step.target_dir,
     status: step.status,
     lastLog: step.last_log ?? "",
-    progress:
-      step.status === "done"
-        ? 100
-        : step.status === "running"
-          ? parseDownloadProgress(step.last_log ?? "")
-          : 0,
+    ...deriveStepProgress(step.status, step.last_log ?? ""),
     detected: step.status === "done" && (step.last_log ?? "").includes("嗅探"),
     updatedAt: step.updated_at,
   };
@@ -490,6 +582,8 @@ class RpcApi implements ShufaApi {
       siteName: out.site_name,
       // 契约 BootstrapOutput.model_route 必填可空；?? null 兜底旧 daemon 缺字段。
       modelRoute: out.model_route ?? null,
+      // BUG2：setup_progress 契约由 daemon 并行落地；缺字段时归一 null（向导自由步进）。
+      setupProgress: out.setup_progress ?? null,
     };
   }
 
@@ -527,8 +621,10 @@ class RpcApi implements ShufaApi {
     }
   }
 
-  async createAdmin(username: string, password: string): Promise<void> {
-    const out = await rpc().setup.createAdmin({ username, password });
+  async createAdmin(username: string, password: string, allowAnonymous?: boolean): Promise<void> {
+    // BUG2：allow_anonymous 随建管理员提交；缺省 false（安全默认：未开匿名则必须登录）。
+    const input: CreateAdminRpcInput = { username, password, allow_anonymous: allowAnonymous ?? false };
+    const out = await rpc().setup.createAdmin(input);
     setToken(out.token);
   }
 
@@ -573,6 +669,23 @@ class RpcApi implements ShufaApi {
 
   async changeUserPassword(userId: string, nextPassword: string): Promise<void> {
     await rpc().admin.users.update({ id: userId, password: nextPassword });
+  }
+
+  async setUserDisabled(userId: string, disabled: boolean): Promise<void> {
+    await rpc().admin.users.update({ id: userId, disabled });
+  }
+
+  async deleteUser(userId: string): Promise<{ ok: boolean }> {
+    // 契约 admin.users.delete（daemon 并行落地）：删除=任务/资源/结果页数据级联清理。
+    return rpc().admin.users.delete({ id: userId });
+  }
+
+  async getModelsCatalog(): Promise<ModelsCatalog> {
+    return rpc().admin.models.catalog();
+  }
+
+  async refreshModelsCatalog(): Promise<ModelsCatalog> {
+    return rpc().admin.models.catalogRefresh();
   }
 
   private async readAdminSettings(): Promise<Map<string, string>> {

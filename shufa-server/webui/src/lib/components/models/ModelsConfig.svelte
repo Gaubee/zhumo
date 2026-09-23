@@ -6,6 +6,10 @@
   + 活动模型选择）；安装向导第 3 步与后台设置页共用。
   走查修复 [2026-09-23]：BUG4——加载失败不再只是红字+死按钮（+ 新路由在
   settings 未就绪时直接不渲染，错误态给重试）；头部展示生效路由（R4）。
+  朱墨前端改造 [2026-09-24]：BUG4 预设选择器——「从预设添加」Popover（本地
+  provider/name 搜索；点选新建路由并预填 provider/baseURL/api/models 前若干个，
+  仍可改）；列表底部「从 models.dev 刷新预设」+ fetched_at 展示；加载失败给
+  非阻断提示。
   正交意图：
   1. tab 条：每路由一 tab（字母头像 + key 缺失 amber 点 + active badge），
      横滚；+ New 追加路由。
@@ -14,14 +18,23 @@
   3. 活动模型选择：active = {provider, model}（路由内模型单选）。
   4. 持久化经 api.getModels/saveModels（mock→真 API 同签名），保存即生效；
      保存成功/失败均有可见反馈，成功后刷新生效路由展示。
+  5. 预设目录（api.getModelsCatalog/refreshModelsCatalog）→ 预填新建路由。
 -->
 <script lang="ts">
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Badge } from "$lib/components/ui/badge";
   import * as Select from "$lib/components/ui/select";
+  import * as Popover from "$lib/components/ui/popover";
   import { api } from "$lib/api";
-  import type { DshModelRoute, ModelRouteInfo, ModelsSettings, RouteModel } from "$lib/types";
+  import type {
+    DshModelRoute,
+    ModelRouteInfo,
+    ModelsCatalog,
+    ModelsCatalogPreset,
+    ModelsSettings,
+    RouteModel,
+  } from "$lib/types";
   import { formatTokenCount, readableModelName, routeAvatarColor, routeLetter } from "./route-meta";
 
   let { onsaved }: { onsaved?: () => void } = $props();
@@ -35,8 +48,35 @@
   let routeInfo = $state<ModelRouteInfo | null>(null);
   let routeInfoError = $state(false);
 
+  // ---- BUG4：预设选择器状态 ----
+  let catalogOpen = $state(false);
+  let catalog = $state<ModelsCatalog | null>(null);
+  let catalogLoading = $state(false);
+  let catalogError = $state<string | null>(null);
+  let catalogQuery = $state("");
+  let refreshing = $state(false);
+
   const routes = $derived(settings?.routes ?? []);
   const selectedRoute = $derived(routes.find((route) => route.provider === selected));
+
+  /** 预设列表本地过滤（provider/名称，大小写不敏感）。 */
+  const filteredPresets = $derived.by(() => {
+    const presets = catalog?.presets ?? [];
+    const query = catalogQuery.trim().toLowerCase();
+    if (query.length === 0) return presets;
+    return presets.filter(
+      (preset) =>
+        preset.provider.toLowerCase().includes(query) || preset.name.toLowerCase().includes(query),
+    );
+  });
+
+  /** fetched_at 展示文案；null=从未拉取 models.dev。 */
+  const catalogFetchedLabel = $derived.by(() => {
+    const at = catalog?.fetched_at ?? null;
+    if (at === null) return null;
+    const date = new Date(at);
+    return `models.dev 更新于 ${Number.isNaN(date.getTime()) ? at : date.toLocaleString()}`;
+  });
 
   $effect(() => {
     void load();
@@ -49,6 +89,53 @@
       selected = routes[0]?.provider ?? null;
     }
   });
+
+  /** Popover 开关：首次打开惰性拉目录（失败非阻断，面板内红字提示）。 */
+  async function openCatalog(open: boolean): Promise<void> {
+    catalogOpen = open;
+    if (!open || catalog !== null || catalogLoading) return;
+    await loadCatalog(false);
+  }
+
+  async function loadCatalog(force: boolean): Promise<void> {
+    catalogError = null;
+    if (force) refreshing = true;
+    else catalogLoading = true;
+    try {
+      catalog = force ? await api.refreshModelsCatalog() : await api.getModelsCatalog();
+    } catch (e) {
+      catalogError = e instanceof Error ? e.message : String(e);
+    } finally {
+      catalogLoading = false;
+      refreshing = false;
+    }
+  }
+
+  /** 点选预设 → 新建路由并预填 provider/baseURL/api/models（前 8 个），用户仍可改。 */
+  function addRouteFromPreset(preset: ModelsCatalogPreset): void {
+    if (settings === null) return;
+    let provider = preset.provider;
+    let suffix = 2;
+    while (settings.routes.some((route) => route.provider === provider)) {
+      provider = `${preset.provider}-${suffix}`;
+      suffix += 1;
+    }
+    const models: RouteModel[] = preset.models.slice(0, 8).map((model) => ({
+      id: model.id,
+      name: model.name,
+      efforts: ["low", "high", "max"],
+    }));
+    settings.routes.push({
+      provider,
+      api: preset.api ?? "openai-completions",
+      baseURL: preset.baseURL ?? "",
+      apiKey: "",
+      models,
+    });
+    selected = provider;
+    catalogOpen = false;
+    catalogQuery = "";
+  }
 
   async function loadRouteInfo(): Promise<void> {
     routeInfoError = false;
@@ -152,7 +239,79 @@
       </p>
     </div>
     {#if settings !== null}
-      <Button size="sm" variant="outline" onclick={addRoute}>+ 新路由</Button>
+      <div class="flex shrink-0 items-center gap-2">
+        <!-- BUG4：从预设添加（Popover 搜索列表；点选预填新路由）。 -->
+        <Popover.Root open={catalogOpen} onOpenChange={(open) => void openCatalog(open)}>
+          <Popover.Trigger>
+            {#snippet child({ props })}
+              <Button size="sm" variant="outline" {...props}>从预设添加</Button>
+            {/snippet}
+          </Popover.Trigger>
+          <Popover.Content class="w-80 p-0">
+            <div class="flex flex-col">
+              <div class="border-b border-border p-2">
+                <!-- svelte-ignore a11y_autofocus -->
+                <Input
+                  autofocus
+                  bind:value={catalogQuery}
+                  placeholder="搜索 provider 或名称…"
+                  class="h-8 text-xs"
+                />
+              </div>
+              <div class="max-h-64 overflow-y-auto p-1">
+                {#if catalogLoading}
+                  <p class="p-3 text-center text-xs text-muted-foreground">加载预设中…</p>
+                {:else if filteredPresets.length === 0}
+                  <p class="p-3 text-center text-xs text-muted-foreground">没有匹配的预设</p>
+                {:else}
+                  {#each filteredPresets as preset (preset.provider + preset.name)}
+                    <button
+                      type="button"
+                      class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/60"
+                      onclick={() => addRouteFromPreset(preset)}
+                    >
+                      <span class="flex min-w-0 flex-1 flex-col">
+                        <span class="truncate text-xs font-medium">{preset.name}</span>
+                        <span class="truncate font-mono text-[10px] text-muted-foreground">
+                          {preset.provider} · {preset.models.length} 个模型{preset.baseURL
+                            ? ` · ${preset.baseURL}`
+                            : ""}
+                        </span>
+                      </span>
+                      <Badge
+                        variant={preset.source === "builtin" ? "secondary" : "outline"}
+                        class="shrink-0 text-[9px]"
+                      >
+                        {preset.source === "builtin" ? "内置" : "models.dev"}
+                      </Badge>
+                    </button>
+                  {/each}
+                {/if}
+              </div>
+              <div class="flex items-center justify-between gap-2 border-t border-border p-2">
+                <span class="min-w-0 truncate text-[10px] text-muted-foreground">
+                  {catalogFetchedLabel ?? "尚未从 models.dev 拉取"}
+                </span>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={refreshing}
+                  onclick={() => void loadCatalog(true)}
+                >
+                  {refreshing ? "刷新中…" : "从 models.dev 刷新预设"}
+                </Button>
+              </div>
+              {#if catalogError}
+                <!-- 非阻断提示：预设失败不影响手动配置。 -->
+                <p class="border-t border-border px-2 py-1.5 text-[11px] text-destructive" role="alert">
+                  预设加载失败：{catalogError}
+                </p>
+              {/if}
+            </div>
+          </Popover.Content>
+        </Popover.Root>
+        <Button size="sm" variant="outline" onclick={addRoute}>+ 新路由</Button>
+      </div>
     {/if}
   </div>
 

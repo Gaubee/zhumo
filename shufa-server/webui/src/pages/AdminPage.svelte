@@ -14,6 +14,10 @@
   3. 账号管理：列表 + 创建 Dialog + 改密 Dialog + 匿名开关。
   4. 资源管理：ResourceManager 组件 + admin 用户根切换下拉。
   5. 设置：PrepStepsAccordion / ModelsConfig / 改密表单 / 站点域名 + 局域网访问。
+  朱墨前端改造 [2026-09-24]：
+  1. BUG5 账号行操作：禁用/启用（update 直调）+ 删除（ConfirmDialog，文案声明
+     数据级联清理且不可恢复）；__anonymous__ 系统账户行隐藏全部入口；禁用行徽章。
+  2. BUG1 设置页步骤运行中每 1s 轮询刷新（真后端无推送；结束/卸载即停）。
 -->
 <script lang="ts">
   import { tick } from "svelte";
@@ -45,6 +49,10 @@
   let createError = $state<string | null>(null);
   let passwordTarget = $state<UserInfo | null>(null);
   let nextPassword = $state("");
+  /** BUG5：待删除账号（ConfirmDialog 目标）。 */
+  let deleteTarget = $state<UserInfo | null>(null);
+  /** 账号行操作（禁用/删除）的行内错误反馈。 */
+  let accountMessage = $state<string | null>(null);
   let busy = $state(false);
 
   // ---- 资源管理（admin 可切换查看任意用户的根） ----
@@ -54,6 +62,8 @@
   let settings = $state<AdminSettings | null>(null);
   let wizardSteps = $state<WizardStep[]>([]);
   let runningStep = $state<string | null>(null);
+  /** 本地发起且未收尾的运行（轮询期间保持乐观运行态，防止自停）。 */
+  let localRun = $state<string | null>(null);
   let oldPassword = $state("");
   let adminNewPassword = $state("");
   let passwordMessage = $state<string | null>(null);
@@ -134,6 +144,36 @@
     }
   }
 
+  /** BUG5：禁用/启用（可登录可读、禁止新建任务；daemon 侧同样拦截）。 */
+  async function toggleDisabled(user: UserInfo): Promise<void> {
+    busy = true;
+    accountMessage = null;
+    try {
+      await api.setUserDisabled(user.id, !user.disabled);
+      users = await api.listUsers();
+    } catch (e) {
+      accountMessage = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  /** BUG5：删除账号（数据级联清理：任务、资源与结果页一并移除，不可恢复）。 */
+  async function deleteAccount(): Promise<void> {
+    if (deleteTarget === null) return;
+    busy = true;
+    accountMessage = null;
+    try {
+      await api.deleteUser(deleteTarget.id);
+      deleteTarget = null;
+      users = await api.listUsers();
+    } catch (e) {
+      accountMessage = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
   async function toggleAnonymous(allow: boolean): Promise<void> {
     if (settings === null) return;
     settings.allowAnonymous = allow;
@@ -142,14 +182,34 @@
 
   async function runStep(id: string, force: boolean, params?: WizardRunParams): Promise<void> {
     runningStep = id;
+    localRun = id;
     try {
       await api.runWizardStep(id, force, params);
     } finally {
-      // 设置页无步骤推送订阅：跑完主动刷新；finally 保证失败也解锁按钮。
-      wizardSteps = await api.getWizardSteps();
-      runningStep = null;
+      // 设置页无步骤推送订阅：轮询 + 收尾主动刷新；localRun 先清再刷新，
+      // 运行态交还远端判定（完成 → 轮询自动停表）。finally 保证失败也解锁按钮。
+      localRun = null;
+      await refreshWizardSteps();
     }
   }
+
+  /** BUG1：真后端无推送——运行期间每 1s 轮询；runningStep 清空即停；卸载回收定时器。 */
+  async function refreshWizardSteps(): Promise<void> {
+    try {
+      wizardSteps = await api.getWizardSteps();
+    } catch {
+      if (localRun === null) runningStep = null;
+      return;
+    }
+    const remote = wizardSteps.find((s) => s.status === "running")?.id ?? null;
+    runningStep = localRun ?? remote;
+  }
+
+  $effect(() => {
+    if (runningStep === null) return;
+    const timer = setInterval(() => void refreshWizardSteps(), 1000);
+    return () => clearInterval(timer);
+  });
 
   async function saveAdminPassword(): Promise<void> {
     if (adminNewPassword.length < 8) {
@@ -244,29 +304,70 @@
                   </thead>
                   <tbody>
                     {#each users as user (user.id)}
+                      {@const isSystem = user.role === "anonymous"}
                       <tr class="border-b last:border-b-0">
-                        <td class="px-3 py-2">{user.username}</td>
+                        <td class="px-3 py-2">
+                          <span class="flex items-center gap-1.5">
+                            <span class="font-mono">{user.username}</span>
+                            {#if isSystem}
+                              <!-- BUG5：内置匿名行——仅标注，不给任何操作入口。 -->
+                              <Badge variant="outline" class="shrink-0 text-[10px]">系统账户</Badge>
+                            {/if}
+                          </span>
+                        </td>
                         <td class="px-3 py-2">
                           <Badge variant="secondary" class="text-[10px]">{user.role}</Badge>
                         </td>
-                        <td class="px-3 py-2">{user.disabled ? "已禁用" : "正常"}</td>
+                        <td class="px-3 py-2">
+                          {#if user.disabled}
+                            <Badge variant="destructive" class="text-[10px]">已禁用</Badge>
+                          {:else}
+                            正常
+                          {/if}
+                        </td>
                         <td class="px-3 py-2 text-right">
-                          <Button
-                            size="xs"
-                            variant="ghost"
-                            onclick={() => {
-                              passwordTarget = user;
-                              nextPassword = "";
-                            }}
-                          >
-                            改密
-                          </Button>
+                          {#if isSystem}
+                            <span class="text-[11px] text-muted-foreground">—</span>
+                          {:else}
+                            <span class="inline-flex justify-end gap-1">
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                onclick={() => {
+                                  passwordTarget = user;
+                                  nextPassword = "";
+                                }}
+                              >
+                                改密
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                disabled={busy}
+                                onclick={() => void toggleDisabled(user)}
+                              >
+                                {user.disabled ? "启用" : "禁用"}
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                class="text-destructive"
+                                disabled={busy}
+                                onclick={() => (deleteTarget = user)}
+                              >
+                                删除
+                              </Button>
+                            </span>
+                          {/if}
                         </td>
                       </tr>
                     {/each}
                   </tbody>
                 </table>
               </div>
+              {#if accountMessage}
+                <p class="text-xs text-destructive" role="alert">{accountMessage}</p>
+              {/if}
               <div class="flex items-center justify-between rounded-lg border bg-card p-3">
                 <div>
                   <p class="text-xs font-medium">允许匿名访问</p>
@@ -295,7 +396,7 @@
                       <Select.Value />
                     </Select.Trigger>
                     <Select.Content class="max-h-64 text-xs">
-                      {#each users.filter((user) => !user.disabled) as user (user.id)}
+                      {#each users.filter((user) => !user.disabled && user.role !== "anonymous") as user (user.id)}
                         <Select.Item value={user.username}>{user.username}</Select.Item>
                       {/each}
                     </Select.Content>
@@ -421,6 +522,27 @@
     <Dialog.Footer class="mt-4">
       <Button variant="ghost" size="sm" onclick={() => (passwordTarget = null)}>取消</Button>
       <Button size="sm" disabled={busy} onclick={() => void changePassword()}>确认</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- BUG5：删除账号确认（数据级联清理警示，不可恢复）。 -->
+<Dialog.Root
+  open={deleteTarget !== null}
+  onOpenChange={(open) => {
+    if (!open) deleteTarget = null;
+  }}
+>
+  <Dialog.Content class="max-w-sm p-5">
+    <Dialog.Title class="text-sm font-medium">删除账号 · {deleteTarget?.username ?? ""}</Dialog.Title>
+    <Dialog.Description class="mt-1 text-[11px] leading-snug text-destructive">
+      删除将清理该账号的全部数据（任务、资源与结果页）且不可恢复。
+    </Dialog.Description>
+    <Dialog.Footer class="mt-4">
+      <Button variant="ghost" size="sm" onclick={() => (deleteTarget = null)}>取消</Button>
+      <Button variant="destructive" size="sm" disabled={busy} onclick={() => void deleteAccount()}>
+        确认删除
+      </Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

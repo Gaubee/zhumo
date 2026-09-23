@@ -3,13 +3,17 @@
   右列详情 = agent 对话 + 素材视频展示位；顶栏后台入口）。
   走查反馈 [2026-09-23]：新建入口从左列移入 detail 面板——左列专注列表导航；
   未选中任务时 detail 即新建面板（预设开场），详情头部提供「新建任务」切回。
+  朱墨前端改造 [2026-09-24]：匿名默认关闭——未登录会话渲染「请先登录」守卫卡
+  （结果页 /r/{id} 不受影响，仍公开可读）。
   正交意图：
   1. 任务列表（倒序/状态徽标/选中态）——纯导航。
   2. 详情：选中 = 素材视频展示位 + TranscriptView + ComposerCard；
      未选中 = TaskComposer（新建分析任务）。
   3. 顶栏（站点名/身份/后台入口）。
+  4. 未登录守卫（匿名关闭后前台必须登录）。
 -->
 <script lang="ts">
+  import IconLogIn from "@lucide/svelte/icons/log-in";
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
   import ComposerCard from "$lib/components/agent/ComposerCard.svelte";
@@ -36,7 +40,8 @@
   };
 
   onMount(() => {
-    void loadTasks();
+    // 未登录（匿名关闭）不拉任务面——守卫卡呈现，避免 401 噪音。
+    if (auth.session !== null) void loadTasks();
   });
 
   const selected = $derived(getSelectedTask());
@@ -73,9 +78,26 @@
     {/if}
   </header>
 
-  <div class="flex min-h-0 flex-1">
-    <!-- 左列：任务列表（纯导航） -->
-    <aside class="flex w-72 shrink-0 flex-col border-r border-border bg-card/60">
+  {#if auth.session === null}
+    <!-- 匿名默认关闭：未登录守卫卡（AdminPage 权限守卫同语法）。 -->
+    <div class="flex min-h-0 flex-1 items-center justify-center p-6">
+      <div
+        class="flex max-w-sm flex-col items-center gap-3 rounded-lg border border-amber-500/50 bg-card p-6 text-center"
+      >
+        <p class="text-sm font-medium">请先登录</p>
+        <p class="text-xs leading-snug text-muted-foreground">
+          本站未开启匿名访问，登录后即可查看与创建书法分析任务。
+        </p>
+        <Button size="sm" class="mt-1" onclick={() => navigate("#/login")}>
+          <IconLogIn data-icon="inline-start" />
+          去登录
+        </Button>
+      </div>
+    </div>
+  {:else}
+    <div class="flex min-h-0 flex-1">
+      <!-- 左列：任务列表（纯导航） -->
+      <aside class="flex w-72 shrink-0 flex-col border-r border-border bg-card/60">
       <div class="border-b border-border px-3 py-2.5">
         <span class="text-xs font-medium text-muted-foreground">任务列表</span>
       </div>
@@ -149,6 +171,7 @@
           <TaskComposer />
         </div>
       {/if}
-    </section>
-  </div>
+      </section>
+    </div>
+  {/if}
 </div>

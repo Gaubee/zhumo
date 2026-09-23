@@ -2,12 +2,14 @@
  * 领域行存取面（users / settings / wizard_steps / results 四域 SQL 的唯一归宿）。
  * 原始需求 2026-09-23（W2'）：查询语句集中于此，auth/wizard/rpc 只消费视图。
  * 正交意图：
- *   [1] users：按用户名/ID 取查、创建、改密、禁用、改角色。
+ *   [1] users：按用户名/ID 取查、创建、改密、禁用、改角色；非匿名存在性判定与
+ *       行删除（BUG5 级联删除的库内收尾）。
  *   [2] settings：键值读写（字符串承载）。
- *   [3] wizard_steps：种子落库、列表、状态推进。
+ *   [3] wizard_steps：种子落库、列表、状态推进、进度统计（BUG2 setup_progress）。
  *   [4] results：public_id 取查与登记。
  */
 import { randomUUID } from 'node:crypto';
+import { ANONYMOUS_USERNAME } from '@zhumo/contracts';
 import type { Role, WizardKind, WizardStatus } from '@zhumo/contracts';
 import type { SqliteDb } from './database.js';
 
@@ -42,6 +44,31 @@ export function getUserById(db: SqliteDb, id: string): UserRow | null {
 
 export function listUsers(db: SqliteDb): UserRow[] {
   return db.prepare('SELECT * FROM users ORDER BY created_at ASC').all() as UserRow[];
+}
+
+/** 是否存在非匿名用户（走查 BUG2 setup_progress.admin_created；.env 引导的同判）。 */
+export function hasNonAnonymousUser(db: SqliteDb): boolean {
+  const row = db
+    .prepare('SELECT COUNT(*) AS n FROM users WHERE username != ?')
+    .get(ANONYMOUS_USERNAME) as { n: number };
+  return row.n > 0;
+}
+
+/** 删除用户行（admin.users.delete 级联的收尾步；行级引用先由调用方清空）。 */
+export function deleteUserRow(db: SqliteDb, id: string): void {
+  db.prepare('DELETE FROM users WHERE id = ?').run(id);
+}
+
+/** 向导进度统计（走查 BUG2 setup_progress.steps_done/total）。 */
+export function wizardProgressStats(db: SqliteDb): { done: number; total: number } {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done
+       FROM wizard_steps`,
+    )
+    .get() as { total: number; done: number | null };
+  return { done: row.done ?? 0, total: row.total };
 }
 
 export function createUser(
