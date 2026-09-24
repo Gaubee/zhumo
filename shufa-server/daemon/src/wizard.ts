@@ -2,7 +2,8 @@
  * 安装向导引擎（PRODUCT_DESIGN.md §1 准备步骤、§4 setup/admin.wizard 路由）。
  * 原始需求 2026-09-23（W2'）；走查修订 2026-09-22（R3 dsh 包名 / R4 删 webui-install /
  * R5 三平台种子 / R6 whisper 型号+镜像+断点续传）；走查修订 2026-09-23
- * （BUG1 全量日志+终态行+后验嗅探 / BUG3 下载进度行原位替换）。
+ * （BUG1 全量日志+终态行+后验嗅探 / BUG3 下载进度行原位替换）；Owner 需求
+ * 2026-09-25（git 检测步骤——知识库修订历史的依赖）。
  * 正交意图：
  *   [1] 种子清单（按 OS 派生）与迁移落库（定义字段更新、下线行删除、运行态保留）。
  *   [2] 命令步骤：shell 执行 + 全量日志逐行追加（64KB 截断）+ 终态行 + 成功后验嗅探。
@@ -130,7 +131,8 @@ export const WHISPER_STEP_ID = 'whisper-model';
  * 首发步骤清单（§1；走查修订 2026-09-22；2026-09-23 dsh 步骤退役；走查四轮
  * 2026-09-25：whisper 步骤改为预热管线真消费的 mlx-community 模型，且仅
  * darwin/arm64 出现——mlx-whisper 无 Intel/Windows/Linux 构建，其他平台管线
- * 本就降级跳过转录，展示一个永远跑不了的步骤是误导）。安装类命令为常见环境
+ * 本就降级跳过转录，展示一个永远跑不了的步骤是误导）；Owner 需求 2026-09-25
+ * （git 检测步骤：知识库修订历史的依赖）。安装类命令为常见环境
  * 默认值，存量库可经种子迁移获得修订（不在册行删除）。三平台差异只在命令层：
  * darwin=brew、win32=winget、linux=apt-get；probe 均为跨平台命令。
  */
@@ -153,6 +155,24 @@ export function defaultWizardSeeds(
     platform === 'darwin' && arch === 'arm64'
       ? 'import cv2, numpy, huggingface_hub, mlx_whisper'
       : 'import cv2, numpy';
+  // git 检测步骤（Owner 需求 2026-09-25）：知识库（<DATA_ROOT>/knowledge）以 git
+  // 做修订历史，缺失不阻塞——读写照常、历史面降级（admin.kb.revisions
+  // available:false）。与 ffmpeg 不同，这里不代跑安装命令：git 无固定二进制路径
+  // （macOS 常随命令行工具就位），检测未过时输出中文提示（缺它只是无历史、
+  // 知识库可用）并以非零退出置 failed；用户装好后重试本步骤（或下次开机被动
+  // 嗅探）即 done——复用命令步骤既有执行/重试语义，不另起新机制。
+  const gitAdvice =
+    platform === 'darwin'
+      ? 'macOS 可运行 xcode-select --install（苹果命令行工具，含 git）或 brew install git'
+      : platform === 'win32'
+        ? '可运行 winget install -e --id Git.Git'
+        : '可运行 sudo apt-get install -y git';
+  const gitHint = `未检测到 git：知识库读写不受影响，仅修订历史不可用，${gitAdvice}，安装后重试本步骤`;
+  // win32 的 shell 是 cmd.exe：括号组内命令分隔符为 & 而非 ;（其余平台 POSIX sh）。
+  const checkGit =
+    platform === 'win32'
+      ? `git --version || (echo "${gitHint}" & exit 1)`
+      : `git --version || (echo "${gitHint}"; exit 1)`;
   const steps: WizardSeedInput[] = [
     {
       id: 'ffmpeg',
@@ -172,6 +192,16 @@ export function defaultWizardSeeds(
       command: `uv sync --project "${ctx.shufaToolDir}" --extra transcribe`,
       probe: `uv run --no-sync --project "${ctx.shufaToolDir}" python -c "${pyProbeImports}"`,
       targetDir: ctx.shufaToolDir,
+    },
+    {
+      id: 'git',
+      kind: 'command',
+      title: 'git（知识库修订历史）',
+      command: checkGit,
+      // 嗅探与 ffmpeg 步同型：exit 0 = 已装（开机被动嗅探命中即 done）。
+      probe: 'git --version',
+      // git 无固定二进制路径（PATH 上的系统依赖）——与 ffmpeg 步一致，仅展示用。
+      targetDir: '系统 PATH',
     },
   ];
   // whisper 预热步骤（四轮）：默认官方源 + large-v3-turbo（与 audio.py 缺省一致）。

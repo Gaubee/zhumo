@@ -166,6 +166,97 @@ describe('kernel sessions 帧投影', () => {
     expect(frames.filter((f) => f.kind !== 'user-text')).toHaveLength(0);
   });
 
+  it('turn/end usage：assistant/message 顶层 + assistant/attempt 流末样本聚合投影', async () => {
+    const sessionId = await createSession();
+    kernel.emitSessionEvent(sessionId, { seq: 1, type: 'turn/start', data: { turn: 1 } });
+    // 失败重试尝试：usage 只嵌在流末 usage chunk（对齐 dsh 流记录形状）。
+    kernel.emitSessionEvent(sessionId, {
+      seq: 2,
+      type: 'assistant/attempt',
+      data: {
+        turn: 1,
+        step: 1,
+        stream: [
+          { type: 'chunk', chunk: { type: 'text-delta', text: '半途' } },
+          { type: 'chunk', chunk: { type: 'usage', usage: { inputTokens: 7, outputTokens: 3 } } },
+        ],
+      },
+    });
+    // 成功尝试：usage 挂在事件 data 顶层（{message} 信封之外）。
+    kernel.emitSessionEvent(sessionId, {
+      seq: 3,
+      type: 'assistant/message',
+      data: {
+        turn: 1,
+        step: 2,
+        message: { source: { kind: 'model' }, content: [{ type: 'text', text: '结论' }] },
+        usage: { inputTokens: 100, outputTokens: 40, cacheReadTokens: 500, cacheWriteTokens: 20 },
+      },
+    });
+    kernel.emitSessionEvent(sessionId, { seq: 4, type: 'turn/end', data: { turn: 1, reason: { kind: 'end_turn' } } });
+    const { frames } = sessions.stream(sessionId, framesFile, 0);
+    const turnEnd = frames.find((f) => f.kind === 'turn-end');
+    // 与既有 payload 字段共存（turn/reason 保留）。
+    expect(turnEnd?.payload).toMatchObject({
+      turn: 1,
+      reason: { kind: 'end_turn' },
+      usage: { in: 107, out: 43, cache_read: 500, cache_write: 20 },
+    });
+  });
+
+  it('turn/end usage：无样本轮 payload 不含 usage 键；新轮 turn/start 清零', async () => {
+    const sessionId = await createSession();
+    // 第一轮带 usage。
+    kernel.emitSessionEvent(sessionId, { seq: 1, type: 'turn/start', data: { turn: 1 } });
+    kernel.emitSessionEvent(sessionId, {
+      seq: 2,
+      type: 'assistant/message',
+      data: {
+        message: { source: { kind: 'model' }, content: [{ type: 'text', text: '一' }] },
+        usage: { inputTokens: 10, outputTokens: 5 },
+      },
+    });
+    kernel.emitSessionEvent(sessionId, { seq: 3, type: 'turn/end', data: { turn: 1, reason: { kind: 'end_turn' } } });
+    // 第二轮无 usage 样本（历史帧优雅缺省：药丸只显时长）。
+    kernel.emitSessionEvent(sessionId, { seq: 4, type: 'turn/start', data: { turn: 2 } });
+    kernel.emitSessionEvent(sessionId, {
+      seq: 5,
+      type: 'assistant/message',
+      data: { message: { source: { kind: 'model' }, content: [{ type: 'text', text: '二' }] } },
+    });
+    kernel.emitSessionEvent(sessionId, { seq: 6, type: 'turn/end', data: { turn: 2, reason: { kind: 'end_turn' } } });
+    const { frames } = sessions.stream(sessionId, framesFile, 0);
+    const ends = frames.filter((f) => f.kind === 'turn-end');
+    expect(ends).toHaveLength(2);
+    expect((ends[0]?.payload as { usage?: unknown }).usage).toEqual({ in: 10, out: 5 });
+    expect('usage' in (ends[1]?.payload as Record<string, unknown>)).toBe(false);
+  });
+
+  it('turn/end usage：畸形 usage 样本静默跳过（不产诊断不崩帧链）', async () => {
+    const sessionId = await createSession();
+    kernel.emitSessionEvent(sessionId, { seq: 1, type: 'turn/start', data: { turn: 1 } });
+    // usage 计数非法（负数）→ 样本丢弃。
+    kernel.emitSessionEvent(sessionId, {
+      seq: 2,
+      type: 'assistant/message',
+      data: {
+        message: { source: { kind: 'model' }, content: [{ type: 'text', text: 'x' }] },
+        usage: { inputTokens: -3, outputTokens: 4 },
+      },
+    });
+    // assistant/attempt 流里 usage chunk 形状非法 → 样本丢弃。
+    kernel.emitSessionEvent(sessionId, {
+      seq: 3,
+      type: 'assistant/attempt',
+      data: { turn: 1, step: 1, stream: [{ type: 'chunk', chunk: { type: 'usage', usage: { inputTokens: 'x' } } }] },
+    });
+    kernel.emitSessionEvent(sessionId, { seq: 4, type: 'turn/end', data: { turn: 1, reason: { kind: 'end_turn' } } });
+    const { frames } = sessions.stream(sessionId, framesFile, 0);
+    const turnEnd = frames.find((f) => f.kind === 'turn-end');
+    expect(turnEnd?.text).toBe('end_turn');
+    expect('usage' in (turnEnd?.payload as Record<string, unknown>)).toBe(false);
+  });
+
   it('环形 retention：超出上限的旧帧被裁剪', async () => {
     const sessionId = await createSession();
     for (let i = 0; i < 60; i += 1) {

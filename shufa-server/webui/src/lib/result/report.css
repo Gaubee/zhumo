@@ -7,16 +7,15 @@
  *  2. 令牌 --paper/--card/--ink/--dim/--line/--accent-soft 沿用 app.css :root（同名同值），
  *     --accent/--accent-deep/--itemfill 在 .shufa-report 局部补定义
  *     （app.css 的 --accent 是 shadcn soft 色，语义不同，不能直接用）；
- *  3. 打磨版的 html/body{height:100%;overflow:hidden}（桌面双列 body 不滚）改为
- *     类驱动：ResultPage 挂载期间给 html/body 加 .result-live，MQ 内命中即锁；
+ *  3. 打磨版桌面锁滚应用壳（html/body 100% 不滚 + main 1fr 拉伸满视口）已弃用
+ *     （2026-09-25 走查：右列内容不足时与 footer 之间留出约 1/4 屏空白，收尾松散）；
  *  4. 移动端 tab 切换选择器 body[data-tab] → .shufa-report[data-tab]（tab 状态在页面根）。
- * 布局模型：
- *  - 移动端（<1000px，document 流）：header → 视频（恒在 tabs 上方）→ 分段 tabs
- *    → content（字幕列表 | 静态总结）→ footer，页面整体滚动。
- *  - 桌面端（≥1000px，应用壳）：html/body 100% 不滚动；.shufa-report grid
- *    auto 1fr auto（header/main/footer）；main 双列 minmax(0,1fr)（防 grid 溢出），
+ * 布局模型（两态统一为 document 流，页面整体滚动，footer 紧跟内容流）：
+ *  - 移动端（<1000px）：header → 视频（恒在 tabs 上方）→ 分段 tabs
+ *    → content（字幕列表 | 静态总结）→ footer。
+ *  - 桌面端（≥1000px）：main 双列 minmax(0,1fr)（防 grid 溢出，等高取两列较长者），
  *    左列=动态学习（视频 max-height 46dvh + 字幕列表 32dvh 内部滚动）、
- *    右列=静态总结独立滚动；footer 通栏。
+ *    右列=静态总结自适应内容高；footer 通栏紧随 main。
  */
 
 /* ---------- 根与令牌 ---------- */
@@ -41,8 +40,8 @@
 }
 
 /* ---------- 应用壳（移动优先：单列 document 流） ---------- */
+/* main 不吃 flex:1：内容撑高，短内容时 footer 紧随其后（空白留在 footer 之下而非之上） */
 .shufa-report main.cols {
-  flex: 1;
   width: 100%;
   max-width: 980px;
   margin: 0 auto;
@@ -229,7 +228,7 @@
   font-size: 13.5px;
   color: var(--dim);
 }
-/* 旁注卡：横向卡片纵向堆叠——左墨迹缩略图（72px 方 contain）右两行文字 */
+/* 旁注卡：横向卡片纵向堆叠——左墨迹缩略图（112px 方 contain）右两行文字 */
 .shufa-report .char-annos {
   display: flex;
   flex-direction: column;
@@ -245,10 +244,12 @@
   border-radius: 10px;
   padding: 10px;
 }
+/* 112px 方 contain：72px 时长横条笔画（如 15s 处）缩成一道灰痕无信息量；
+   112² ≈ 72² 的 2.4 倍面积，仍小于左邻田字格 150px，主次不倒置 */
 .shufa-report .anno-thumb {
   flex: none;
-  width: 72px;
-  height: 72px;
+  width: 112px;
+  height: 112px;
   object-fit: contain;
   border-radius: 6px;
   border: 1px solid var(--line);
@@ -834,19 +835,8 @@
   text-align: center;
 }
 
-/* ---------- 桌面应用壳（≥1000px：body 不滚动，双列各自内部滚动） ---------- */
+/* ---------- 桌面双列（≥1000px：document 流整体滚动，footer 紧随内容） ---------- */
 @media (min-width: 1000px) {
-  /* 打磨版 html/body{height:100%;overflow:hidden} 的类驱动等价：仅结果页挂载期锁滚 */
-  html.result-live,
-  body.result-live {
-    height: 100%;
-    overflow: hidden;
-  }
-  .shufa-report {
-    height: 100dvh;
-    display: grid;
-    grid-template-rows: auto 1fr auto;
-  }
   .shufa-report header.hero {
     max-width: none;
     margin: 0;
@@ -878,24 +868,16 @@
   .shufa-report main.cols {
     max-width: none;
     padding: 0;
-    flex: none;
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr);
-    min-height: 0;
   }
   .shufa-report .col {
     min-width: 0;
-    min-height: 0;
     margin: 0;
     border: none;
     border-radius: 0;
     background: var(--paper);
     padding: 16px 22px;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    scrollbar-width: thin;
-    scrollbar-color: var(--line) transparent;
   }
   .shufa-report .col-dyn {
     border-right: 1px solid var(--line);

@@ -3,7 +3,8 @@
   - 用户消息：UserBubble（溢出省略 + bottom-center 展开/收起，不再滚动）；
   - assistant：全宽无气泡 markstream 流式渲染 + hover copy 脚标；
   - reasoning：DisclosureRow 折叠行（流式自动展开 + 扫光摘要；定稿收起）；
-  - turn-end：↑/↓/时长药丸（usage 数据源缺省跳过；reason 进 title）；
+  - turn-end：时长/↑↓用量药丸（payload.usage 透传：↑=输入含缓存、↓=输出；
+    历史帧无 usage 时只显时长；明细进 title）；
   - error：失败明文卡片（走查 R3）；
   - 贴底跟随 + back-to-bottom FAB；Working 扫光 + 15s 起计时。
 -->
@@ -19,7 +20,7 @@
   import DisclosureRow from "./DisclosureRow.svelte";
   import UserBubble from "./UserBubble.svelte";
   import "./agent-flow.css";
-  import type { TranscriptItem } from "$lib/stores/tasks.svelte";
+  import type { TranscriptItem, TurnUsagePill } from "$lib/stores/tasks.svelte";
 
   let {
     items,
@@ -85,6 +86,35 @@
 
   function formatElapsed(ms: number): string {
     return ms >= 10_000 ? `${Math.round(ms / 1000)}s` : `${(ms / 1000).toFixed(1)}s`;
+  }
+
+  /** 千位以上缩写（1.2k / 12k / 1.2M；千位以下原样）。 */
+  function formatTokens(tokens: number): string {
+    if (tokens >= 1_000_000) return `${Math.round(tokens / 100_000) / 10}M`;
+    if (tokens >= 1_000) return `${Math.round(tokens / 100) / 10}k`;
+    return String(tokens);
+  }
+
+  /** 药丸 ↑ 口径：全部提示词输入（未命中 + 缓存读 + 缓存写）。 */
+  function turnInputTokens(usage: TurnUsagePill): number {
+    return usage.in + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+  }
+
+  /** 药丸悬停明细（输入/输出 + 缓存桶拆解 + 用时）。 */
+  function turnEndTitle(item: { elapsedMs?: number; usage?: TurnUsagePill }): string {
+    const parts: string[] = [];
+    if (item.usage !== undefined) {
+      parts.push(`输入 ${formatTokens(turnInputTokens(item.usage))} · 输出 ${formatTokens(item.usage.out)} tokens`);
+      const cache = [
+        item.usage.cacheRead !== undefined ? `缓存命中 ${formatTokens(item.usage.cacheRead)}` : null,
+        item.usage.cacheWrite !== undefined ? `缓存写入 ${formatTokens(item.usage.cacheWrite)}` : null,
+      ]
+        .filter((part): part is string => part !== null)
+        .join(" · ");
+      if (cache.length > 0) parts.push(cache);
+    }
+    if (item.elapsedMs !== undefined) parts.push(`用时 ${formatElapsed(item.elapsedMs)}`);
+    return parts.length > 0 ? parts.join(" · ") : "本轮完成";
   }
 
   async function copyText(text: string, seq: number): Promise<void> {
@@ -186,8 +216,10 @@
           </div>
         {:else if item.kind === "turn-end"}
           <div class="flow-item flex h-5 items-center gap-1.5">
-            <span class="turn-pill">
-              本轮完成{item.elapsedMs !== undefined ? ` · ${formatElapsed(item.elapsedMs)}` : ""}
+            <span class="turn-pill" title={turnEndTitle(item)}>
+              本轮完成{item.elapsedMs !== undefined ? ` · ${formatElapsed(item.elapsedMs)}` : ""}{item.usage !== undefined
+                ? ` · ↑${formatTokens(turnInputTokens(item.usage))} ↓${formatTokens(item.usage.out)}`
+                : ""}
             </span>
           </div>
         {/if}

@@ -4,7 +4,9 @@
  * 原始需求 2026-09-23（W4）：event.data 是内核来的外部输入，必须 unknown →
  * safeParse；畸形整事件丢弃 + 有界诊断，不产帧不消耗 seq。
  * 正交意图：
- *   [1] 九类被消费事件的 Zod schema（chunk/todo/message/turn/title/status/tool）。
+ *   [1] 九类被消费事件的 Zod schema（chunk/todo/message/turn/title/status/tool）
+ *       + usage 样本家族（assistant/message 顶层 usage / assistant/attempt 流
+ *       末 usage chunk → dsh-llm TokenUsage 收窄）。
  *   [2] {message: M} 信封解包与丢弃诊断（≤200ch）。
  */
 import { z } from 'zod';
@@ -49,6 +51,60 @@ export const MessageEventSchema = z.preprocess(messageEnvelopeOf, MessageShapeSc
 
 /** turn/end：reason.kind 投影为帧 text。 */
 export const TurnEndEventSchema = z.object({ reason: z.object({ kind: z.string().optional() }).passthrough().optional() }).passthrough();
+
+/**
+ * usage 计数面（@deepseek-ai/dsh-llm TokenUsage，2026-09-22 实证于
+ * node_modules 内 lib/types/types.d.ts）：inputTokens/outputTokens 必填，
+ * totalTokens/cacheReadTokens/cacheWriteTokens/reasoningTokens 可选
+ * （缺失 = 该次尝试未上报该桶）。SDK 侧 isCount = 非负安全整数。
+ */
+const TokenCountSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+
+/** dsh-llm TokenUsage 消费面（turn-end 用量药丸数据源）。 */
+export const TokenUsageSchema = z
+  .object({
+    inputTokens: TokenCountSchema,
+    outputTokens: TokenCountSchema,
+    totalTokens: TokenCountSchema.optional(),
+    cacheReadTokens: TokenCountSchema.optional(),
+    cacheWriteTokens: TokenCountSchema.optional(),
+    reasoningTokens: TokenCountSchema.optional(),
+  })
+  .passthrough();
+export type TokenUsageSample = z.infer<typeof TokenUsageSchema>;
+
+/**
+ * assistant/message 外层 usage：usage 挂在事件 data 顶层（{message: M} 信封
+ * 之外——dsh-session SessionEventMap：'assistant/message': {…, usage?:
+ * TokenUsage}，"the model output and its accounting travel together"）。
+ */
+export const MessageUsageEventSchema = z.object({ usage: TokenUsageSchema.optional() }).passthrough();
+
+/** assistant/attempt 流记录最小消费面（只读判别串与 chunk 载荷）。 */
+const StreamRecordSchema = z.object({ type: z.string().min(1), chunk: z.unknown().optional() }).passthrough();
+
+/** assistant/attempt：usage 只嵌在流的末位 usage chunk 里（无独立字段）。 */
+export const AttemptUsageEventSchema = z.object({ stream: z.array(StreamRecordSchema) }).passthrough();
+
+/**
+ * 从 attempt 流倒序提取末位 usage chunk（语义对齐 dsh-token-meter
+ * turn-usage.js 的 streamUsage = lastAssistantStreamChunk(stream, 'usage')）。
+ * chunk 形状为 {type: 'chunk', chunk: {type: 'usage', usage: TokenUsage}}。
+ */
+export function usageOfAttemptStream(
+  stream: ReadonlyArray<{ type: string; chunk?: unknown }>,
+): TokenUsageSample | undefined {
+  for (let index = stream.length - 1; index >= 0; index -= 1) {
+    const record = stream[index];
+    if (record?.type !== 'chunk') continue;
+    const chunk = record.chunk as { type?: unknown; usage?: unknown } | undefined;
+    if (typeof chunk === 'object' && chunk !== null && chunk.type === 'usage') {
+      const checked = TokenUsageSchema.safeParse(chunk.usage);
+      return checked.success ? checked.data : undefined;
+    }
+  }
+  return undefined;
+}
 
 /** session/title：title 存在即必须 string；缺失/空白由分支静默丢弃。 */
 export const SessionTitleEventSchema = z.object({ title: z.string().optional() }).passthrough();

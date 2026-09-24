@@ -24,12 +24,12 @@ test('初始态：needs_setup=true 且 setup 端点可达；setup_progress 三�
     expect(bootstrap.setup_progress).toEqual({
       admin_created: false,
       steps_done: 0,
-      steps_total: 3,
+      steps_total: 4, // Owner 需求 2026-09-25：git 检测步骤加入
       model_configured: false,
     });
 
     const { steps } = await client.setup.steps();
-    expect(steps.map((step) => step.id)).toEqual(['ffmpeg', 'python-env', 'whisper-model']);
+    expect(steps.map((step) => step.id)).toEqual(['ffmpeg', 'python-env', 'git', 'whisper-model']);
     expect(steps.every((step) => step.status === 'pending')).toBe(true);
   } finally {
     s.dispose();
@@ -40,14 +40,14 @@ test('setup_progress 三态推进：建管理员 / 完成向导步骤 / 配置�
   const s = createServices();
   try {
     const client = clientFor(s.context());
-    // 态 2：管理员已建（allow_anonymous 缺省关），向导完成 1/3。
+    // 态 2：管理员已建（allow_anonymous 缺省关），向导完成 1/4。
     await client.setup.createAdmin({ username: 'boss', password: 'secret66' });
     updateWizardProgress(s.db, 'ffmpeg', { status: 'done' });
     let progress = (await client.bootstrap()).setup_progress;
     expect(progress).toEqual({
       admin_created: true,
       steps_done: 1,
-      steps_total: 3,
+      steps_total: 4, // Owner 需求 2026-09-25：git 检测步骤加入
       model_configured: false,
     });
 

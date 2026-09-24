@@ -65,16 +65,6 @@
     return () => player.destroy();
   });
 
-  /** 桌面双列壳：挂载期间锁 html/body 滚动（report.css ≥1000px MQ 命中 .result-live） */
-  $effect(() => {
-    document.documentElement.classList.add("result-live");
-    document.body.classList.add("result-live");
-    return () => {
-      document.documentElement.classList.remove("result-live");
-      document.body.classList.remove("result-live");
-    };
-  });
-
   $effect(() => {
     const d = data;
     if (d) document.title = `书写讲评分析 · ${d.video.name}`;

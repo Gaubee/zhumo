@@ -7,7 +7,8 @@
  * 落盘/afterSeq 回放/审批（ask_user）/cancel。
  * 正交意图：
  *   [1] 会话生命周期：create/resume/cancel/dispose（内核 agents 服务 unknown 收窄）。
- *   [2] 帧投影：session/event → Frame（120ms delta 合并；reasoning 先于 text）。
+ *   [2] 帧投影：session/event → Frame（120ms delta 合并；reasoning 先于 text；
+ *       轮内 usage 累计 → turn/end 帧 payload.usage 药丸数据）。
  *   [3] 帧提交单点：环形 retention + FrameStore jsonl + 订阅者通知。
  *   [4] 审批：user-questions/request → approval-request 帧 + answer 回填。
  * 妥协声明：跨 cordis 服务访问按结构化 unknown 收窄（宿主服务形状无公开 TS 面）。
@@ -22,7 +23,9 @@ import { FrameStore } from './frame-store.js';
 import { productToolDenyList } from './tool-surface.js';
 import {
   AgentChunkEventSchema,
+  AttemptUsageEventSchema,
   MessageEventSchema,
+  MessageUsageEventSchema,
   ObjectPayloadEventSchema,
   SessionTitleEventSchema,
   TodoWriteEventSchema,
@@ -30,7 +33,9 @@ import {
   ToolResultEventSchema,
   TurnEndEventSchema,
   logDroppedEvent,
+  usageOfAttemptStream,
 } from './firehose-events.js';
+import type { TokenUsageSample } from './firehose-events.js';
 
 /** delta 合并窗口（ms）。 */
 const DELTA_FLUSH_MS = 120;
@@ -59,6 +64,19 @@ export interface TaskSessionResumeInput {
 }
 
 export type SessionLiveStatus = 'running' | 'idle' | 'persisted';
+
+/**
+ * 轮内 usage 累计器（turn/start 清零 → assistant/message + assistant/attempt
+ * 逐次尝试样本相加 → turn/end 收割进帧 payload）。口径对齐 dsh-token-meter
+ * TurnTokenUsage 的 attempt 聚合：in = 未缓存输入，cacheRead/cacheWrite 仅在
+ * 样本上报时累计（可选桶，缺失不算 0）。
+ */
+interface TurnUsageAccumulator {
+  in: number;
+  out: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
 
 /** 内核 Agent/Session 最小结构面（unknown 收窄）。 */
 interface AgentLike {
@@ -101,6 +119,8 @@ interface LiveTaskSession {
   deltaBuffer: string[];
   reasoningBuffer: string[];
   toolArgBuffers: Map<string, { name?: string; parts: string[] }>;
+  /** 当前 turn 的 usage 累计（undefined = 本轮尚无样本）。 */
+  turnUsage: TurnUsageAccumulator | undefined;
   deltaAt: number;
   pending: Map<number, { resolve: (answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> }) => void }>;
   subscribers: Set<(frame: Frame) => void>;
@@ -159,9 +179,47 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         absorbChunk(entry, checked.data.chunk);
         return;
       }
+      absorbTurnUsage(entry, event);
       flushDeltas(entry);
       commitFrames(entry, projectEvent(entry, event));
     });
+  }
+
+  /**
+   * 轮内 usage 吸收（turn-end 药丸数据源，2026-09-22）：
+   * - turn/start 清零（新轮重新累计）；
+   * - assistant/message 取 data.usage（SDK：成功尝试的精确计数随消息走）；
+   * - assistant/attempt 取流末 usage chunk（失败/重试尝试的计数只嵌在流里）；
+   * - 事件 data 为 SDK 外部输入，照例 safeParse；畸形样本静默跳过不产诊断
+   *   （usage 是旁路数据，不影响帧投影主链路）。
+   */
+  function absorbTurnUsage(entry: LiveTaskSession, event: SessionEventLike): void {
+    switch (event.type) {
+      case 'turn/start':
+        entry.turnUsage = undefined;
+        return;
+      case 'assistant/message': {
+        const checked = MessageUsageEventSchema.safeParse(event.data);
+        if (checked.success) addUsageSample(entry, checked.data.usage);
+        return;
+      }
+      case 'assistant/attempt': {
+        const checked = AttemptUsageEventSchema.safeParse(event.data);
+        if (checked.success) addUsageSample(entry, usageOfAttemptStream(checked.data.stream));
+        return;
+      }
+    }
+  }
+
+  /** 单样本累加（超安全整数即放弃整轮 usage——宁缺毋错，不展示假数）。 */
+  function addUsageSample(entry: LiveTaskSession, usage: TokenUsageSample | undefined): void {
+    if (usage === undefined) return;
+    const acc = entry.turnUsage ?? { in: 0, out: 0 };
+    acc.in += usage.inputTokens;
+    acc.out += usage.outputTokens;
+    if (usage.cacheReadTokens !== undefined) acc.cacheRead = (acc.cacheRead ?? 0) + usage.cacheReadTokens;
+    if (usage.cacheWriteTokens !== undefined) acc.cacheWrite = (acc.cacheWrite ?? 0) + usage.cacheWriteTokens;
+    entry.turnUsage = Number.isSafeInteger(acc.in) && Number.isSafeInteger(acc.out) ? acc : undefined;
   }
 
   /** 流式分片入缓冲（text/reasoning 同窗合并；tool-call-delta 按 callId 分桶）。 */
@@ -277,7 +335,13 @@ export function createTaskSessions(deps: TaskSessionDeps) {
           logDroppedEvent(sessionId, event.type, data);
           return [];
         }
-        return [frameOf(entry, 'turn-end', { text: checked.data.reason?.kind, payload: checked.data })];
+        // 轮内 usage 收割：与既有 payload 字段（turn/reason passthrough）共存；
+        // 无样本（历史会话/未上报/溢出放弃）时缺省——webui 药丸只显时长。
+        const usage = entry.turnUsage;
+        entry.turnUsage = undefined;
+        const payload =
+          usage === undefined ? checked.data : { ...checked.data, usage: usagePayloadOf(usage) };
+        return [frameOf(entry, 'turn-end', { text: checked.data.reason?.kind, payload })];
       }
       case 'todo/write': {
         const checked = TodoWriteEventSchema.safeParse(data);
@@ -388,6 +452,16 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     return parts.length > 0 ? parts.join('\n') : undefined;
   }
 
+  /** 累计器 → 帧 payload usage（桶名 snake_case，对齐 payload 线格式惯例 call_id 等）。 */
+  function usagePayloadOf(acc: TurnUsageAccumulator): { in: number; out: number; cache_read?: number; cache_write?: number } {
+    return {
+      in: acc.in,
+      out: acc.out,
+      ...(acc.cacheRead !== undefined ? { cache_read: acc.cacheRead } : {}),
+      ...(acc.cacheWrite !== undefined ? { cache_write: acc.cacheWrite } : {}),
+    };
+  }
+
   function blocksOf(message: { content: Array<{ type: string; text?: string }> }, type: string): string | undefined {
     const parts = message.content.filter((block) => block.type === type && typeof block.text === 'string').map((block) => block.text as string);
     return parts.length > 0 ? parts.join('\n') : undefined;
@@ -457,6 +531,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       deltaBuffer: [],
       reasoningBuffer: [],
       toolArgBuffers: new Map(),
+      turnUsage: undefined,
       deltaAt: Date.now(),
       pending: new Map(),
       subscribers: new Set(),

@@ -179,14 +179,44 @@ export type TranscriptItem =
   | { kind: "tool"; seq: number; toolName: string; argsText: string; result: string | null }
   | { kind: "status"; seq: number; text: string }
   | { kind: "error"; seq: number; text: string }
-  | { kind: "turn-end"; seq: number; elapsedMs?: number };
+  | { kind: "turn-end"; seq: number; elapsedMs?: number; usage?: TurnUsagePill };
+
+/**
+ * turn-end 用量药丸数据（daemon turn/end 帧 payload.usage 透传，2026-09-22）：
+ * - in = 未缓存输入 tokens（dsh-llm TokenUsage.inputTokens）；
+ * - cacheRead/cacheWrite 仅在 SDK 样本上报该桶时存在（↑ 口径 = 三者之和）；
+ * - 历史帧无 usage 时整个字段缺省（药丸只显时长）。
+ */
+export interface TurnUsagePill {
+  in: number;
+  out: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
+/** 帧 payload.usage 最小结构收窄（畸形/缺失 → undefined，优雅缺省）。 */
+function usageOfFramePayload(payload: unknown): TurnUsagePill | undefined {
+  const usage = (payload as { usage?: unknown } | undefined)?.usage;
+  if (typeof usage !== "object" || usage === null) return undefined;
+  const { in: input, out } = usage as { in?: unknown; out?: unknown };
+  if (typeof input !== "number" || typeof out !== "number") return undefined;
+  const cacheRead = (usage as { cache_read?: unknown }).cache_read;
+  const cacheWrite = (usage as { cache_write?: unknown }).cache_write;
+  return {
+    in: input,
+    out,
+    ...(typeof cacheRead === "number" ? { cacheRead } : {}),
+    ...(typeof cacheWrite === "number" ? { cacheWrite } : {}),
+  };
+}
 
 /**
  * 帧 → 转录条目（走查 R7 对齐 skill-creator-v2 投影语义）：
  * - assistant-delta/reasoning-delta 流式增量：并轨合并为 streaming 条目（终帧
  *   assistant-text/reasoning 落定替换）；
  * - assistant-reasoning → thinking 折叠行（流式自动展开、定稿收起）；
- * - turn-start 记时间，turn-end 投影 elapsed 药丸；
+ * - turn-start 记时间，turn-end 投影 elapsed 药丸（payload.usage 存在时
+ *   追加 ↑/↓ tokens 用量，历史帧缺省只显时长）；
  * - error 双源（turn-end error / failed status 详情）相邻去重。
  */
 export function projectFrames(frames: Frame[]): TranscriptItem[] {
@@ -292,7 +322,13 @@ export function projectFrames(frames: Frame[]): TranscriptItem[] {
           break;
         }
         const elapsedMs = turnStartAt !== null ? Math.max(0, frame.at - turnStartAt) : undefined;
-        items.push({ kind: "turn-end", seq: frame.seq, ...(elapsedMs !== undefined ? { elapsedMs } : {}) });
+        const usage = usageOfFramePayload(frame.payload);
+        items.push({
+          kind: "turn-end",
+          seq: frame.seq,
+          ...(elapsedMs !== undefined ? { elapsedMs } : {}),
+          ...(usage !== undefined ? { usage } : {}),
+        });
         turnStartAt = null;
         break;
       }

@@ -242,18 +242,43 @@ describe('wizard 命令步骤', () => {
     }
   });
 
-  test('未知步骤 NOT_FOUND；默认种子落库三条（webui-install/dsh 已退役；python-env 就位）', async () => {
+  test('未知步骤 NOT_FOUND；默认种子落库四条（webui-install/dsh 已退役；git 检测就位）', async () => {
     const s = createServices();
     try {
       const runner = new WizardRunner(s.db, []);
       await expect(runner.run('nope', false)).rejects.toMatchObject({ code: 'NOT_FOUND' });
       const rows = listWizardSteps(s.db);
-      expect(rows.map((r) => r.id)).toEqual(['ffmpeg', 'python-env', 'whisper-model']);
+      expect(rows.map((r) => r.id)).toEqual(['ffmpeg', 'python-env', 'git', 'whisper-model']);
       expect(rows.find((r) => r.id === 'webui-install')).toBeUndefined();
       expect(rows.find((r) => r.id === 'whisper-model')?.kind).toBe('download');
       // 2026-09-23：dsh 步骤退役——内核是 SDK 进程内嵌（pnpm install 就位），非系统依赖。
       expect(rows.find((r) => r.id === 'dsh')).toBeUndefined();
-      expect(defaultWizardSeeds({ dataRoot: s.config.dataRoot, shufaToolDir: s.root + '/shufa-tool' }).length).toBe(3);
+      // Owner 需求 2026-09-25：git 检测步骤（知识库修订历史的依赖）。
+      expect(rows.find((r) => r.id === 'git')?.kind).toBe('command');
+      expect(defaultWizardSeeds({ dataRoot: s.config.dataRoot, shufaToolDir: s.root + '/shufa-tool' }).length).toBe(4);
+    } finally {
+      s.dispose();
+    }
+  });
+
+  test('git 步骤（Owner 需求 2026-09-25）：git 可用环境开机嗅探即 done + 嗅探文案', async () => {
+    const s = createServices();
+    try {
+      // 种子定义与 ffmpeg 步同型：probe exit 0 = 已装；未装时 command 以中文提示
+      // （xcode-select --install / brew install git，缺它只是无历史、知识库可用）
+      // 非零退出置 failed——复用命令步骤既有语义，不发明新机制。
+      const seed = defaultWizardSeeds({
+        dataRoot: s.config.dataRoot,
+        shufaToolDir: path.join(s.root, 'shufa-tool'),
+      }).find((x) => x.id === 'git')!;
+      expect(seed.kind).toBe('command');
+      expect(seed.probe).toBe('git --version');
+      expect(seed.command).toContain('git --version');
+      expect(seed.command).toContain('brew install git');
+      // 开发机 git 可用：sniffAll 嗅探命中 → done（与 ffmpeg 的嗅探一致）。
+      await s.wizard.sniffAll();
+      expect(getWizardStep(s.db, 'git')?.status).toBe('done');
+      expect(getWizardStep(s.db, 'git')?.last_log).toContain('嗅探');
     } finally {
       s.dispose();
     }
@@ -592,7 +617,7 @@ describe('wizard 种子迁移（走查）', () => {
       installWizardSeeds(s.db, defaultWizardSeeds({ dataRoot: s.config.dataRoot, shufaToolDir: s.root + '/shufa-tool' }));
 
       const rows = listWizardSteps(s.db);
-      expect(rows.map((r) => r.id)).toEqual(['ffmpeg', 'python-env', 'whisper-model']); // webui-install 被删
+      expect(rows.map((r) => r.id)).toEqual(['ffmpeg', 'python-env', 'git', 'whisper-model']); // webui-install 被删
       const ffmpeg = rows.find((r) => r.id === 'ffmpeg')!;
       expect(ffmpeg.command).toBe('brew install ffmpeg'); // 定义字段恒更新（darwin 派生）
       expect(ffmpeg.status).toBe('done'); // 运行态保留
