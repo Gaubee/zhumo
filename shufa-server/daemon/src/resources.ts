@@ -202,8 +202,7 @@ export class ResourceService {
     });
   }
 
-  /** 行 → 线格式视图；.shufa 目录投影徽标 meta（含任务状态），其余不外泄服务端 meta。
-   * 文件行带 agent 可读绝对路径（2026-09-25 @资源面板注入用；目录/无内容 = null）。 */
+  /** 行 → 线格式视图；.shufa 目录投影徽标 meta（含任务状态），其余不外泄服务端 meta。 */
   toItem(row: ResourceRow): ResourceItem {
     const meta = parseResourceMeta(row);
     const taskId = row.is_dir === 1 && typeof meta?.task_id === 'string' ? meta.task_id : null;
@@ -222,10 +221,6 @@ export class ResourceService {
       is_dir: row.is_dir === 1,
       size: row.size,
       meta: badge,
-      path:
-        row.is_dir === 0 && row.content_hash
-          ? this.deps.blobs.pathFor(row.content_hash)
-          : null,
       created_at: row.created_at,
       updated_at: row.updated_at,
     };

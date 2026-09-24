@@ -10,8 +10,7 @@
   - 触发面板（2026-09-25 二轮，DSH 官方一致）：`/` = 内核命令注册表
     （composer.list，插件系统注册——非硬编码；选中即发送）、`$` = 内核技能
     注册表（user-invocable；选中留 $name token，daemon 展开为官方
-    skill-invocation 双消息注入）、`@` = 用户文件引用（DSH ctx.fs 标准服务；
-    按稿文前缀浏览，目录/`..` 改写前缀续览、文件注入 canonical 路径行）。
+    skill-invocation 双消息注入）。`@` 已按 Owner 裁决撤除（DSH 无此面板语义）。
 -->
 <script lang="ts">
   import IconFile from "@lucide/svelte/icons/file";
@@ -166,7 +165,7 @@
   let caretOnFirstLine = $state(true);
   let slashMenu = $state<{ handleKeydown: (event: KeyboardEvent) => boolean } | null>(null);
   let kbMenu = $state<{ handleKeydown: (event: KeyboardEvent) => boolean } | null>(null);
-  let resMenu = $state<{ handleKeydown: (event: KeyboardEvent) => boolean } | null>(null);
+
 
   /** 内核目录（命令+技能；首次触发 `/` 或 `$` 时惰性拉取缓存一次）。 */
   let composerCommands = $state<MenuEntry[]>([]);
@@ -199,69 +198,6 @@
       });
   });
 
-  /** @ 面板按稿文前缀浏览（v2 ReferenceMenu 同法 + DSH ctx.fs 标准数据源）：
-   * browsePrefix = @ 表达式截到最后一个 "/"（含）——前缀即浏览状态（退格、`..`
-   * 返回、目录下钻共用「改写稿文」一条路，无独立 trail 状态机）；dirCache：
-   * 前缀 → 条目投影（含 canonical 绝对目录）；过期守卫丢弃迟到响应。 */
-  let resEntries = $state<MenuEntry[]>([]);
-  let dirCache = new Map<string, Array<{ name: string; kind: "dir" | "file" | "other"; absDir: string }>>();
-  let resLoading = false;
-  let resFailed = $state(false);
-
-  const browsePrefix = $derived.by(() => {
-    if (!text.startsWith("@")) return "";
-    const firstLine = text.split("\n", 1)[0] ?? "";
-    const cut = firstLine.lastIndexOf("/");
-    return cut === -1 ? "@" : firstLine.slice(0, cut + 1);
-  });
-
-  $effect(() => {
-    const target = browsePrefix;
-    if (target.length === 0) return;
-    if (dirCache.has(target) || resLoading) return;
-    resLoading = true;
-    void api
-      .composerFiles(target.slice(1))
-      .then((out) => {
-        if (target !== browsePrefix) return; // 过期守卫：用户已切前缀的响应不入场
-        dirCache.set(
-          target,
-          out.entries.map((entry) => ({ name: entry.name, kind: entry.kind, absDir: out.dir })),
-        );
-        resEntries = out.entries.map((entry) =>
-          entry.kind === "dir"
-            ? { value: `${target}${entry.name}/`, description: "打开文件夹", group: "资源", key: `dir:${target}${entry.name}` }
-            : entry.kind === "file"
-              ? {
-                  value: `${target}${entry.name}`,
-                  description: `${out.dir}/${entry.name}`,
-                  group: "资源",
-                  key: `file:${target}${entry.name}`,
-                }
-              : { value: `${target}${entry.name}`, group: "资源", key: `other:${target}${entry.name}` },
-        );
-        resFailed = false;
-      })
-      .catch(() => {
-        if (target !== browsePrefix) return;
-        // 目标目录不可读：空投影（`..` 仍可退出）。
-        dirCache.set(target, []);
-        resEntries = [];
-        resFailed = true;
-      })
-      .finally(() => {
-        resLoading = false;
-      });
-  });
-
-  /** 首行替换为引用行（选中即落稿文，发送时无魔法）。 */
-  function insertReferenceLine(line: string): void {
-    const lines = text.split("\n");
-    lines[0] = line;
-    text = lines.join("\n");
-    requestCaretEnd();
-  }
-
   function onSlashSelect(value: string): void {
     // 命令选中即执行发送（daemon 经内核 commands 分流，不进 LLM）。
     text = "";
@@ -276,33 +212,6 @@
     requestCaretEnd();
   }
 
-  function onResSelect(value: string): void {
-    // 目录/pinned（值尾 "/"，含 `..` 的父前缀）→ 改写稿文前缀续览（v2 同法：
-    // 前缀即状态）；文件 → 引用行（DSH ctx.fs 的 canonical 绝对路径，agent 可读）。
-    if (value.endsWith("/")) {
-      const lines = text.split("\n");
-      lines[0] = value;
-      text = lines.join("\n");
-      requestCaretEnd();
-      return;
-    }
-    const slash = value.lastIndexOf("/");
-    const name = slash === -1 ? value.slice(1) : value.slice(slash + 1);
-    const hit = dirCache.get(browsePrefix)?.find((item) => item.name === name && item.kind !== "dir");
-    const filePath = hit !== undefined ? `${hit.absDir}/${hit.name}` : "";
-    insertReferenceLine(`[素材 ${name}]：${filePath}`);
-  }
-
-  /** @ 面板置顶行：非根级显示 `..`（value = 父前缀，选中改写稿文即返回）。 */
-  const resPinned = $derived.by(() => {
-    if (browsePrefix.length <= 1) return undefined;
-    const trimmed = browsePrefix.slice(0, -1);
-    const cut = trimmed.lastIndexOf("/");
-    return { value: trimmed.slice(0, cut + 1), label: "../ 返回上级" };
-  });
-  const resSource = $derived(
-    browsePrefix.length > 1 ? `用户文件 — ${browsePrefix.slice(1)}` : "用户文件（根目录 · DSH fs）",
-  );
 
   function syncCaret(): void {
     const el = textareaEl;
@@ -329,7 +238,6 @@
     // 触发面板键盘先占（v2 同序：命令 → 知识库 → 资源；任一消费即止）。
     if (slashMenu?.handleKeydown(event)) return;
     if (kbMenu?.handleKeydown(event)) return;
-    if (resMenu?.handleKeydown(event)) return;
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
       submit();
@@ -379,19 +287,6 @@
     sourceLabel="内核技能注册表（user-invocable）"
     onSelect={(value) => onSkillSelect(value)}
     bind:this={kbMenu}
-  />
-  <TriggerMenu
-    trigger="@"
-    entries={resEntries}
-    {text}
-    {caretOnFirstLine}
-    menuLabel="素材资源引用"
-    dataSlot="resource-menu"
-    emptyMessage={resFailed ? "目录不可用" : dirCache.has(browsePrefix) ? "没有匹配的文件" : "加载目录…"}
-    sourceLabel={resSource}
-    pinned={resPinned}
-    onSelect={(value) => onResSelect(value)}
-    bind:this={resMenu}
   />
 
   {#if videoName !== null}

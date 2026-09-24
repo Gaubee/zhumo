@@ -128,8 +128,6 @@ export const ResourceItemSchema = z.object({
   is_dir: z.boolean(),
   size: z.number(),
   meta: z.record(z.string(), z.unknown()).nullable(),
-  /** agent 可读绝对路径（2026-09-25 @资源面板注入用；目录/未落盘 = null）。 */
-  path: z.string().nullable().optional(),
   created_at: IsoDateTimeSchema,
   updated_at: IsoDateTimeSchema,
 });

@@ -76,7 +76,6 @@ import type {
   ModelsTestResult,
   Attachment,
   ComposerCatalog,
-  ComposerFilesView,
   KbGroupView,
   KbRevisionDetailView,
   KbRevisionView,
@@ -162,7 +161,6 @@ interface ShufaRpc {
   /** 前台输入框目录（2026-09-25 二轮）。 */
   composer: {
     list(): Promise<ComposerCatalog>;
-    files(input: { dir?: string }): Promise<ComposerFilesView>;
   };
   tasks: {
     list(): Promise<{ tasks: TaskItem[] }>;
@@ -240,8 +238,6 @@ export interface ShufaApi {
   setTaskModel(taskId: string, provider: string, model: string, effort?: string | null): Promise<Task>;
   /** 前台输入框目录（/ 命令注册表 + $ 技能注册表；内核未挂载 = 空表）。 */
   composerList(): Promise<ComposerCatalog>;
-  /** @ 面板目录浏览（DSH ctx.fs 标准；dir 相对用户根，缺省=根）。 */
-  composerFiles(dir?: string): Promise<ComposerFilesView>;
   /** 任务的导出结果列表（新→旧；右侧标签页数据源）。 */
   getTaskResults(taskId: string): Promise<TaskResultRefView[]>;
   getResult(publicId: string): Promise<ResultInfo>;
@@ -644,17 +640,6 @@ class MockApi implements ShufaApi {
           description: "书法/作业讲评视频分析管线手册",
           when_to_use: "分析书法讲评视频时",
         },
-      ],
-    };
-  }
-
-  async composerFiles(_dir?: string): Promise<ComposerFilesView> {
-    void _dir; // mock：不按目录分片（面板空态可用性验证用）
-    return {
-      dir: "/mock/home",
-      entries: [
-        { name: "任务文件夹", kind: "dir" as const },
-        { name: "示范视频.mp4", kind: "file" as const, size: 1024 },
       ],
     };
   }
@@ -1090,10 +1075,6 @@ class RpcApi implements ShufaApi {
 
   async composerList(): Promise<ComposerCatalog> {
     return rpc().composer.list();
-  }
-
-  async composerFiles(dir?: string): Promise<ComposerFilesView> {
-    return rpc().composer.files({ dir });
   }
 
   /** 任务的导出结果列表（新→旧）。after_seq 取极大值 = 只取 results 不回放帧。 */

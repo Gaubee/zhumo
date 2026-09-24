@@ -45,7 +45,6 @@ import {
   KbEntryDeleteInputSchema,
   KbRevisionGetInputSchema,
   KbRestoreInputSchema,
-  ComposerFilesInputSchema,
 } from '@zhumo/contracts';
 import { ANONYMOUS_USERNAME } from '@zhumo/contracts';
 import type {
@@ -709,14 +708,6 @@ const composerList = requireActiveUser.handler(async ({ context }) => {
   return requireTaskService(context).composerCatalog();
 });
 
-/** @ 面板目录浏览（2026-09-25 二轮）：DSH ctx.fs 标准（resolve/listDir/
- * processPath/contains），浏览面钉在该用户根内。 */
-const composerFiles = requireActiveUser
-  .input(ComposerFilesInputSchema)
-  .handler(async ({ context, input }) => {
-    return requireTaskService(context).userFiles(context.user as UserRow, { dir: input.dir });
-  });
-
 const adminKbSaveGroup = requireAdmin
   .input(KbGroupSaveInputSchema)
   .handler(async ({ context, input }) => {
@@ -861,7 +852,6 @@ export const router = {
 
   composer: {
     list: composerList,
-    files: composerFiles,
   },
 
   res: {

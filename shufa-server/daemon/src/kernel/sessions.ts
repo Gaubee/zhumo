@@ -55,30 +55,6 @@ export interface KernelSkillInfo {
   whenToUse?: string;
 }
 
-/** ctx.fs 目录条目（dsh-fs FsDirEntry 投影：kind 三值语义保留）。 */
-export interface KernelFileEntry {
-  name: string;
-  kind: 'dir' | 'file' | 'other';
-  size?: number;
-}
-
-/** 内核 ctx.fs 侧面（dsh-fs 抽象 + dsh-fs-local 实现；resolve/listDir 标准）。 */
-interface KernelFsLike {
-  resolve(
-    path: string,
-    opts?: { cwd?: string },
-  ): Promise<{ path: string }>;
-  processPath(target: unknown): string;
-  contains(parent: unknown, child: unknown): boolean;
-  listDir(target: unknown, signal?: AbortSignal): Promise<
-    ReadonlyArray<{ name: string; type: 'file' | 'directory' | 'other'; size?: number }>
-  >;
-}
-
-function kernelFs(ctx: Context): KernelFsLike | undefined {
-  return (ctx as Context & { fs?: KernelFsLike }).fs;
-}
-
 /** 内核 ctx.services 侧面（commands/skills；dsh-base bundle 自带，缺省缺席）。 */
 interface KernelCommandServiceLike {
   list(agent: unknown): readonly { name: string; description: string }[] | undefined;
@@ -681,34 +657,6 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     return commandCatalog;
   }
 
-  /**
-   * 用户目录浏览（@ 面板数据源，DSH ctx.fs 标准）：dir 相对 userRoot；
-   * containment 守卫（resolve 后 contains(userRoot, target)）防越权浏览；
-   * 返回 canonical 绝对路径（agent 可读）+ 条目投影。
-   */
-  async function listUserFiles(
-    userRoot: string,
-    dir: string,
-  ): Promise<{ dir: string; entries: readonly KernelFileEntry[] }> {
-    const kernel = requireKernel();
-    const fs = kernelFs(kernel.ctx);
-    if (fs === undefined) throw new Error('内核文件系统服务未装配');
-    const target = await fs.resolve(dir.length > 0 ? dir : '.', { cwd: userRoot });
-    const rootTarget = await fs.resolve('.', { cwd: userRoot });
-    if (!fs.contains(rootTarget, target)) {
-      throw new Error('路径越界：只能浏览本人用户目录');
-    }
-    const entries = await fs.listDir(target);
-    return {
-      dir: fs.processPath(target),
-      entries: entries.map((entry) => ({
-        name: entry.name,
-        kind: entry.type === 'directory' ? 'dir' : entry.type === 'file' ? 'file' : 'other',
-        ...(entry.size !== undefined ? { size: entry.size } : {}),
-      })),
-    };
-  }
-
   /** 内核技能注册表的 user-invocable 投影（$ 面板数据源）。 */
   async function listUserSkills(): Promise<readonly KernelSkillInfo[]> {
     const kernel = requireKernel();
@@ -734,8 +682,6 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     listCommands,
     listUserSkills,
 
-    /** @ 面板目录浏览（DSH ctx.fs 标准；userRoot 由调用方按属主拼合）。 */
-    listUserFiles,
 
     /**
      * 创建任务会话：cwd=用户根目录（架构调整 2026-09-23：shell 工作目录/相对
