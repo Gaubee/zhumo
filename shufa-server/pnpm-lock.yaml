@@ -260,6 +260,9 @@ importers:
       markstream-svelte:
         specifier: ^2.0.13
         version: 2.0.13(svelte@5.57.1)
+      minisearch:
+        specifier: ^7.2.0
+        version: 7.2.0
     devDependencies:
       '@internationalized/date':
         specifier: ^3.12.4
@@ -3224,6 +3227,9 @@ packages:
 
   mdurl@2.1.0:
     resolution: {integrity: sha512-1+HBaOx0zi/dQWht8rNv9MYf9qqpqL/kxI0hXImU6Y547zM6Sni8BQibt7ifgMcYtQg41ao3Ivd6cnSM86inpg==}
+
+  minisearch@7.2.0:
+    resolution: {integrity: sha512-dqT2XBYUOZOiC5t2HRnwADjhNS2cecp9u+TJRiJ1Qp/f5qjkeT5APcGPjHw+bz89Ms8Jp+cG4AlE+QZ/QnDglg==}
 
   mri@1.2.0:
     resolution: {integrity: sha512-tzzskb3bG8LvYGFF/mDTpq3jpI6Q9wc3LEmBaghu+DdCssd1FakN7Bc0hVNmEyGq1bq3RgfkCb3cmQLpNPOroA==}
@@ -6649,6 +6655,8 @@ snapshots:
       svelte: 5.57.1
 
   mdurl@2.1.0: {}
+
+  minisearch@7.2.0: {}
 
   mri@1.2.0: {}
 

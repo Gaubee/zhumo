@@ -239,6 +239,23 @@ describe('TaskService 创建链', () => {
     expect(sessions.emitted.some((f) => f.kind === 'result')).toBe(true);
     // 无 data.json 的 bundle：收尾返回 null。
     expect(service.onExported(item.id, path.join(env.root, 'nope'))).toBeNull();
+
+    // 走查 2026-09-25：SITE_BASE_URL 缺省 + HOST=0.0.0.0 → 结果链接以本机
+    // mDNS 主机名替换绑定通配地址（http://0.0.0.0 浏览器不可达）。
+    const originalBase = env.config.siteBaseUrl;
+    env.config.siteBaseUrl = 'http://0.0.0.0:8217';
+    const mdnsOutcome = service.onExported(item.id, bundle);
+    expect(mdnsOutcome?.url).not.toContain('0.0.0.0');
+    expect(mdnsOutcome?.url).toMatch(/^http:\/\/[^/]+\.local:8217\/r\//);
+    env.config.siteBaseUrl = originalBase;
+
+    // 详情面补全（G2/G3）：video_name 资源名投影 + 任务关联结果列表（可多次导出）。
+    const detail = await service.get(user, item.id, Number.MAX_SAFE_INTEGER);
+    expect(detail.task.video_name).toBe('v.mp4');
+    expect(detail.results.map((r) => r.public_id)).toEqual(
+      expect.arrayContaining([outcome?.public_id, mdnsOutcome?.public_id]),
+    );
+    expect(detail.results).toHaveLength(2);
   });
 
   it('get：afterSeq 帧回放走 jsonl；cancel 推 cancelled 状态帧', async () => {

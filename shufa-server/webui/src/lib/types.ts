@@ -243,6 +243,8 @@ export interface Task {
   status: TaskStatus;
   prompt: string;
   videoName: string;
+  /** 素材视频资源 id（null = 未附视频；raw 预览播放用）。 */
+  videoResourceId: string | null;
   createdAt: string;
   updatedAt: string;
   /** 任务级模型覆盖（走查 R6：null = 跟随后台默认模型；聊天中可切换）。 */
@@ -250,6 +252,13 @@ export interface Task {
   modelModel: string | null;
   /** 失败原因明文（走查 R3：failed 必须可见；null = 无）。 */
   error: string | null;
+}
+
+/** 任务导出结果引用（一次对话可多次导出；右侧标签页数据源）。 */
+export interface TaskResultRefView {
+  publicId: string;
+  title: string | null;
+  createdAt: string;
 }
 
 /** 结果页信息（/r/{public_id}，公开）。 */

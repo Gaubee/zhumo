@@ -22,6 +22,7 @@ import type {
   ModelsSettings,
   SessionInfo,
   Task,
+  TaskResultRefView,
   UserInfo,
   WizardRunParams,
   WizardStep,
@@ -140,6 +141,11 @@ export const mockDb = {
     ] as DshModelRoute[],
     default: { provider: "zai", model: "glm-5.3-flash" },
   } as ModelsSettings,
+  /** 任务 → 导出结果引用（mock 详情标签页数据源）。 */
+  taskResults: new Map<string, TaskResultRefView[]>([
+    ["t-2", [{ publicId: "mock-r2b", title: null, createdAt: "2026-09-22T14:06:30.000Z" }, { publicId: "mock-r2a", title: null, createdAt: "2026-09-22T14:03:10.000Z" }]],
+    ["t-1", [{ publicId: "mock-r1", title: null, createdAt: "2026-09-21T08:36:00.000Z" }]],
+  ]),
   tasks: [
     {
       id: "t-3",
@@ -147,6 +153,7 @@ export const mockDb = {
       status: "running",
       prompt: "分析这段草书的连笔与使转，给出练习建议",
       videoName: "草书演示.mp4",
+      videoResourceId: null,
       createdAt: "2026-09-23T09:12:00.000Z",
       modelProvider: null,
       modelModel: null,
@@ -159,6 +166,7 @@ export const mockDb = {
       status: "done",
       prompt: "点评这页楷书的间架结构",
       videoName: "楷书入门-横竖点.mp4",
+      videoResourceId: null,
       createdAt: "2026-09-22T14:00:00.000Z",
       modelProvider: null,
       modelModel: null,
@@ -171,6 +179,7 @@ export const mockDb = {
       status: "done",
       prompt: "分析示范视频里的起笔角度与收笔",
       videoName: "行书示范-起笔.mp4",
+      videoResourceId: null,
       createdAt: "2026-09-21T08:30:00.000Z",
       modelProvider: null,
       modelModel: null,

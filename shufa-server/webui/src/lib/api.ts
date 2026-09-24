@@ -78,6 +78,7 @@ import type {
   KbGroupView,
   KbRevisionDetailView,
   KbRevisionView,
+  TaskResultRefView,
 } from "$lib/types";
 
 /** mock 逃生口：默认走真 RPC；?mock=1 才启用 mock（联调期测试/离线演示用）。 */
@@ -226,6 +227,8 @@ export interface ShufaApi {
   uploadAttachment(file: { name: string; dataBase64: string }): Promise<Attachment>;
   /** 聊天中切换任务模型（走查 R6）：更新覆盖并热切会话（idle 态）。 */
   setTaskModel(taskId: string, provider: string, model: string): Promise<Task>;
+  /** 任务的导出结果列表（新→旧；右侧标签页数据源）。 */
+  getTaskResults(taskId: string): Promise<TaskResultRefView[]>;
   getResult(publicId: string): Promise<ResultInfo>;
   // ---- 资源管理器（W5；owner 仅 admin 传他人 username） ----
   resTree(owner?: string, parent?: string): Promise<ResTreeOutputView>;
@@ -573,6 +576,7 @@ class MockApi implements ShufaApi {
       status: "queued",
       prompt,
       videoName: video?.name ?? "演示素材.mp4",
+      videoResourceId: null, // mock 无资源树联动（真后端由资源 id 驱动预览播放）
       modelProvider: model?.provider ?? null,
       modelModel: model?.model ?? null,
       error: null,
@@ -605,6 +609,10 @@ class MockApi implements ShufaApi {
     task.modelProvider = provider;
     task.modelModel = model;
     return { ...task };
+  }
+
+  async getTaskResults(taskId: string): Promise<TaskResultRefView[]> {
+    return mockDb.taskResults.get(taskId) ?? [];
   }
 
   async getResult(publicId: string): Promise<ResultInfo> {
@@ -748,7 +756,8 @@ function toTaskView(task: TaskItem): Task {
     title: (task.prompt ?? "").slice(0, 18) || "新任务",
     status: task.status,
     prompt: task.prompt ?? "",
-    videoName: task.video_resource_id !== null ? "素材视频" : "未附视频",
+    videoName: task.video_name ?? "未附视频",
+    videoResourceId: task.video_resource_id,
     createdAt: task.created_at,
     updatedAt: task.updated_at,
     error: task.error ?? null,
@@ -1019,6 +1028,16 @@ class RpcApi implements ShufaApi {
   async setTaskModel(taskId: string, provider: string, model: string): Promise<Task> {
     const out = await rpc().tasks.setModel({ task_id: taskId, provider, model });
     return toTaskView(out.task);
+  }
+
+  /** 任务的导出结果列表（新→旧）。after_seq 取极大值 = 只取 results 不回放帧。 */
+  async getTaskResults(taskId: string): Promise<TaskResultRefView[]> {
+    const out = await rpc().tasks.get({ id: taskId, after_seq: Number.MAX_SAFE_INTEGER });
+    return out.results.map((r) => ({
+      publicId: r.public_id,
+      title: r.title ?? null,
+      createdAt: r.created_at,
+    }));
   }
 
   /** 结果页公开元数据走公开 HTTP 面（/api/results/{public_id}，匿名可读）。 */

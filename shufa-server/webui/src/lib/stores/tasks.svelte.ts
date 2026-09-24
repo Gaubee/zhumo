@@ -8,12 +8,14 @@
  *       语法：user/assistant/tool/status/turn-end）。
  */
 import { api } from "$lib/api";
-import type { Frame, Task } from "$lib/types";
+import type { Frame, Task, TaskResultRefView } from "$lib/types";
 
 export const tasks = $state({
   list: [] as Task[],
   selectedId: null as string | null,
   frames: [] as Frame[],
+  /** 选中任务的导出结果列表（新→旧；右侧标签页数据源）。 */
+  results: [] as TaskResultRefView[],
   sending: false,
   loading: true,
   error: null as string | null,
@@ -40,10 +42,13 @@ export async function selectTask(taskId: string): Promise<void> {
   unsubscribe = null;
   tasks.selectedId = taskId;
   tasks.frames = await api.getTaskFrames(taskId);
+  tasks.results = await api.getTaskResults(taskId);
   unsubscribe = api.subscribeTaskFrames(taskId, (frame) => {
     // 真实 user-text 帧到达 → 移除同文本的乐观帧（走查 R7：乐观显示去重）。
     if (frame.kind === "user-text") dropOptimistic(frame.text ?? "");
     if (tasks.selectedId === taskId) tasks.frames = [...tasks.frames, frame];
+    // result 帧 = 新导出落地 → 刷新结果列表（详情右侧即时出新标签）。
+    if (frame.kind === "result") void refreshResults(taskId);
     // 状态帧 payload.status → 行状态同步（W7 + 走查 R3：failed 帧携带的 error
     // 详情一并写行——详情头「失败原因」即时呈现，不等列表重拉）。
     const status = readFrameStatus(frame);
@@ -58,6 +63,16 @@ export async function selectTask(taskId: string): Promise<void> {
   });
   // 帧流可能推动任务状态变化；轻量刷新行（mock 下 replayAgentTurn 改内存对象）。
   void loadTaskRow(taskId);
+}
+
+/** 导出结果列表刷新（selectTask 初始 + result 帧到达时）。 */
+async function refreshResults(taskId: string): Promise<void> {
+  try {
+    const results = await api.getTaskResults(taskId);
+    if (tasks.selectedId === taskId) tasks.results = results;
+  } catch {
+    // 结果面失败不打断对话流；下次 result 帧或重选任务再试。
+  }
 }
 
 /** status 帧的 payload.error 收窄（走查 R3：daemon 失败帧携带详情明文）。 */

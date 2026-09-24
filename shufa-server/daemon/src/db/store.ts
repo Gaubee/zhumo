@@ -231,6 +231,18 @@ export function getResultByPublicId(db: SqliteDb, publicId: string): ResultRow |
   return (row as ResultRow | undefined) ?? null;
 }
 
+/** 任务的全部导出结果（新→旧；任务详情标签页数据源——一次对话可多次导出）。 */
+export function listResultsByTask(
+  db: SqliteDb,
+  taskId: string,
+): Array<{ public_id: string; title: string | null; created_at: string }> {
+  return db
+    .prepare(
+      'SELECT public_id, title, created_at FROM results WHERE task_id = ? ORDER BY created_at DESC',
+    )
+    .all(taskId) as Array<{ public_id: string; title: string | null; created_at: string }>;
+}
+
 export function createResult(
   db: SqliteDb,
   input: { publicId: string; taskId: string | null; ownerId: string; title: string | null; bundlePath: string },

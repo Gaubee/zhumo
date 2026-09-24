@@ -18,6 +18,7 @@
   import { Button } from "$lib/components/ui/button";
   import ComposerCard from "$lib/components/agent/ComposerCard.svelte";
   import TaskComposer from "$lib/components/agent/TaskComposer.svelte";
+  import TaskDetailPanel from "$lib/components/agent/TaskDetailPanel.svelte";
   import TranscriptView from "$lib/components/agent/TranscriptView.svelte";
   import { auth } from "$lib/stores/auth.svelte";
   import {
@@ -160,9 +161,10 @@
       </div>
     </aside>
 
-    <!-- 右列：详情（选中 = 对话；未选中 = 新建分析任务） -->
-    <section class="flex min-w-0 flex-1 flex-col">
+    <!-- 右列：详情 = 对话（左） + 任务详情标签页（右；Owner 2026-09-25 布局升级） -->
+    <section class="flex min-w-0 flex-1">
       {#if selected}
+      <div class="flex min-w-0 flex-1 flex-col">
         <div class="flex items-center gap-3 border-b border-border px-4 py-2">
           <h2 class="min-w-0 flex-1 truncate text-sm font-medium">{selected.title}</h2>
           <Badge variant="outline" class="text-[10px]">
@@ -183,21 +185,6 @@
             </span>
           </div>
         {/if}
-        <!-- 素材视频展示位 -->
-        <div class="flex items-center gap-3 border-b border-border bg-card/50 px-4 py-2">
-          <div
-            class="flex h-14 w-24 shrink-0 items-center justify-center rounded-md border border-border bg-muted/50 text-[10px] text-muted-foreground"
-            aria-label="素材视频展示位"
-          >
-            视频
-          </div>
-          <div class="min-w-0 text-xs">
-            <p class="truncate font-medium">{selected.videoName}</p>
-            <p class="text-[11px] text-muted-foreground">
-              素材视频仅作展示，agent 通过文件路径自行编排分析工具。
-            </p>
-          </div>
-        </div>
         <TranscriptView {items} running={detailRunning} />
         <div class="border-t border-border p-3">
           <ComposerCard
@@ -213,6 +200,11 @@
             onsetmodel={(provider, model) => void setModel(provider, model)}
           />
         </div>
+      </div>
+      <!-- 任务详情（标签式：详情 + 每个导出结果一页；素材视频预览播放也在此） -->
+      <div class="hidden w-[380px] shrink-0 border-l border-border md:block">
+        <TaskDetailPanel task={selected} results={tasks.results} running={detailRunning} />
+      </div>
       {:else}
         <div class="min-h-0 flex-1 overflow-y-auto">
           <TaskComposer />

@@ -14,9 +14,17 @@
  */
 import { copyFileSync, existsSync, linkSync, mkdirSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import { hostname } from 'node:os';
 import path from 'node:path';
 import { ORPCError } from '@orpc/server';
-import type { Frame, ModelRouteInfo, TaskFollowupOutput, TaskItem, TaskStatus } from '@zhumo/contracts';
+import type {
+  Frame,
+  ModelRouteInfo,
+  TaskFollowupOutput,
+  TaskGetOutput,
+  TaskItem,
+  TaskStatus,
+} from '@zhumo/contracts';
 import type { AppConfig } from '../config.js';
 import type { SqliteDb } from '../db/database.js';
 import { BlobStore } from '../db/blobs.js';
@@ -32,7 +40,7 @@ import {
   type ResourceRow,
   type TaskRow,
 } from '../db/tasks.js';
-import { createResult, type UserRow } from '../db/store.js';
+import { createResult, listResultsByTask, type UserRow } from '../db/store.js';
 import {
   resolveModelRoute,
   type ModelRoutesBundle,
@@ -44,6 +52,7 @@ import { createAnalysisCapabilities, type TaskLocation } from '../capability/ana
 import { createKnowledgeCapabilities } from '../capability/knowledge.js';
 import { createCapabilityRegistry, type CapabilityRegistry } from '../capability/core.js';
 import type { KbStore } from '../kb/store.js';
+import { mdnsUrlFor } from '../lan.js';
 
 const VIDEO_MAX_BYTES = 256 * 1024 * 1024;
 
@@ -267,7 +276,11 @@ export class TaskService {
     return listTasksByOwner(this.deps.db, user.id).map((row) => this.toItem(row));
   }
 
-  async get(user: UserRow, id: string, afterSeq: number): Promise<{ task: TaskItem; frames: Frame[] }> {
+  async get(
+    user: UserRow,
+    id: string,
+    afterSeq: number,
+  ): Promise<{ task: TaskItem; frames: Frame[]; results: TaskGetOutput['results'] }> {
     const task = this.requireOwnedTask(user, id);
     const sessionId = task.agent_session_id;
     if (sessionId && !this.deps.sessions.isLive(sessionId) && isAwaitingRun(task.status)) {
@@ -276,7 +289,11 @@ export class TaskService {
     const frames = sessionId
       ? this.deps.sessions.stream(sessionId, this.framesFileOf(task), afterSeq).frames
       : [];
-    return { task: this.toItem(getTaskById(this.deps.db, id) ?? task), frames };
+    return {
+      task: this.toItem(getTaskById(this.deps.db, id) ?? task),
+      frames,
+      results: listResultsByTask(this.deps.db, id),
+    };
   }
 
   // ---------------------------------------------------------------- cancel / resume
@@ -483,6 +500,26 @@ export class TaskService {
     return null;
   }
 
+  /**
+   * 对外结果链接基址（走查 2026-09-25）：SITE_BASE_URL 未配置时缺省基址继承
+   * HOST——daemon 绑 0.0.0.0（局域网直访常态）会拼出 http://0.0.0.0:8217/…
+   * 浏览器不可达。以本机 mDNS 主机名（<hostname>.local）替换绑定通配地址；
+   * 显式配置的域名/127.0.0.1 不动。
+   */
+  private publicBaseUrl(): string {
+    const base = this.deps.config.siteBaseUrl;
+    try {
+      const parsed = new URL(base);
+      if (parsed.hostname === '0.0.0.0' || parsed.hostname === '::' || parsed.hostname === '[::]') {
+        const port = parsed.port || String(this.deps.config.port);
+        return mdnsUrlFor(hostname(), Number(port));
+      }
+    } catch {
+      // 非法基址按原样返回（不阻断导出）。
+    }
+    return base;
+  }
+
   /** export 收尾：bundle → results 行 + public_id → result 帧 + 任务 done。 */
   onExported(taskId: string, bundlePath: string): { public_id: string; url: string } | null {
     const task = getTaskById(this.deps.db, taskId);
@@ -503,7 +540,7 @@ export class TaskService {
       const meta = resource ? (parseResourceMeta(resource) ?? {}) : {};
       updateResourceMeta(this.deps.db, task.resource_id, { ...meta, result_id: row.id });
     }
-    const url = `${this.deps.config.siteBaseUrl}/r/${publicId}`;
+    const url = `${this.publicBaseUrl()}/r/${publicId}`;
     if (task.agent_session_id) {
       const sessionId = task.agent_session_id;
       this.deps.sessions.emit(sessionId, {
@@ -583,12 +620,17 @@ export class TaskService {
   }
 
   toItem(row: TaskRow): TaskItem {
+    // video_name：资源名投影（详情播放位与列表展示；无资源 = null）。
+    const resource = row.video_resource_id
+      ? getResourceById(this.deps.db, row.video_resource_id)
+      : null;
     return {
       id: row.id,
       owner_id: row.owner_id,
       status: row.status,
       prompt: row.prompt,
       video_resource_id: row.video_resource_id,
+      video_name: resource?.name ?? null,
       agent_session_id: row.agent_session_id,
       result_id: row.result_id,
       error: row.error ?? null,

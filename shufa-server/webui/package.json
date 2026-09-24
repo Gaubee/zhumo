@@ -13,10 +13,10 @@
   "devDependencies": {
     "@internationalized/date": "^3.12.4",
     "@lucide/svelte": "^1.47.0",
-    "@zhumo/contracts": "workspace:*",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@tailwindcss/vite": "^4.3.0",
     "@tsconfig/svelte": "^5.0.8",
+    "@zhumo/contracts": "workspace:*",
     "bits-ui": "^2.18.1",
     "clsx": "^2.1.1",
     "shadcn-svelte": "^1.4.1",
@@ -32,6 +32,7 @@
   "dependencies": {
     "@orpc/client": "^1.15.3",
     "@orpc/contract": "^1.15.3",
-    "markstream-svelte": "^2.0.13"
+    "markstream-svelte": "^2.0.13",
+    "minisearch": "^7.2.0"
   }
 }

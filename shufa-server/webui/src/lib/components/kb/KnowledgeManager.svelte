@@ -13,7 +13,9 @@
   import IconHistory from "@lucide/svelte/icons/history";
   import IconPencil from "@lucide/svelte/icons/pencil";
   import IconPlus from "@lucide/svelte/icons/plus";
+  import IconSearch from "@lucide/svelte/icons/search";
   import IconTrash2 from "@lucide/svelte/icons/trash-2";
+  import MiniSearch from "minisearch";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
@@ -29,6 +31,27 @@
    * （Svelte 5 禁止渲染期改 $state，懒初始化写法会让条目块整个渲染失败），
    * 轮询回填也因此天然不覆盖未编辑内容。 */
   let drafts = $state<Record<string, string>>({});
+
+  /** 搜索（Owner 2026-09-25：minisearch；库小全量内存索引，groups 变更即重建）。 */
+  let query = $state("");
+  const searchIndex = $derived.by<MiniSearch<{ id: string; group: string; key: string; value: string }>>(() => {
+    const index = new MiniSearch({
+      fields: ["group", "key", "value"],
+      storeFields: ["group", "key", "value"],
+      searchOptions: { prefix: true, fuzzy: 0.2 },
+    });
+    index.addAll(
+      groups.flatMap((g) =>
+        g.entries.map((e) => ({ id: `${g.name}/${e.key}`, group: g.name, key: e.key, value: e.value })),
+      ),
+    );
+    return index;
+  });
+  const searchHits = $derived(
+    query.trim().length === 0
+      ? []
+      : searchIndex.search(query.trim()).slice(0, 50),
+  );
 
   // ---- 分组操作 ----
   let newGroupName = $state("");
@@ -203,10 +226,21 @@
         书法领域知识与总结模式（分组 → 条目）。每次变更记入 git 历史，agent 写总结前经 MCP 读取。
       </p>
     </div>
-    <Button size="sm" variant="outline" onclick={() => void openHistory()}>
-      <IconHistory data-icon="inline-start" />
-      修订历史
-    </Button>
+    <div class="flex items-center gap-2">
+      <label class="relative">
+        <IconSearch class="pointer-events-none absolute top-1/2 left-2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+        <Input
+          bind:value={query}
+          placeholder="搜索分组/条目/内容"
+          class="h-8 w-52 pl-7 text-xs"
+          aria-label="搜索知识库"
+        />
+      </label>
+      <Button size="sm" variant="outline" onclick={() => void openHistory()}>
+        <IconHistory data-icon="inline-start" />
+        修订历史
+      </Button>
+    </div>
   </div>
 
   {#if loadError}
@@ -279,9 +313,41 @@
       </div>
     </aside>
 
-    <!-- 右：条目编辑器 -->
+    <!-- 右：条目编辑器 / 搜索命中（查询时整库跨组检索） -->
     <section class="flex min-h-0 flex-1 flex-col rounded-lg border bg-card">
-      {#if current === null}
+      {#if query.trim().length > 0}
+        <div class="flex min-h-0 flex-1 flex-col">
+          <div class="shrink-0 border-b px-3 py-2 text-xs text-muted-foreground">
+            搜索「{query.trim()}」— 命中 {searchHits.length} 条{searchHits.length >= 50 ? "（仅示前 50）" : ""}
+          </div>
+          <div class="min-h-0 flex-1 overflow-y-auto p-3">
+            {#if searchHits.length === 0}
+              <p class="py-8 text-center text-xs text-muted-foreground">无命中——换个词试试</p>
+            {:else}
+              <div class="space-y-2">
+                {#each searchHits as hit (hit.id)}
+                  <button
+                    type="button"
+                    class="block w-full rounded-md border p-2 text-left transition-colors hover:bg-muted/50"
+                    onclick={() => {
+                      selected = hit.group;
+                      query = "";
+                    }}
+                    aria-label="跳转到该条目所在分组"
+                  >
+                    <span class="flex items-center gap-2">
+                      <Badge variant="secondary" class="shrink-0 text-[10px]">{hit.group}</Badge>
+                      <span class="min-w-0 flex-1 truncate text-xs font-medium">{hit.key}</span>
+                      <span class="shrink-0 text-[10px] text-muted-foreground">相关度 {(hit.score * 10).toFixed(0)}</span>
+                    </span>
+                    <span class="mt-1 line-clamp-2 block text-[11px] leading-snug text-muted-foreground">{hit.value}</span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        </div>
+      {:else if current === null}
         <div class="flex flex-1 items-center justify-center text-xs text-muted-foreground">尚无分组——左侧创建一个</div>
       {:else}
         <div class="shrink-0 border-b px-3 py-2">

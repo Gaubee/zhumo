@@ -20,6 +20,8 @@ export const TaskItemSchema = z.object({
   status: TaskStatusSchema,
   prompt: z.string().nullable(),
   video_resource_id: IdSchema.nullable(),
+  /** 素材视频文件名（资源名投影；null = 未附视频）——任务详情播放位与列表展示用。 */
+  video_name: z.string().nullable(),
   agent_session_id: z.string().nullable(),
   result_id: IdSchema.nullable(),
   /** 失败原因明文（走查 R3：failed 必须可见；null = 无失败/未失败）。 */
@@ -31,6 +33,14 @@ export const TaskItemSchema = z.object({
   updated_at: IsoDateTimeSchema,
 });
 export type TaskItem = z.infer<typeof TaskItemSchema>;
+
+/** 任务关联结果引用（一次对话可多次导出——任务详情右侧标签页的数据源）。 */
+export const TaskResultRefSchema = z.object({
+  public_id: z.string(),
+  title: z.string().nullable(),
+  created_at: IsoDateTimeSchema,
+});
+export type TaskResultRef = z.infer<typeof TaskResultRefSchema>;
 
 export const TaskListOutputSchema = z.object({ tasks: z.array(TaskItemSchema) });
 
@@ -75,6 +85,8 @@ export type TaskGetInput = z.infer<typeof TaskGetInputSchema>;
 export const TaskGetOutputSchema = z.object({
   task: TaskItemSchema,
   frames: z.array(FrameSchema),
+  /** 任务全部导出结果（新→旧；右侧标签页与详情列表共用）。 */
+  results: z.array(TaskResultRefSchema),
 });
 export type TaskGetOutput = z.infer<typeof TaskGetOutputSchema>;
 
