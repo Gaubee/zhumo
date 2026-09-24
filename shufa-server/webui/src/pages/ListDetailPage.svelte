@@ -272,19 +272,30 @@
     </main>
 
     <Sheet.Root bind:open={listOpen}>
-      <Sheet.Content side="left" class="w-80 gap-0 p-0">
-        <Sheet.Header class="flex-row items-center justify-between border-b px-3 py-2 pe-12">
+      <!-- 与任务面板同款：title + actions（新建/关闭都在行内，浮动 X 隐藏）。 -->
+      <Sheet.Content side="left" class="w-80 gap-0 p-0" hideClose>
+        <Sheet.Header class="flex-row items-center justify-between border-b px-3 py-2">
           <Sheet.Title class="text-xs font-medium text-muted-foreground">任务列表</Sheet.Title>
-          <Button
-            size="xs"
-            variant="ghost"
-            onclick={() => {
-              openComposer();
-              listOpen = false;
-            }}
-          >
-            + 新建
-          </Button>
+          <span class="flex items-center gap-0.5">
+            <Button
+              size="xs"
+              variant="ghost"
+              onclick={() => {
+                openComposer();
+                listOpen = false;
+              }}
+            >
+              + 新建
+            </Button>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label="关闭列表"
+              onclick={() => (listOpen = false)}
+            >
+              <IconX class="size-4" aria-hidden="true" />
+            </Button>
+          </span>
         </Sheet.Header>
         <div class="flex min-h-0 flex-1 flex-col">
           {@render taskListColumn()}
