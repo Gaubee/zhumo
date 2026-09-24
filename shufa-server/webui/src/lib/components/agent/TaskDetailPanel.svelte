@@ -16,13 +16,21 @@
   import * as Tabs from "$lib/components/ui/tabs";
   import { Badge } from "$lib/components/ui/badge";
   import { api } from "$lib/api";
+  import type { Snippet } from "svelte";
   import type { Task, TaskResultRefView } from "$lib/types";
 
   let {
     task,
     results,
     running = false,
-  }: { task: Task; results: TaskResultRefView[]; running?: boolean } = $props();
+    action,
+  }: {
+    task: Task;
+    results: TaskResultRefView[];
+    running?: boolean;
+    /** 标签行 inline-end 固定动作区（不随 tabs 滚动；移动抽屉放「关闭」）。 */
+    action?: Snippet;
+  } = $props();
 
   /** 活动标签值：详情（固定）或某结果的 public_id。 */
   let active = $state("detail");
@@ -79,9 +87,11 @@
 </script>
 
 <Tabs.Root bind:value={active} class="flex h-full min-h-0 flex-col bg-card/40">
+  <!-- 标签行 = 可滚动 tabs + 固定 action（Owner 2026-09-25：关闭类动作不随 tabs 滚走）。 -->
+  <div class="flex shrink-0 items-stretch border-b border-border">
   <Tabs.List
     variant="line"
-    class="h-9 w-full shrink-0 justify-start gap-1 overflow-x-auto rounded-none border-b px-1.5"
+    class="h-9 min-w-0 flex-1 justify-start gap-1 overflow-x-auto rounded-none border-none px-1.5"
     aria-label="任务详情与结果页"
   >
     <Tabs.Trigger value="detail" class="flex-none gap-1.5 px-2.5 text-xs">
@@ -130,6 +140,12 @@
       </Tabs.Trigger>
     {/each}
   </Tabs.List>
+  {#if action !== undefined}
+    <div class="flex shrink-0 items-center border-l border-border px-1">
+      {@render action()}
+    </div>
+  {/if}
+  </div>
 
   <Tabs.Content value="detail" class="min-h-0 flex-1 overflow-y-auto p-3">
     <!-- 素材视频播放 -->

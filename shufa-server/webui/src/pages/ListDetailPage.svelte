@@ -13,6 +13,7 @@
   import IconListTodo from "@lucide/svelte/icons/list-todo";
   import IconLogIn from "@lucide/svelte/icons/log-in";
   import IconPanelRight from "@lucide/svelte/icons/panel-right";
+  import IconX from "@lucide/svelte/icons/x";
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
   import * as Sheet from "$lib/components/ui/sheet";
@@ -111,11 +112,9 @@
 </script>
 
 {#snippet taskListColumn()}
-  <div class="flex h-full min-h-0 flex-col bg-card/60">
-    <div class="shrink-0 border-b border-border px-3 py-2.5">
-      <span class="text-xs font-medium text-muted-foreground">任务列表</span>
-    </div>
-    <div class="min-h-0 flex-1 overflow-y-auto p-2">
+  <!-- 纯列表区：标题条由桌面栏与移动抽屉各自持有（移动走查 2026-09-25：
+       snippet 自带标题时抽屉里出现两个「任务列表」）。 -->
+  <div class="min-h-0 flex-1 overflow-y-auto bg-card/60 p-2">
       {#each tasks.list as task (task.id)}
         <button
           type="button"
@@ -145,6 +144,12 @@
         </p>
       {/if}
     </div>
+{/snippet}
+
+{#snippet listTitlebar(onNew: () => void)}
+  <div class="flex shrink-0 items-center justify-between border-b border-border bg-card/60 px-3 py-2">
+    <span class="text-xs font-medium text-muted-foreground">任务列表</span>
+    <Button size="xs" variant="ghost" onclick={onNew}>+ 新建</Button>
   </div>
 {/snippet}
 
@@ -156,7 +161,10 @@
         <Badge variant="outline" class="text-[10px]">
           {statusLabel[selected.status] ?? selected.status}
         </Badge>
-        <Button size="sm" variant="outline" onclick={openComposer}>新建任务</Button>
+        <Button size="sm" variant="outline" class="md:hidden" onclick={() => (detailOpen = true)}>
+          <IconPanelRight data-icon="inline-start" />
+          面板
+        </Button>
       </div>
       {#if selected.status === "failed"}
         <!-- 失败摘要行（走查 R3：库内 error 是兜底真源）。 -->
@@ -209,16 +217,6 @@
     <span class="text-sm font-semibold tracking-wide">朱墨</span>
     <span class="hidden text-[11px] text-muted-foreground md:inline">书法视频 · agent 分析工作台</span>
     <span class="flex-1"></span>
-    {#if !desktop && selected}
-      <Button
-        size="sm"
-        variant="outline"
-        onclick={() => (detailOpen = true)}
-      >
-        <IconPanelRight data-icon="inline-start" />
-        详情
-      </Button>
-    {/if}
     {#if auth.session}
       <span class="text-[11px] text-muted-foreground">
         {auth.session.role === "anonymous" ? "匿名用户" : auth.session.username}
@@ -251,7 +249,10 @@
     <!-- 桌面：三栏可拖拽（任务列表 | 对话 | 任务详情） -->
     <PaneGroup direction="horizontal" autoSaveId="zhumo-home-panes" class="min-h-0 flex-1">
       <Pane defaultSize={18} minSize={10} class="min-w-44">
-        {@render taskListColumn()}
+        <div class="flex h-full min-h-0 flex-col">
+          {@render listTitlebar(openComposer)}
+          {@render taskListColumn()}
+        </div>
       </Pane>
       <Handle />
       <Pane minSize={26}>
@@ -271,25 +272,46 @@
     </main>
 
     <Sheet.Root bind:open={listOpen}>
-      <Sheet.Content side="left" class="w-80 p-0">
-        <Sheet.Header class="border-b px-3 py-2.5">
+      <Sheet.Content side="left" class="w-80 gap-0 p-0">
+        <Sheet.Header class="flex-row items-center justify-between border-b px-3 py-2 pe-12">
           <Sheet.Title class="text-xs font-medium text-muted-foreground">任务列表</Sheet.Title>
+          <Button
+            size="xs"
+            variant="ghost"
+            onclick={() => {
+              openComposer();
+              listOpen = false;
+            }}
+          >
+            + 新建
+          </Button>
         </Sheet.Header>
-        <div class="h-[calc(100%-3rem)]">
+        <div class="flex min-h-0 flex-1 flex-col">
           {@render taskListColumn()}
         </div>
       </Sheet.Content>
     </Sheet.Root>
 
     <Sheet.Root bind:open={detailOpen}>
-      <Sheet.Content side="right" class="w-[92%] max-w-md p-0">
+      <Sheet.Content side="right" class="w-[92%] max-w-md gap-0 p-0" hideClose>
         <Sheet.Header class="sr-only">
-          <Sheet.Title>任务详情</Sheet.Title>
-          <Sheet.Description>素材视频、元数据与导出结果</Sheet.Description>
+          <Sheet.Title>任务面板</Sheet.Title>
+          <Sheet.Description>素材视频、任务详情与导出结果</Sheet.Description>
         </Sheet.Header>
         {#if selected}
-          <div class="h-full">
-            <TaskDetailPanel task={selected} results={tasks.results} running={detailRunning} />
+          <div class="min-h-0 flex-1">
+            <TaskDetailPanel task={selected} results={tasks.results} running={detailRunning}>
+              {#snippet action()}
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="关闭面板"
+                  onclick={() => (detailOpen = false)}
+                >
+                  <IconX class="size-4" aria-hidden="true" />
+                </Button>
+              {/snippet}
+            </TaskDetailPanel>
           </div>
         {/if}
       </Sheet.Content>
