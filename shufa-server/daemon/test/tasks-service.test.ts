@@ -314,6 +314,19 @@ describe('TaskService 创建链', () => {
     await expect(service.setModel(user, { taskId: item.id, provider: 'nope', model: 'm' })).rejects.toThrow('不在已配置路由中');
   });
 
+  it('2026-09-25 三轮：内核 session/title 帧落行，无标题回退 null（前端截断 prompt）', async () => {
+    const item = await service.create(user, {
+      prompt: '分析这段草书的连笔与使转，给出练习建议',
+      video: { filename: 'v.mp4', data_base64: Buffer.from('bytes').toString('base64') },
+    });
+    // 未生成标题：title = null（webui 侧回退 prompt 截断投影）。
+    expect(item.title).toBeNull();
+    // 内核标题帧回写（幂等；经 applySessionTitle）。
+    service.applySessionTitle('task-1', '草书连笔讲评分析');
+    const updated = await service.get(user, item.id, 0);
+    expect(updated.task.title).toBe('草书连笔讲评分析');
+  });
+
   it('2026-09-25 二轮：composerCatalog 透传内核命令/技能注册表（whenToUse→when_to_use）', async () => {
     const catalog = await service.composerCatalog();
     expect(catalog.commands).toEqual([{ name: 'compact', description: '压缩对话历史' }]);

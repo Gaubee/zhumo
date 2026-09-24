@@ -103,6 +103,8 @@ export interface TaskSessionDeps {
   retention?: number;
   /** agent turn 以 error 终止时的失败回调（W7 联调：任务失败路径不悬挂）。 */
   onSessionFailure?: (sessionId: string, reason: string) => void;
+  /** 内核 session/title 帧回调（2026-09-25 三轮：标题落任务行）。 */
+  onSessionTitle?: (sessionId: string, title: string) => void;
 }
 
 export interface TaskSessionStartInput {
@@ -380,6 +382,15 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         entry.frames.splice(0, entry.frames.length - retention);
       }
       entry.store.append(frame);
+      // 会话标题回写（2026-09-25 三轮）：内核 session/title 帧落任务行
+      //（deps.onSessionTitle；标题更新不打断帧流，异常只记日志）。
+      if (frame.kind === 'session-title' && typeof frame.text === 'string' && frame.text.length > 0) {
+        try {
+          deps.onSessionTitle?.(entry.agent.session.id, frame.text);
+        } catch (error) {
+          console.warn('[sessions] 会话标题回写失败：', error instanceof Error ? error.message : error);
+        }
+      }
       for (const subscriber of entry.subscribers) {
         try {
           subscriber(frame);

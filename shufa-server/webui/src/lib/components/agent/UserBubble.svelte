@@ -27,7 +27,7 @@
 <div class="relative">
   <div
     bind:this={bodyEl}
-    class="bubble-user px-3.5 py-2 text-[13px] leading-5 {expanded ? '' : 'max-h-[7.5rem] overflow-hidden'}"
+    class="bubble-user px-3.5 py-2 text-[12px] leading-[19px] {expanded ? '' : 'max-h-[7rem] overflow-hidden'}"
   >
     <MarkdownRender content={text} />
   </div>

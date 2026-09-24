@@ -37,6 +37,7 @@ import {
   parseResourceMeta,
   updateResourceMeta,
   updateTask,
+  updateTaskTitleBySession,
   type ResourceRow,
   type TaskRow,
 } from '../db/tasks.js';
@@ -313,6 +314,11 @@ export class TaskService {
     console.warn(`[tasks] agent 会话失败（task=${row.id}）：${reason}`);
     updateTask(this.deps.db, row.id, { status: 'failed', error: reason });
     this.emitStatus(sessionId, row.id, 'failed', reason);
+  }
+
+  /** 会话标题回写（内核 session/title 帧到达；无匹配行静默幂等）。 */
+  applySessionTitle(sessionId: string, title: string): void {
+    updateTaskTitleBySession(this.deps.db, sessionId, title);
   }
 
   /** 前台 / 与 $ 面板目录（2026-09-25 二轮：内核命令/技能注册表，DSH 官方一致）。 */
@@ -667,6 +673,7 @@ export class TaskService {
       prompt: row.prompt,
       video_resource_id: row.video_resource_id,
       video_name: resource?.name ?? null,
+      title: row.title ?? null,
       agent_session_id: row.agent_session_id,
       result_id: row.result_id,
       error: row.error ?? null,

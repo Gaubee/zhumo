@@ -67,6 +67,8 @@ export async function selectTask(taskId: string): Promise<void> {
           : t,
       );
     }
+    // 内核会话标题帧（2026-09-25 三轮）：行标题即时跟进（title 落库回读）。
+    if (frame.kind === "session-title") void loadTaskRow(taskId);
   });
   if (tasks.selectedId !== taskId) {
     subscribe(); // 等待期间已切走：立即退订，不留悬挂订阅

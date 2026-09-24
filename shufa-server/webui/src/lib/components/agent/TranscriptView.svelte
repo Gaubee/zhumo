@@ -13,11 +13,10 @@
   import IconTriangleAlert from "@lucide/svelte/icons/triangle-alert";
   import IconCheck from "@lucide/svelte/icons/check";
   import IconCopy from "@lucide/svelte/icons/copy";
-  import IconSparkles from "@lucide/svelte/icons/sparkles";
   import MarkdownRender from "markstream-svelte";
   import "markstream-svelte/index.css";
   import AgentToolRow from "./AgentToolRow.svelte";
-  import DisclosureRow from "./DisclosureRow.svelte";
+  import ReasoningRow from "./ReasoningRow.svelte";
   import UserBubble from "./UserBubble.svelte";
   import "./agent-flow.css";
   import type { TranscriptItem, TurnUsagePill } from "$lib/stores/tasks.svelte";
@@ -77,11 +76,6 @@
   function backToBottom(): void {
     const body = scrollBody;
     if (body) body.scrollTop = body.scrollHeight;
-  }
-
-  function thinkingSummary(text: string, streaming: boolean): string {
-    const firstLine = text.split("\n").find((line) => line.trim().length > 0) ?? "";
-    return streaming ? `${firstLine.slice(0, 60)}…` : firstLine.slice(0, 60);
   }
 
   function formatElapsed(ms: number): string {
@@ -148,23 +142,12 @@
             <UserBubble text={item.text} />
           </div>
         {:else if item.kind === "reasoning"}
-          <div class="flow-item">
-            <DisclosureRow
-              icon={IconSparkles}
-              title="思考中"
-              summary={thinkingSummary(item.text, item.streaming)}
-              open={item.streaming ? true : (openItems[item.seq] ?? false)}
-              running={item.streaming}
-              onToggle={() => (openItems = { ...openItems, [item.seq]: !(openItems[item.seq] ?? false) })}
-            />
-            {#if item.streaming || openItems[item.seq]}
-              <div
-                class="mt-1 max-h-48 overflow-y-auto rounded-md px-2 pb-1 text-[11px] leading-relaxed whitespace-pre-wrap text-muted-foreground"
-              >
-                {item.text}
-              </div>
-            {/if}
-          </div>
+          <ReasoningRow
+            text={item.text}
+            streaming={item.streaming}
+            open={openItems[item.seq] ?? false}
+            onToggle={() => (openItems = { ...openItems, [item.seq]: !(openItems[item.seq] ?? false) })}
+          />
         {:else if item.kind === "assistant"}
           <div class="flow-item group/msg max-w-full">
             <div class="msg-body max-w-full [&_a]:text-primary">

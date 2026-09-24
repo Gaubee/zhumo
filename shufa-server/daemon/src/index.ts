@@ -112,6 +112,8 @@ async function main(): Promise<void> {
     },
     // W7 联调：agent turn error → 任务 failed + 状态帧（失败路径不悬挂）。
     onSessionFailure: (sessionId, reason) => tasks.markSessionFailed(sessionId, reason),
+    // 2026-09-25 三轮：内核 session/title 帧落任务行（列表标题告别 prompt 截断）。
+    onSessionTitle: (sessionId, title) => tasks.applySessionTitle(sessionId, title),
   });
   tasks = new TaskService({
     config,

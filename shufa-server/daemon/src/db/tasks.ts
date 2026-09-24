@@ -26,6 +26,8 @@ export interface TaskRow {
   model_model: string | null;
   /** 任务级思考强度档（2026-09-25 前台对齐；NULL=不覆盖）。 */
   model_effort: string | null;
+  /** 会话标题（内核 session/title 帧；NULL=回退 prompt 截断投影）。 */
+  title: string | null;
   /** 失败原因（AgentChat 走查 R3：failed 必须可见——turn-end error 明文落库，
    * 列表 badge/详情转录都可回放；resume 成功拉回 running 时清空）。 */
   error: string | null;
@@ -57,15 +59,16 @@ export function createTask(
     model_provider: input.modelProvider ?? null,
     model_model: input.modelModel ?? null,
     model_effort: input.modelEffort ?? null,
+    title: null,
     error: null,
     created_at: nowIso(),
     updated_at: nowIso(),
   };
   db.prepare(
     `INSERT INTO tasks (id, resource_id, owner_id, status, prompt, video_resource_id,
-                        agent_session_id, result_id, model_provider, model_model, model_effort,
+                        agent_session_id, result_id, model_provider, model_model, model_effort, title,
                         created_at, updated_at)
-     VALUES (?, ?, ?, 'queued', ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, 'queued', ?, ?, NULL, NULL, ?, ?, ?, NULL, ?, ?)`,
   ).run(
     row.id,
     row.resource_id,
@@ -151,6 +154,19 @@ export function updateTask(
     );
   }
   return getTaskById(db, id);
+}
+
+/** 会话标题回写（内核 session/title 帧 → 行；无匹配行 = 0，幂等）。 */
+export function updateTaskTitleBySession(
+  db: SqliteDb,
+  sessionId: string,
+  title: string,
+): void {
+  db.prepare('UPDATE tasks SET title = ?, updated_at = ? WHERE agent_session_id = ?').run(
+    title,
+    nowIso(),
+    sessionId,
+  );
 }
 
 // ---------------------------------------------------------------- resources

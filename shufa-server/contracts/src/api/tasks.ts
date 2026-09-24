@@ -22,6 +22,8 @@ export const TaskItemSchema = z.object({
   video_resource_id: IdSchema.nullable(),
   /** 素材视频文件名（资源名投影；null = 未附视频）——任务详情播放位与列表展示用。 */
   video_name: z.string().nullable(),
+  /** 会话标题（内核 session/title 帧落行；null = 未生成，前端回退 prompt 截断）。 */
+  title: z.string().nullable(),
   agent_session_id: z.string().nullable(),
   result_id: IdSchema.nullable(),
   /** 失败原因明文（走查 R3：failed 必须可见；null = 无失败/未失败）。 */

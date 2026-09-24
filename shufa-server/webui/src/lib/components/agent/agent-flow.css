@@ -113,10 +113,10 @@
   background: color-mix(in oklab, var(--primary) 10%, transparent);
 }
 
-/* 转录正文 13px/20。 */
+/* 转录正文 12px/19（2026-09-25 三轮：对齐整体 text-xs 视觉体系）。 */
 .msg-body {
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 19px;
 }
 
 /* 工具展开卡：mono 11px + muted 底。 */

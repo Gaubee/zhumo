@@ -113,4 +113,11 @@ ALTER TABLE tasks ADD COLUMN error TEXT;
 ALTER TABLE tasks ADD COLUMN model_effort TEXT;
 `,
   },
+  {
+    // 会话标题（2026-09-25 三轮）：内核 session/title 帧落行；NULL=回退 prompt 截断。
+    version: 5,
+    up: `
+ALTER TABLE tasks ADD COLUMN title TEXT;
+`,
+  },
 ];

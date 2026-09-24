@@ -786,7 +786,7 @@ function toWizardStepView(step: ContractWizardStep): WizardStep {
 function toTaskView(task: TaskItem): Task {
   return {
     id: task.id,
-    title: (task.prompt ?? "").slice(0, 18) || "新任务",
+    title: task.title ?? ((task.prompt ?? "").slice(0, 18) || "新任务"),
     status: task.status,
     prompt: task.prompt ?? "",
     videoName: task.video_name ?? "未附视频",
