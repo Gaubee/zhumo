@@ -201,6 +201,12 @@
   </div>
 {/snippet}
 
+<svelte:window
+  onkeydown={(e) => {
+    if (e.key === "Escape" && detailOpen) detailOpen = false;
+  }}
+/>
+
 <div class="flex h-screen flex-col bg-paper">
   <!-- 顶栏 -->
   <header class="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-card px-3 md:px-4">
@@ -266,10 +272,45 @@
       {/if}
     </PaneGroup>
   {:else}
-    <!-- 移动：对话全宽；列表/详情抽屉收纳 -->
+    <!-- 移动：对话全宽；任务列表走 Sheet（无状态可卸载）；任务面板长驻
+         （transform 滑入滑出、永不卸载——视频进度/iframe 状态跨开关保留）。 -->
     <main class="min-h-0 flex-1">
       {@render chatColumn()}
     </main>
+
+    {#if selected}
+      <div
+        class="fixed inset-y-0 end-0 z-50 flex w-[92%] max-w-md flex-col border-s bg-background shadow-xl transition-transform duration-300 {detailOpen
+          ? "translate-x-0"
+          : "pointer-events-none translate-x-full"}"
+        aria-hidden={detailOpen ? undefined : "true"}
+        aria-label="任务面板"
+        role="region"
+      >
+        <div class="min-h-0 flex-1">
+          <TaskDetailPanel task={selected} results={tasks.results} running={detailRunning}>
+            {#snippet action()}
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                aria-label="关闭面板"
+                onclick={() => (detailOpen = false)}
+              >
+                <IconX class="size-4" aria-hidden="true" />
+              </Button>
+            {/snippet}
+          </TaskDetailPanel>
+        </div>
+      </div>
+      {#if detailOpen}
+        <button
+          type="button"
+          class="fixed inset-0 z-40 bg-black/40"
+          aria-label="收起任务面板"
+          onclick={() => (detailOpen = false)}
+        ></button>
+      {/if}
+    {/if}
 
     <Sheet.Root bind:open={listOpen}>
       <!-- 与任务面板同款：title + actions（新建/关闭都在行内，浮动 X 隐藏）。 -->
@@ -303,29 +344,5 @@
       </Sheet.Content>
     </Sheet.Root>
 
-    <Sheet.Root bind:open={detailOpen}>
-      <Sheet.Content side="right" class="w-[92%] max-w-md gap-0 p-0" hideClose>
-        <Sheet.Header class="sr-only">
-          <Sheet.Title>任务面板</Sheet.Title>
-          <Sheet.Description>素材视频、任务详情与导出结果</Sheet.Description>
-        </Sheet.Header>
-        {#if selected}
-          <div class="min-h-0 flex-1">
-            <TaskDetailPanel task={selected} results={tasks.results} running={detailRunning}>
-              {#snippet action()}
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label="关闭面板"
-                  onclick={() => (detailOpen = false)}
-                >
-                  <IconX class="size-4" aria-hidden="true" />
-                </Button>
-              {/snippet}
-            </TaskDetailPanel>
-          </div>
-        {/if}
-      </Sheet.Content>
-    </Sheet.Root>
   {/if}
 </div>
