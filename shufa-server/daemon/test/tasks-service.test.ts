@@ -20,6 +20,7 @@ import type { TaskSessions } from '../src/kernel/sessions.js';
 import { ensureAnonymousUser, hashPassword } from '../src/auth.js';
 import { createUser, putSetting } from '../src/db/store.js';
 import { BlobStore } from '../src/db/blobs.js';
+import { KbStore } from '../src/kb/store.js';
 import { FrameStore } from '../src/kernel/frame-store.js';
 
 function fakeSessions() {
@@ -73,6 +74,7 @@ describe('TaskService 创建链', () => {
       blobs: new BlobStore(env.config.dataRoot, env.db),
       sessions: sessions.service,
       kernelMounted: () => true,
+      kb: new KbStore(env.config.dataRoot + "/knowledge-test"),
     });
   });
 
@@ -142,6 +144,7 @@ describe('TaskService 创建链', () => {
       blobs: new BlobStore(env.config.dataRoot, env.db),
       sessions: sessions.service,
       kernelMounted: () => false,
+      kb: new KbStore(env.config.dataRoot + "/knowledge-test"),
     });
     await expect(
       disabled.create(user, { prompt: 'x', video: { filename: 'a.mp4', data_base64: Buffer.from('b').toString('base64') } }),
@@ -178,6 +181,7 @@ describe('TaskService 创建链', () => {
         blobs: new BlobStore(bare.config.dataRoot, bare.db),
         sessions: sessions.service,
         kernelMounted: () => true,
+        kb: new KbStore(env.config.dataRoot + "/knowledge-test"),
       });
       await expect(
         bareService.create(bob, {

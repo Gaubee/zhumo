@@ -23,6 +23,7 @@
   import { tick } from "svelte";
   import IconFolder from "@lucide/svelte/icons/folder";
   import IconChevronDown from "@lucide/svelte/icons/chevron-down";
+  import IconBookOpen from "@lucide/svelte/icons/book-open";
   import IconLogIn from "@lucide/svelte/icons/log-in";
   import IconSettings from "@lucide/svelte/icons/settings";
   import IconUsers from "@lucide/svelte/icons/users";
@@ -32,6 +33,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Switch } from "$lib/components/ui/switch";
+  import KnowledgeManager from "$lib/components/kb/KnowledgeManager.svelte";
   import ModelsConfig from "$lib/components/models/ModelsConfig.svelte";
   import PrepStepsAccordion from "$lib/components/wizard/PrepStepsAccordion.svelte";
   import ResourceManager from "$lib/components/resources/ResourceManager.svelte";
@@ -75,6 +77,7 @@
   const navItems = [
     { id: "accounts", label: "账号管理", icon: IconUsers },
     { id: "resources", label: "资源管理", icon: IconFolder },
+    { id: "kb", label: "知识库", icon: IconBookOpen },
     { id: "settings", label: "设置", icon: IconSettings },
   ] as const;
 
@@ -422,6 +425,9 @@
               />
             </div>
           </div>
+        {:else if tab.tab === "kb"}
+          <!-- 知识库（Owner 2026-09-22：两级结构 + git 修订历史 + 5s 轮询实时回填） -->
+          <KnowledgeManager />
         {:else}
           <!-- 设置（五轮 R2：纯 flex 链——卡片列 min-h-full 撑满视口，Models 卡
                flex-1 拿全部剩余且内部自滚。准备步骤/站点安全为低频配置，默认

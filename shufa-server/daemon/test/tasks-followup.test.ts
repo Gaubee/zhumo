@@ -16,6 +16,7 @@ import { TaskService } from '../src/tasks/service.js';
 import type { TaskSessions } from '../src/kernel/sessions.js';
 import { createResource, createTask, updateTask, type TaskRow } from '../src/db/tasks.js';
 import { BlobStore } from '../src/db/blobs.js';
+import { KbStore } from '../src/kb/store.js';
 import { createUser } from '../src/db/store.js';
 import { hashPassword } from '../src/auth.js';
 
@@ -60,6 +61,7 @@ describe('TaskService.followup', () => {
       blobs: new BlobStore(env.config.dataRoot, env.db),
       sessions: sessions.service,
       kernelMounted: () => true,
+      kb: new KbStore(env.config.dataRoot + "/knowledge-test"),
     });
   });
 
@@ -161,6 +163,7 @@ describe('TaskService.followup', () => {
       blobs: new BlobStore(env.config.dataRoot, env.db),
       sessions: sessions.service,
       kernelMounted: () => false,
+      kb: new KbStore(env.config.dataRoot + "/knowledge-test"),
     });
     await expect(unmounted.followup(alice, { id: task.id, text: 'x' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
 
@@ -181,6 +184,7 @@ describe('followup rpc 接线', () => {
         blobs: new BlobStore(env.config.dataRoot, env.db),
         sessions: sessions.service,
         kernelMounted: () => true,
+        kb: new KbStore(env.config.dataRoot + "/knowledge-test"),
       });
       await expect(
         clientFor(env.context({ user: alice, secret: TEST_SECRET })).tasks.followup({ id: 't1', text: 'x' }),

@@ -16,6 +16,8 @@ import type {
   AdminSettings,
   DshModelRoute,
   Frame,
+  KbGroupView,
+  KbRevisionView,
   ModelsCatalog,
   ModelsSettings,
   SessionInfo,
@@ -223,6 +225,26 @@ export const mockDb = {
     ],
     ["t-3", [{ at: Date.now(), seq: 1, kind: "status", text: "排队中 → 运行中" }]],
   ]) as Map<string, Frame[]>,
+  // 知识库（mock：内存两级库 + 模拟修订流；真后端为文件夹 + git）。
+  kbGroups: [
+    {
+      name: "总结模式",
+      note: "写静态总结时的工作模式。兜底模式任何时候可用；结构化模式按转录关键词命中才叠加。",
+      entries: [
+        { key: "兜底·通用讲评", value: "触发：任何讲评视频可用；无结构化模式命中时的保底。\n骨架：①讲解对象与整体判断 ②老师强调的书写要领 ③指出的具体问题 ④纠正动作与练习建议。\n关联：无（自足模式）。" },
+        { key: "结构·部件对位", value: "触发：对齐、齐平、对正、对称、错位等表述。\n骨架：①结构类型认定 ②部件对位标准 ③卷面偏差 ④纠正方法。\n关联：字结构类型、结构法则。" },
+      ],
+    },
+    {
+      name: "结构法则",
+      note: "间架结构通用法则。",
+      entries: [{ key: "左收右放", value: "多数左右结构字取左部收敛让位、右部舒展放开之势。偏差：左部写宽挤占右部。" }],
+    },
+  ] as KbGroupView[],
+  kbRevisions: [
+    { id: "a1b2c3d", at: "2026-09-22T08:00:00.000Z", actor: "system", summary: "初始化知识库种子（6 组）" },
+    { id: "e4f5a6b", at: "2026-09-22T09:30:00.000Z", actor: "admin:admin", summary: "新增条目「总结模式/结构·部件对位」" },
+  ] as KbRevisionView[],
   wizardSteps: [
     {
       id: "ffmpeg",

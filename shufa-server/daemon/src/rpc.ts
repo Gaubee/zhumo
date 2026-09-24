@@ -39,6 +39,12 @@ import {
   UpdateUserInputSchema,
   WizardCancelInputSchema,
   WizardRunInputSchema,
+  KbGroupSaveInputSchema,
+  KbGroupDeleteInputSchema,
+  KbEntrySaveInputSchema,
+  KbEntryDeleteInputSchema,
+  KbRevisionGetInputSchema,
+  KbRestoreInputSchema,
 } from '@zhumo/contracts';
 import { ANONYMOUS_USERNAME } from '@zhumo/contracts';
 import type {
@@ -96,6 +102,7 @@ import type {
   ModelsAvailableOutput,
 } from '@zhumo/contracts';
 import { lanUrls } from './lan.js';
+import type { KbStore } from './kb/store.js';
 
 /** 每个 WS 连接（或测试调用）注入的初始 context。 */
 export interface RpcContext {
@@ -116,6 +123,8 @@ export interface RpcContext {
   blobs?: BlobStore;
   /** models.dev 刷新的 fetch 注入口（测试用；缺省全局 fetch）。 */
   fetchImpl?: typeof fetch;
+  /** 书法领域知识库（admin.kb.* 数据面；Owner 2026-09-22）。 */
+  kb?: KbStore;
 }
 
 const base = os.$context<RpcContext>();
@@ -670,6 +679,96 @@ const resUpload = requireActiveUser.input(ResUploadInputSchema).handler(({ conte
   return requireResourceService(context).upload(context.user as UserRow, input);
 });
 
+// ---------------------------------------------------------------- kb 知识库（Owner 2026-09-22：文件夹 + git 历史；实时读、写必留痕）
+
+function requireKb(context: RpcContext): KbStore {
+  if (!context.kb) {
+    throw new ORPCError('NOT_IMPLEMENTED', { message: '知识库未装配' });
+  }
+  return context.kb;
+}
+
+/** 业务错误（分组/条目不存在等）→ BAD_REQUEST；ORPCError 透传。 */
+function kbException(error: unknown): never {
+  if (error instanceof ORPCError) throw error;
+  throw new ORPCError('BAD_REQUEST', {
+    message: error instanceof Error ? error.message : String(error),
+  });
+}
+
+const adminKbList = requireAdmin.handler(({ context }) => {
+  return { groups: requireKb(context).listAll() };
+});
+
+const adminKbSaveGroup = requireAdmin
+  .input(KbGroupSaveInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      await requireKb(context).upsertGroup(input, `admin:${context.user?.username ?? '?'}`);
+      return { groups: requireKb(context).listAll() };
+    } catch (error) {
+      kbException(error);
+    }
+  });
+
+const adminKbDeleteGroup = requireAdmin
+  .input(KbGroupDeleteInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      await requireKb(context).deleteGroup(input.name, `admin:${context.user?.username ?? '?'}`);
+      return { groups: requireKb(context).listAll() };
+    } catch (error) {
+      kbException(error);
+    }
+  });
+
+const adminKbSaveEntry = requireAdmin
+  .input(KbEntrySaveInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      await requireKb(context).upsertEntry(input, `admin:${context.user?.username ?? '?'}`);
+      return { groups: requireKb(context).listAll() };
+    } catch (error) {
+      kbException(error);
+    }
+  });
+
+const adminKbDeleteEntry = requireAdmin
+  .input(KbEntryDeleteInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      await requireKb(context).deleteEntry(input.group, input.key, `admin:${context.user?.username ?? '?'}`);
+      return { groups: requireKb(context).listAll() };
+    } catch (error) {
+      kbException(error);
+    }
+  });
+
+const adminKbRevisions = requireAdmin.handler(async ({ context }) => {
+  return requireKb(context).revisions();
+});
+
+const adminKbRevisionGet = requireAdmin
+  .input(KbRevisionGetInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      return await requireKb(context).revisionDetail(input.id);
+    } catch (error) {
+      kbException(error);
+    }
+  });
+
+const adminKbRestore = requireAdmin
+  .input(KbRestoreInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      await requireKb(context).restore(input.id, `admin:${context.user?.username ?? '?'}`);
+      return { ok: true as const };
+    } catch (error) {
+      kbException(error);
+    }
+  });
+
 // ---------------------------------------------------------------- 路由表
 
 export const router = {
@@ -721,6 +820,16 @@ export const router = {
       get: adminModelsGet,
       save: adminModelsSave,
       test: adminModelsTest,
+    },
+    kb: {
+      list: adminKbList,
+      saveGroup: adminKbSaveGroup,
+      deleteGroup: adminKbDeleteGroup,
+      saveEntry: adminKbSaveEntry,
+      deleteEntry: adminKbDeleteEntry,
+      revisions: adminKbRevisions,
+      revisionGet: adminKbRevisionGet,
+      restore: adminKbRestore,
     },
   },
 

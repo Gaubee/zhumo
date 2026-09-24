@@ -300,3 +300,29 @@ export interface Frame {
   toolName?: string;
   payload?: unknown;
 }
+
+// ---- 知识库（Owner 2026-09-22：两级结构 分组 → 键值；git 修订历史） ----
+
+export interface KbEntryItem {
+  key: string;
+  value: string;
+}
+
+export interface KbGroupView {
+  name: string;
+  note: string;
+  entries: KbEntryItem[];
+}
+
+export interface KbRevisionView {
+  id: string;
+  at: string;
+  actor: string;
+  summary: string;
+}
+
+export interface KbRevisionDetailView {
+  revision: KbRevisionView;
+  changes: Array<{ path: string; status: "added" | "modified" | "deleted" }>;
+  snapshot: KbGroupView[];
+}

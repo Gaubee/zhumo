@@ -10,10 +10,10 @@ export type Route =
   | { name: "setup" }
   | { name: "login" }
   | { name: "home" }
-  | { name: "admin"; tab: "accounts" | "resources" | "settings" }
+  | { name: "admin"; tab: "accounts" | "resources" | "settings" | "kb" }
   | { name: "result"; publicId: string };
 
-const ADMIN_TABS = ["accounts", "resources", "settings"] as const;
+const ADMIN_TABS = ["accounts", "resources", "settings", "kb"] as const;
 
 export function parseHash(hash: string): Route {
   const path = hash.replace(/^#/, "").split("?")[0] ?? "/";

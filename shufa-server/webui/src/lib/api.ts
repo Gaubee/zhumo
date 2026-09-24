@@ -75,6 +75,9 @@ import type {
   AvailableModel,
   ModelsTestResult,
   Attachment,
+  KbGroupView,
+  KbRevisionDetailView,
+  KbRevisionView,
 } from "$lib/types";
 
 /** mock 逃生口：默认走真 RPC；?mock=1 才启用 mock（联调期测试/离线演示用）。 */
@@ -140,6 +143,17 @@ interface ShufaRpc {
       steps(): Promise<WizardStepsOutput>;
       runStep(input: WizardRunInput): Promise<ContractWizardStep>;
       cancelStep(input: { id: string }): Promise<{ ok: true }>;
+    };
+    /** 知识库（Owner 2026-09-22：两级结构 + git 修订；契约 kb.ts 对应）。 */
+    kb: {
+      list(): Promise<{ groups: KbGroupView[] }>;
+      saveGroup(input: { name: string; note?: string; newName?: string }): Promise<{ groups: KbGroupView[] }>;
+      deleteGroup(input: { name: string }): Promise<{ groups: KbGroupView[] }>;
+      saveEntry(input: { group: string; key: string; value: string; newKey?: string }): Promise<{ groups: KbGroupView[] }>;
+      deleteEntry(input: { group: string; key: string }): Promise<{ groups: KbGroupView[] }>;
+      revisions(): Promise<{ available: boolean; revisions: KbRevisionView[] }>;
+      revisionGet(input: { id: string }): Promise<KbRevisionDetailView>;
+      restore(input: { id: string }): Promise<{ ok: boolean }>;
     };
   };
   tasks: {
@@ -222,6 +236,15 @@ export interface ShufaApi {
   resUpload(parent: string, file: File): Promise<ResUploadOutputView>;
   /** 预览/下载 URL；无实体（目录/未上传内容）返回 null。 */
   resRawUrl(id: string): Promise<string | null>;
+  // ---- 知识库（admin；Owner 2026-09-22：分组→键值 + git 修订历史） ----
+  listKb(): Promise<KbGroupView[]>;
+  saveKbGroup(input: { name: string; note?: string; newName?: string }): Promise<KbGroupView[]>;
+  deleteKbGroup(name: string): Promise<KbGroupView[]>;
+  saveKbEntry(input: { group: string; key: string; value: string; newKey?: string }): Promise<KbGroupView[]>;
+  deleteKbEntry(group: string, key: string): Promise<KbGroupView[]>;
+  listKbRevisions(): Promise<{ available: boolean; revisions: KbRevisionView[] }>;
+  getKbRevision(id: string): Promise<KbRevisionDetailView>;
+  restoreKb(id: string): Promise<void>;
 }
 
 const fail = (msg: string): never => {
@@ -417,6 +440,74 @@ class MockApi implements ShufaApi {
 
   async resRawUrl(id: string): Promise<string | null> {
     return mockResources.rawUrl(id);
+  }
+
+  // ---- 知识库（mock：内存两级库 + 模拟修订流；无 git） ----
+
+  private kbGroups = (): KbGroupView[] => mockDb.kbGroups as KbGroupView[];
+
+  async listKb(): Promise<KbGroupView[]> {
+    return structuredClone(this.kbGroups());
+  }
+
+  async saveKbGroup(input: { name: string; note?: string; newName?: string }): Promise<KbGroupView[]> {
+    const groups = this.kbGroups();
+    const existing = groups.find((g) => g.name === input.name);
+    if (!existing) {
+      groups.push({ name: input.name, note: input.note ?? "", entries: [] });
+      mockDb.kbRevisions.unshift({ id: Math.random().toString(16).slice(2, 9), at: new Date().toISOString(), actor: "admin:admin", summary: `新增分组「${input.name}」` });
+    } else {
+      if (input.newName && input.newName !== input.name) existing.name = input.newName;
+      if (input.note !== undefined) existing.note = input.note;
+      mockDb.kbRevisions.unshift({ id: Math.random().toString(16).slice(2, 9), at: new Date().toISOString(), actor: "admin:admin", summary: `更新分组「${input.name}」` });
+    }
+    return structuredClone(groups);
+  }
+
+  async deleteKbGroup(name: string): Promise<KbGroupView[]> {
+    mockDb.kbGroups = mockDb.kbGroups.filter((g: KbGroupView) => g.name !== name);
+    mockDb.kbRevisions.unshift({ id: Math.random().toString(16).slice(2, 9), at: new Date().toISOString(), actor: "admin:admin", summary: `删除分组「${name}」` });
+    return structuredClone(this.kbGroups());
+  }
+
+  async saveKbEntry(input: { group: string; key: string; value: string; newKey?: string }): Promise<KbGroupView[]> {
+    const group = this.kbGroups().find((g) => g.name === input.group);
+    if (!group) throw new Error(`分组不存在：${input.group}`);
+    const entry = group.entries.find((e) => e.key === input.key);
+    const finalKey = input.newKey ?? input.key;
+    if (entry) {
+      entry.key = finalKey;
+      entry.value = input.value;
+    } else {
+      group.entries.push({ key: finalKey, value: input.value });
+    }
+    mockDb.kbRevisions.unshift({ id: Math.random().toString(16).slice(2, 9), at: new Date().toISOString(), actor: "admin:admin", summary: `${entry ? "更新" : "新增"}条目「${input.group}/${finalKey}」` });
+    return structuredClone(this.kbGroups());
+  }
+
+  async deleteKbEntry(group: string, key: string): Promise<KbGroupView[]> {
+    const g = this.kbGroups().find((x) => x.name === group);
+    if (g) g.entries = g.entries.filter((e) => e.key !== key);
+    mockDb.kbRevisions.unshift({ id: Math.random().toString(16).slice(2, 9), at: new Date().toISOString(), actor: "admin:admin", summary: `删除条目「${group}/${key}」` });
+    return structuredClone(this.kbGroups());
+  }
+
+  async listKbRevisions(): Promise<{ available: boolean; revisions: KbRevisionView[] }> {
+    return { available: true, revisions: structuredClone(mockDb.kbRevisions) };
+  }
+
+  async getKbRevision(id: string): Promise<KbRevisionDetailView> {
+    const revision = mockDb.kbRevisions.find((r) => r.id === id);
+    if (!revision) throw new Error(`修订不存在：${id}`);
+    return {
+      revision,
+      changes: [{ path: "总结模式/兜底·通用讲评.md", status: "modified" }],
+      snapshot: structuredClone(this.kbGroups()),
+    };
+  }
+
+  async restoreKb(id: string): Promise<void> {
+    void id;
   }
 
   async getModels(): Promise<ModelsSettings> {
@@ -976,6 +1067,40 @@ class RpcApi implements ShufaApi {
     const token = getToken();
     if (token === null) return null;
     return `/api/res/${encodeURIComponent(id)}/raw?token=${encodeURIComponent(token)}`;
+  }
+
+  // ---- 知识库（真后端：admin.kb.*） ----
+
+  async listKb(): Promise<KbGroupView[]> {
+    return (await rpc().admin.kb.list()).groups;
+  }
+
+  async saveKbGroup(input: { name: string; note?: string; newName?: string }): Promise<KbGroupView[]> {
+    return (await rpc().admin.kb.saveGroup(input)).groups;
+  }
+
+  async deleteKbGroup(name: string): Promise<KbGroupView[]> {
+    return (await rpc().admin.kb.deleteGroup({ name })).groups;
+  }
+
+  async saveKbEntry(input: { group: string; key: string; value: string; newKey?: string }): Promise<KbGroupView[]> {
+    return (await rpc().admin.kb.saveEntry(input)).groups;
+  }
+
+  async deleteKbEntry(group: string, key: string): Promise<KbGroupView[]> {
+    return (await rpc().admin.kb.deleteEntry({ group, key })).groups;
+  }
+
+  async listKbRevisions(): Promise<{ available: boolean; revisions: KbRevisionView[] }> {
+    return rpc().admin.kb.revisions();
+  }
+
+  async getKbRevision(id: string): Promise<KbRevisionDetailView> {
+    return rpc().admin.kb.revisionGet({ id });
+  }
+
+  async restoreKb(id: string): Promise<void> {
+    await rpc().admin.kb.restore({ id });
   }
 
 }

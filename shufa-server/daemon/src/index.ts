@@ -29,6 +29,7 @@ import path from 'node:path';
 import { resolveModelRoutesFromStore, resolveShufaToolDir, TaskService } from './tasks/service.js';
 import { ResourceService } from './resources.js';
 import { createShufaMcpServer } from './capability/mcp.js';
+import { KbStore } from './kb/store.js';
 import { router, type RpcContext } from './rpc.js';
 import { defaultWizardSeeds, installWizardSeeds, WizardRunner } from './wizard.js';
 
@@ -71,10 +72,18 @@ async function main(): Promise<void> {
   installWizardSeeds(db, defaultWizardSeeds(wizardContext));
   await wizard.sniffAll(); // 开机被动嗅探：已装依赖直接呈现「已安装」（走查 R1）
 
+  // 知识库（Owner 2026-09-22）：文件夹结构 + git 历史；空库落种子一次。
+  const kb = new KbStore(path.join(config.dataRoot, 'knowledge'));
+  if (await kb.ensureSeeded()) {
+    console.log(`[boot] 知识库种子已落盘：${kb.root}（git 历史：${kb.gitAvailable() ? '启用' : '不可用（缺 git）'}）`);
+  } else if (!kb.gitAvailable()) {
+    console.warn('[boot] 警告：git 不可用——知识库可读写但无历史记录（安装 git 后自动启用）');
+  }
+
   const rpcHandler = new RPCHandler<RpcContext>(router);
   const blobs = new BlobStore(config.dataRoot, db);
   const resources = new ResourceService({ config, db, blobs });
-  const http = new DaemonHttp({ config, db, wizard, secret, rpcHandler, resources, blobs });
+  const http = new DaemonHttp({ config, db, wizard, secret, rpcHandler, resources, blobs, kb });
   const port = await http.listen(config.port, config.host);
   console.log(
     `[boot] 朱墨 daemon 已启动：http://${config.host}:${port}（DATA_ROOT=${config.dataRoot}，webui=${config.webuiDir}）`,
@@ -106,6 +115,7 @@ async function main(): Promise<void> {
     blobs,
     sessions,
     kernelMounted: () => kernel !== null,
+    kb,
   });
   http.mountTasks(tasks);
 

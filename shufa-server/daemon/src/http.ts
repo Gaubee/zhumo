@@ -31,6 +31,7 @@ import { AnalysisDataSchema } from '@zhumo/contracts';
 import { authenticate } from './auth.js';
 import type { TaskService } from './tasks/service.js';
 import type { ResourceService } from './resources.js';
+import type { KbStore } from './kb/store.js';
 import { BlobStore } from './db/blobs.js';
 import { getResourceById } from './db/tasks.js';
 import { parseResourceMeta } from './db/tasks.js';
@@ -94,6 +95,8 @@ export interface DaemonHttpOptions {
   blobs?: BlobStore;
   /** /mcp 端点（启动装配注入：web token + MCP node handler）。 */
   mcpEndpoint?: { token: string; handle: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void> };
+  /** 书法领域知识库（admin.kb.* 数据面）。 */
+  kb?: KbStore;
 }
 
 export class DaemonHttp {
@@ -163,7 +166,7 @@ export class DaemonHttp {
       socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
       return;
     }
-    const { config, db, wizard, secret, rpcHandler, tasks, resources, blobs } = this.options;
+    const { config, db, wizard, secret, rpcHandler, tasks, resources, blobs, kb } = this.options;
     const context: RpcContext = {
       config,
       db,
@@ -173,6 +176,7 @@ export class DaemonHttp {
       tasks,
       resources,
       blobs,
+      kb,
     };
     this.wsServer.handleUpgrade(request, socket, head, (websocket) => {
       void rpcHandler

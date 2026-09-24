@@ -41,7 +41,9 @@ import { buildRoutesBundle, resolveRouteFor } from '../models-store.js';
 import { buildTaskPrompt } from '../kernel/prompts.js';
 import type { TaskSessions } from '../kernel/sessions.js';
 import { createAnalysisCapabilities, type TaskLocation } from '../capability/analysis.js';
+import { createKnowledgeCapabilities } from '../capability/knowledge.js';
 import { createCapabilityRegistry, type CapabilityRegistry } from '../capability/core.js';
+import type { KbStore } from '../kb/store.js';
 
 const VIDEO_MAX_BYTES = 256 * 1024 * 1024;
 
@@ -52,6 +54,8 @@ export interface TaskServiceDeps {
   sessions: TaskSessions;
   /** 内核是否已挂载（未挂载时 create 拒绝而非静默产出僵尸任务）。 */
   kernelMounted: () => boolean;
+  /** 书法领域知识库（agent kb_* 能力的数据面；Owner 2026-09-22）。 */
+  kb: KbStore;
 }
 
 /** 活跃任务绑定（capability containment 注册表；重启后由 DB 查询兜底）。 */
@@ -90,14 +94,16 @@ export class TaskService {
   readonly capabilities: CapabilityRegistry;
 
   constructor(private readonly deps: TaskServiceDeps) {
-    this.capabilities = createCapabilityRegistry(
-      createAnalysisCapabilities({
+    this.capabilities = createCapabilityRegistry([
+      ...createAnalysisCapabilities({
         shufaToolDir: this.shufaToolDir(),
         findTaskByDir: (taskDir) => this.findTaskByDir(taskDir),
         onExported: (taskId, bundlePath) => this.onExported(taskId, bundlePath),
         onRunaway: (taskId, detail) => this.abortRunaway(taskId, detail),
       }),
-    );
+      // 知识库读写面（kb_*）：无任务 containment 的产品级共享能力。
+      ...createKnowledgeCapabilities(deps.kb),
+    ]);
   }
 
   /** 工具熔断收尾（W7b 观察：模型循环重试同错烧 token）：取消会话 + 任务收敛 failed。 */
