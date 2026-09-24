@@ -69,4 +69,7 @@ def transcribe(wav: Path, model_repo: str | None = None) -> Transcript | None:
             "end": round(float(s["end"]), 2),
             "text": _apply_fixes(str(s["text"]).strip()),
         })
-    return Transcript(segments=segs, model=model_repo)
+    # 记录实际解析出的 repo（显式实参/env/默认值三者合一），而非可能为 None
+    # 的 model_repo 形参——否则 manifest/bundle 里 transcript.model 恒为 null
+    # （2026-09-24 两次导出 500「与契约不符」的根因）。
+    return Transcript(segments=segs, model=repo)

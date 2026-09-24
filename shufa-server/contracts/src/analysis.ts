@@ -68,7 +68,10 @@ export const AnalysisAnnotationSchema = z.object({
 export type AnalysisAnnotation = z.infer<typeof AnalysisAnnotationSchema>;
 
 export const AnalysisTranscriptSchema = z.object({
-  model: z.string(),
+  // 生产端历史缺陷会写 null（audio.py 曾把未传的 model_repo 形参原样落盘）；
+  // 契约边界归一为 ""，页面层 `model || "未使用"` 兜底——模型名缺失不应
+  // 拖垮整个结果页（2026-09-24 两次导出 500 实证）。
+  model: z.string().nullable().transform((v) => v ?? ''),
   segments: z.array(z.object({ start: z.number(), end: z.number(), text: z.string() })),
 });
 export type AnalysisTranscript = z.infer<typeof AnalysisTranscriptSchema>;

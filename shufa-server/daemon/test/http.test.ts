@@ -128,6 +128,29 @@ test('结果公开面：元数据 JSON、资产 Range 206、未知结果 404、�
       expect((await fetch(`${base}/api/results/nope`)).status).toBe(404);
       const trav = await fetch(`${base}/api/results/pub-abc/assets/%2e%2e%2fdata.json`);
       expect([403, 404]).toContain(trav.status);
+
+      // 回归 2026-09-24：生产端 transcript.model=null（audio.py 形参落盘缺陷）
+      // 曾把整个结果面打成 500「与契约不符」；契约边界归一为 ""，页面照常可用。
+      const nullModelBundle = path.join(s.root, 'bundles', 'r-null-model');
+      mkdirSync(path.join(nullModelBundle, 'assets'), { recursive: true });
+      writeFileSync(
+        path.join(nullModelBundle, 'data.json'),
+        JSON.stringify({
+          ...SAMPLE_DATA,
+          transcript: { ...SAMPLE_DATA.transcript, model: null },
+        }),
+      );
+      s.db
+        .prepare(
+          `INSERT INTO results (id, public_id, task_id, owner_id, title, bundle_path, created_at)
+           VALUES ('res-2', 'pub-null-model', NULL, ?, 'null model 样本', ?, ?)`,
+        )
+        .run(anonymous?.id ?? '', nullModelBundle, new Date().toISOString());
+      const nullModel = await fetch(`${base}/api/results/pub-null-model`);
+      expect(nullModel.status).toBe(200);
+      const nullModelBody = (await nullModel.json()) as { data: AnalysisData };
+      expect(nullModelBody.data.transcript.model).toBe('');
+      expect(nullModelBody.data.transcript.segments.length).toBeGreaterThan(0);
     } finally {
       await daemon.stop();
     }
