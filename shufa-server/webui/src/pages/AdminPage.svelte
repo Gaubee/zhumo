@@ -247,6 +247,7 @@
 
 <div class="flex h-screen flex-col bg-paper">
   <header class="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-card px-4">
+    <img src="/icon.svg" alt="朱墨" class="size-6 shrink-0 rounded-[4px]" />
     <span class="text-sm font-semibold">后台管理</span>
     <span class="flex-1"></span>
     <Button size="sm" variant="outline" onclick={() => navigate("#/")}>返回前台</Button>

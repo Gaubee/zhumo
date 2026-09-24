@@ -220,6 +220,7 @@
         <IconListTodo class="size-4" aria-hidden="true" />
       </Button>
     {/if}
+    <img src="/icon.svg" alt="朱墨" class="size-6 shrink-0 rounded-[4px]" />
     <span class="text-sm font-semibold tracking-wide">朱墨</span>
     <span class="hidden text-[11px] text-muted-foreground md:inline">书法视频 · agent 分析工作台</span>
     <span class="flex-1"></span>

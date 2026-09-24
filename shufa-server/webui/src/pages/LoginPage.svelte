@@ -28,7 +28,10 @@
   <Dialog.Root open={true}>
     <Dialog.Content class="max-w-sm p-6">
       <Dialog.Header class="gap-1">
-        <Dialog.Title class="text-base">登录朱墨</Dialog.Title>
+        <Dialog.Title class="flex items-center gap-2 text-base">
+          <img src="/icon.svg" alt="朱墨" class="size-6 rounded-[4px]" />
+          登录朱墨
+        </Dialog.Title>
         <Dialog.Description class="text-xs">使用管理员或成员账号继续</Dialog.Description>
       </Dialog.Header>
       <form
