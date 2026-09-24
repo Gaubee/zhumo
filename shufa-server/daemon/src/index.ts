@@ -98,7 +98,11 @@ async function main(): Promise<void> {
       // 任务覆盖（五轮活动模型）优先；缺省回落默认模型/旧链首路由。
       const task = getTaskById(db, taskId);
       if (task?.model_provider && task.model_model) {
-        return { provider: task.model_provider, model: task.model_model };
+        return {
+          provider: task.model_provider,
+          model: task.model_model,
+          ...(task.model_effort ? { effort: task.model_effort } : {}),
+        };
       }
       const bundle = resolveModelRoutesFromStore(db, config);
       if (bundle.default) return bundle.default;

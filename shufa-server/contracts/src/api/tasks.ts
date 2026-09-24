@@ -29,6 +29,8 @@ export const TaskItemSchema = z.object({
   /** 任务级模型覆盖（走查 R6：聊天中可切换；null = 跟随后台默认模型）。 */
   model_provider: z.string().nullable(),
   model_model: z.string().nullable(),
+  /** 任务级思考强度档（2026-09-25 前台对齐：模型 efforts 档位之一；null = 不覆盖）。 */
+  model_effort: z.string().nullable(),
   created_at: IsoDateTimeSchema,
   updated_at: IsoDateTimeSchema,
 });
@@ -45,11 +47,13 @@ export type TaskResultRef = z.infer<typeof TaskResultRefSchema>;
 export const TaskListOutputSchema = z.object({ tasks: z.array(TaskItemSchema) });
 
 /** 聊天中切换任务模型（走查 R6）：更新任务级覆盖并热切会话（idle 态；
- * running 由服务端拒绝，前端同款禁用）。 */
+ * running 由服务端拒绝，前端同款禁用）。effort：缺省 = 保持不变；显式 null =
+ * 清除档位（跟随模型默认）；值 = 覆盖档位。 */
 export const TaskSetModelInputSchema = z.object({
   task_id: IdSchema,
   provider: IdSchema,
   model: z.string().min(1),
+  effort: z.string().min(1).nullable().optional(),
 });
 export type TaskSetModelInput = z.infer<typeof TaskSetModelInputSchema>;
 
@@ -66,8 +70,15 @@ export const TaskCreateInputSchema = z
     prompt: z.string().min(1),
     video: TaskVideoUploadSchema.optional(),
     video_resource_id: IdSchema.optional(),
-    /** 任务级模型覆盖（五轮活动模型）：null/缺省 = 跟随后台默认模型。 */
-    model: z.object({ provider: z.string().min(1), model: z.string().min(1) }).optional(),
+    /** 任务级模型覆盖（五轮活动模型）：null/缺省 = 跟随后台默认模型。
+     * effort（2026-09-25）：思考强度档（该模型 efforts 之一）；缺省 = 不覆盖。 */
+    model: z
+      .object({
+        provider: z.string().min(1),
+        model: z.string().min(1),
+        effort: z.string().min(1).optional(),
+      })
+      .optional(),
   })
   .refine((input) => input.video !== undefined || input.video_resource_id !== undefined, {
     message: 'video 与 video_resource_id 必须提供其一',
@@ -117,6 +128,8 @@ export const ResourceItemSchema = z.object({
   is_dir: z.boolean(),
   size: z.number(),
   meta: z.record(z.string(), z.unknown()).nullable(),
+  /** agent 可读绝对路径（2026-09-25 @资源面板注入用；目录/未落盘 = null）。 */
+  path: z.string().nullable().optional(),
   created_at: IsoDateTimeSchema,
   updated_at: IsoDateTimeSchema,
 });

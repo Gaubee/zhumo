@@ -130,6 +130,20 @@ export async function sendPrompt(prompt: string): Promise<void> {
   const taskId = tasks.selectedId;
   const trimmed = prompt.trim();
   if (taskId === null || tasks.sending || trimmed.length === 0) return;
+  // 内核命令（/compact 等，2026-09-25 前台对齐）：daemon 分流不进 LLM、不产生
+  // user 帧——不插乐观气泡，也不做 running 联动（命令结果由帧流呈现）。
+  if (trimmed.startsWith("/")) {
+    tasks.sending = true;
+    tasks.error = null;
+    try {
+      await api.sendTaskPrompt(taskId, trimmed);
+    } catch (error) {
+      tasks.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      tasks.sending = false;
+    }
+    return;
+  }
   tasks.sending = true;
   tasks.error = null;
   // 乐观插入（走查 R7：发送即显示——不等 WS 帧回放；真帧到达后 dropOptimistic 去重）。
@@ -153,6 +167,17 @@ export async function sendPrompt(prompt: string): Promise<void> {
   } finally {
     tasks.sending = false;
   }
+}
+
+/** 选中任务最近一轮用量（ContextMeter 数据源；null = 尚无回合样本）。 */
+export function lastUsage(): { in: number; out: number } | null {
+  for (let i = tasks.frames.length - 1; i >= 0; i -= 1) {
+    const frame = tasks.frames[i];
+    if (frame === undefined || frame.kind !== "turn-end") continue;
+    const usage = usageOfFramePayload(frame.payload);
+    if (usage !== undefined) return { in: usage.in, out: usage.out };
+  }
+  return null;
 }
 
 export async function createTask(

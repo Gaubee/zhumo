@@ -536,6 +536,7 @@ const modelsAvailable = requireActiveUser.handler(({ context }): ModelsAvailable
         name: model.name ?? model.id,
         ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
         ...(model.inputTypes !== undefined ? { inputTypes: model.inputTypes } : {}),
+        ...(model.efforts !== undefined && model.efforts.length > 0 ? { efforts: model.efforts } : {}),
         ...(route.iconUrl !== undefined ? { iconUrl: route.iconUrl } : {}),
       })),
     ),
@@ -626,6 +627,7 @@ const tasksSetModel = requireActiveUser
         taskId: input.task_id,
         provider: input.provider,
         model: input.model,
+        effort: input.effort,
       });
       return { task };
     } catch (error) {
@@ -698,6 +700,12 @@ function kbException(error: unknown): never {
 
 const adminKbList = requireAdmin.handler(({ context }) => {
   return { groups: requireKb(context).listAll() };
+});
+
+/** 前台知识库清单（2026-09-25 $ 面板）：登录用户可读分组/条目名（不含内容与
+ * 修订）；KB 未装配（未初始化）时返回空表——面板显示空态而非报错。 */
+const kbPublicList = requireActiveUser.handler(({ context }) => {
+  return { groups: context.kb?.listAll() ?? [] };
 });
 
 const adminKbSaveGroup = requireAdmin
@@ -840,6 +848,10 @@ export const router = {
     cancel: tasksCancel,
     setModel: tasksSetModel,
     followup: tasksFollowup,
+  },
+
+  kb: {
+    list: kbPublicList,
   },
 
   res: {

@@ -106,4 +106,11 @@ CREATE INDEX IF NOT EXISTS idx_results_owner ON results(owner_id);
 ALTER TABLE tasks ADD COLUMN error TEXT;
 `,
   },
+  {
+    // 前台对齐（2026-09-25）：任务级思考强度档（模型 efforts 之一；NULL=不覆盖）。
+    version: 4,
+    up: `
+ALTER TABLE tasks ADD COLUMN model_effort TEXT;
+`,
+  },
 ];

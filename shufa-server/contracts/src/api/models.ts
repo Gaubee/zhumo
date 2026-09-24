@@ -105,6 +105,8 @@ export const AvailableModelSchema = z.object({
   name: z.string(),
   contextWindow: z.number().int().positive().optional(),
   inputTypes: z.array(ModelInputTypeSchema).optional(),
+  /** 思考强度档（2026-09-25 前台对齐：zcode 转录的 reasoningLevel 档位）。 */
+  efforts: z.array(z.string().min(1)).optional(),
   iconUrl: z.string().optional(),
 });
 export type AvailableModel = z.infer<typeof AvailableModelSchema>;

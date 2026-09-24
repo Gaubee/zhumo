@@ -9,7 +9,8 @@
   走查五轮（2026-09-24 · 四）：活动模型选择移入本面板——模型 chip（Popover
   分组列表：图标/上下文窗口/视觉标记；「跟随默认」= 不带覆盖创建）。
   正交意图：[1] 素材视频选择；[2] 预设开场 chips；[3] 提示词编辑与创建；
-  [4] 未配置模型路由/账号被禁用的创建阻断；[5] 任务级模型选择。
+  [4] 未配置模型路由/账号被禁用的创建阻断；[5] 任务级模型选择；
+  [6] 任务级思考强度档（2026-09-25 前台对齐：模型 efforts 之一，缺省=不覆盖）。
 -->
 <script lang="ts">
   import IconFile from "@lucide/svelte/icons/file";
@@ -57,7 +58,8 @@
   let modelPickerOpen = $state(false);
   let available = $state<AvailableModel[]>([]);
   let availableDefault = $state<{ provider: string; model: string } | null>(null);
-  let picked = $state<{ provider: string; model: string } | null>(null);
+  let picked = $state<{ provider: string; model: string; effort?: string } | null>(null);
+  let effortOpen = $state(false);
 
   const pickedLabel = $derived.by(() => {
     if (picked === null) {
@@ -70,6 +72,16 @@
         ? undefined
         : available.find((m) => m.provider === current.provider && m.model === current.model);
     return found ? found.name : `${current?.provider ?? ""} / ${current?.model ?? ""}`;
+  });
+
+  /** 选中模型的档位目录（无数据 = 强度 chip 隐藏；跟随默认 = 不覆盖）。 */
+  const pickedEfforts = $derived.by(() => {
+    const current = picked;
+    if (current === null) return [];
+    return (
+      available.find((m) => m.provider === current.provider && m.model === current.model)?.efforts ??
+      []
+    );
   });
 
   async function openModelPicker(open: boolean): Promise<void> {
@@ -179,7 +191,7 @@
                   ? "bg-accent-soft"
                   : ""}"
                 onclick={() => {
-                  picked = { provider: item.provider, model: item.model };
+                  picked = { provider: item.provider, model: item.model }; // 换模型：档位重置
                   modelPickerOpen = false;
                 }}
               >
@@ -207,6 +219,55 @@
           </div>
         </Popover.Content>
       </Popover.Root>
+      {#if pickedEfforts.length > 0}
+        <Popover.Root open={effortOpen} onOpenChange={(open) => (effortOpen = open)}>
+          <Popover.Trigger>
+            {#snippet child({ props })}
+              <button
+                type="button"
+                {...props}
+                class="flex h-7 max-w-[140px] items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2.5 text-[11px] text-foreground/80 transition-colors hover:border-primary/50"
+                title="思考强度档位（跟随后台默认 = 不覆盖）"
+              >
+                <span class="truncate">{picked?.effort ?? "强度·默认"}</span>
+                <IconChevronDown class="h-3 w-3 shrink-0 opacity-60" aria-hidden="true" />
+              </button>
+            {/snippet}
+          </Popover.Trigger>
+          <Popover.Content class="w-48 p-0">
+            <div class="max-h-64 overflow-y-auto p-1">
+              <button
+                type="button"
+                class="flex w-full items-center rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted/60 {picked?.effort ===
+                undefined
+                  ? "bg-accent-soft"
+                  : ""}"
+                onclick={() => {
+                  if (picked !== null) picked = { ...picked, effort: undefined };
+                  effortOpen = false;
+                }}
+              >
+                跟随默认
+              </button>
+              {#each pickedEfforts as effort (effort)}
+                <button
+                  type="button"
+                  class="flex w-full items-center rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted/60 {picked?.effort ===
+                  effort
+                    ? "bg-accent-soft"
+                    : ""}"
+                  onclick={() => {
+                    if (picked !== null) picked = { ...picked, effort };
+                    effortOpen = false;
+                  }}
+                >
+                  {effort}
+                </button>
+              {/each}
+            </div>
+          </Popover.Content>
+        </Popover.Root>
+      {/if}
       <span class="text-[10px] text-muted-foreground">本任务使用的模型（活动模型）</span>
     </div>
 

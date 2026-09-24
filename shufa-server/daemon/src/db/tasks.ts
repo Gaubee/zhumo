@@ -24,6 +24,8 @@ export interface TaskRow {
   /** 任务级模型覆盖（五轮活动模型；NULL=跟随默认模型）。 */
   model_provider: string | null;
   model_model: string | null;
+  /** 任务级思考强度档（2026-09-25 前台对齐；NULL=不覆盖）。 */
+  model_effort: string | null;
   /** 失败原因（AgentChat 走查 R3：failed 必须可见——turn-end error 明文落库，
    * 列表 badge/详情转录都可回放；resume 成功拉回 running 时清空）。 */
   error: string | null;
@@ -40,6 +42,7 @@ export function createTask(
     prompt: string;
     modelProvider?: string | null;
     modelModel?: string | null;
+    modelEffort?: string | null;
   },
 ): TaskRow {
   const row: TaskRow = {
@@ -53,15 +56,16 @@ export function createTask(
     result_id: null,
     model_provider: input.modelProvider ?? null,
     model_model: input.modelModel ?? null,
+    model_effort: input.modelEffort ?? null,
     error: null,
     created_at: nowIso(),
     updated_at: nowIso(),
   };
   db.prepare(
     `INSERT INTO tasks (id, resource_id, owner_id, status, prompt, video_resource_id,
-                        agent_session_id, result_id, model_provider, model_model,
+                        agent_session_id, result_id, model_provider, model_model, model_effort,
                         created_at, updated_at)
-     VALUES (?, ?, ?, 'queued', ?, ?, NULL, NULL, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, 'queued', ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.resource_id,
@@ -70,6 +74,7 @@ export function createTask(
     row.video_resource_id,
     row.model_provider,
     row.model_model,
+    row.model_effort,
     row.created_at,
     row.updated_at,
   );
@@ -97,6 +102,8 @@ export function updateTask(
     error?: string | null;
     modelProvider?: string | null;
     modelModel?: string | null;
+    /** undefined=不变；显式 null=清除档位。 */
+    modelEffort?: string | null;
   },
 ): TaskRow | null {
   if (patch.status !== undefined) {
@@ -127,11 +134,18 @@ export function updateTask(
       id,
     );
   }
-  if (patch.modelProvider !== undefined || patch.modelModel !== undefined) {
+  if (
+    patch.modelProvider !== undefined ||
+    patch.modelModel !== undefined ||
+    patch.modelEffort !== undefined
+  ) {
     const current = getTaskById(db, id);
-    db.prepare('UPDATE tasks SET model_provider = ?, model_model = ?, updated_at = ? WHERE id = ?').run(
+    db.prepare(
+      'UPDATE tasks SET model_provider = ?, model_model = ?, model_effort = ?, updated_at = ? WHERE id = ?',
+    ).run(
       patch.modelProvider !== undefined ? patch.modelProvider : (current?.model_provider ?? null),
       patch.modelModel !== undefined ? patch.modelModel : (current?.model_model ?? null),
+      patch.modelEffort !== undefined ? patch.modelEffort : (current?.model_effort ?? null),
       nowIso(),
       id,
     );

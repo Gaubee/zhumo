@@ -44,8 +44,11 @@ const DEFAULT_RETENTION = 200;
 export interface TaskSessionDeps {
   kernel: () => ShufaKernelHandle | null;
   /** 模型选择（null = 未配置，内核用缺省路由）。 */
-  /** 模型选择（五轮）：按任务——任务覆盖（model_* 列）优先，缺省回落默认模型。 */
-  modelSelection: (taskId: string) => Promise<{ provider: string; model: string } | null>;
+  /** 模型选择（五轮）：按任务——任务覆盖（model_* 列）优先，缺省回落默认模型。
+   * effort（2026-09-25 前台对齐）：任务级思考强度档（model_effort 列；null=不覆盖）。 */
+  modelSelection: (
+    taskId: string,
+  ) => Promise<{ provider: string; model: string; effort?: string } | null>;
   retention?: number;
   /** agent turn 以 error 终止时的失败回调（W7 联调：任务失败路径不悬挂）。 */
   onSessionFailure?: (sessionId: string, reason: string) => void;
@@ -91,12 +94,12 @@ interface AgentsServiceLike {
   create(options: {
     sessionId: string;
     meta?: { cwd?: string; agentPreset?: string };
-    agentOptions?: { provider?: string; model?: string };
+    agentOptions?: { provider?: string; model?: string; reasoningEffort?: string };
     setup?: (agentCtx: Context) => void;
   }): Promise<{ agent: AgentLike; dispose(): Promise<void> }>;
   resume(options: {
     resumeSessionId: string;
-    agentOptions?: { provider?: string; model?: string };
+    agentOptions?: { provider?: string; model?: string; reasoningEffort?: string };
     setup?: (agentCtx: Context) => void;
   }): Promise<{ agent: AgentLike; dispose(): Promise<void> }>;
 }
@@ -561,7 +564,15 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       const handle = await agents.create({
         sessionId,
         meta: { cwd: input.cwd, agentPreset: 'shufa' },
-        ...(model ? { agentOptions: { provider: model.provider, model: model.model } } : {}),
+        ...(model
+          ? {
+              agentOptions: {
+                provider: model.provider,
+                model: model.model,
+                ...(model.effort ? { reasoningEffort: model.effort } : {}),
+              },
+            }
+          : {}),
         setup: setupToolSurface,
       });
       const store = new FrameStore(input.framesFile);
@@ -580,7 +591,15 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       const model = await deps.modelSelection(taskId);
       const handle = await agents.resume({
         resumeSessionId: input.sessionId,
-        ...(model ? { agentOptions: { provider: model.provider, model: model.model } } : {}),
+        ...(model
+          ? {
+              agentOptions: {
+                provider: model.provider,
+                model: model.model,
+                ...(model.effort ? { reasoningEffort: model.effort } : {}),
+              },
+            }
+          : {}),
         setup: setupToolSurface,
       });
       const store = new FrameStore(input.framesFile);
@@ -614,6 +633,42 @@ export function createTaskSessions(deps: TaskSessionDeps) {
   followup(sessionId: string, text: string): void {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
+    // slash 命令分流（2026-09-25 前台对齐，skill-creator-v2 同法）："/compact" 等
+    // 经内核 ctx.commands 执行（不进 LLM）；非命令（返回 undefined）回落普通消息。
+    if (text.startsWith('/')) {
+      const kernel = requireKernel();
+      const commands = (
+        kernel.ctx as Context & {
+          commands?: {
+            execute: (
+              agent: unknown,
+              line: string,
+              attachments: readonly unknown[],
+              signal: AbortSignal,
+            ) => Promise<unknown>;
+          };
+        }
+      ).commands;
+      if (commands) {
+        // 命令执行异步化：吞掉 rejection 由帧流呈现（与消息发送同异步面）；
+        // 同步签名保持 void——resolve 后未命中命令再补投消息。
+        void commands
+          .execute(entry.agent, text, [], new AbortController().signal)
+          .then((executed) => {
+            if (executed === undefined) {
+              entry.agent.followup(
+                createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] }) as never,
+              );
+            }
+          })
+          .catch(() => {
+            entry.agent.followup(
+              createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] }) as never,
+            );
+          });
+        return;
+      }
+    }
     entry.agent.followup(
       createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] }) as never,
     );

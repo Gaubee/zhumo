@@ -75,6 +75,7 @@ import type {
   AvailableModel,
   ModelsTestResult,
   Attachment,
+  KbGroupRef,
   KbGroupView,
   KbRevisionDetailView,
   KbRevisionView,
@@ -157,6 +158,10 @@ interface ShufaRpc {
       restore(input: { id: string }): Promise<{ ok: boolean }>;
     };
   };
+  /** 前台知识库清单（$ 触发面板；2026-09-25）。 */
+  kb: {
+    list(): Promise<{ groups: KbGroupRef[] }>;
+  };
   tasks: {
     list(): Promise<{ tasks: TaskItem[] }>;
     create(input: TaskCreateInput): Promise<TaskItem>;
@@ -221,12 +226,18 @@ export interface ShufaApi {
   getTaskFrames(taskId: string): Promise<Frame[]>;
   subscribeTaskFrames(taskId: string, onFrame: (frame: Frame) => void): () => void;
   sendTaskPrompt(taskId: string, prompt: string): Promise<void>;
-  createTask(prompt: string, video: File | null, model?: { provider: string; model: string }): Promise<Task>;
+  createTask(
+    prompt: string,
+    video: File | null,
+    model?: { provider: string; model: string; effort?: string },
+  ): Promise<Task>;
   cancelTask(taskId: string): Promise<void>;
   /** 附件上传（走查 R7）：blob + 资源树登记；rawUrl 供预览。 */
   uploadAttachment(file: { name: string; dataBase64: string }): Promise<Attachment>;
   /** 聊天中切换任务模型（走查 R6）：更新覆盖并热切会话（idle 态）。 */
-  setTaskModel(taskId: string, provider: string, model: string): Promise<Task>;
+  setTaskModel(taskId: string, provider: string, model: string, effort?: string | null): Promise<Task>;
+  /** 前台知识库清单（$ 面板：分组/条目名，不含内容）。 */
+  kbList(): Promise<{ groups: KbGroupRef[] }>;
   /** 任务的导出结果列表（新→旧；右侧标签页数据源）。 */
   getTaskResults(taskId: string): Promise<TaskResultRefView[]>;
   getResult(publicId: string): Promise<ResultInfo>;
@@ -569,7 +580,11 @@ class MockApi implements ShufaApi {
     void replayAgentTurn(taskId, prompt);
   }
 
-  async createTask(prompt: string, video: File | null, model?: { provider: string; model: string }): Promise<Task> {
+  async createTask(
+    prompt: string,
+    video: File | null,
+    model?: { provider: string; model: string; effort?: string },
+  ): Promise<Task> {
     const task: Task = {
       id: `t-${mockDb.tasks.length + 1}-${Date.now() % 1000}`,
       title: prompt.slice(0, 18) || "新任务",
@@ -579,6 +594,7 @@ class MockApi implements ShufaApi {
       videoResourceId: null, // mock 无资源树联动（真后端由资源 id 驱动预览播放）
       modelProvider: model?.provider ?? null,
       modelModel: model?.model ?? null,
+      modelEffort: model?.effort ?? null,
       error: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -603,12 +619,23 @@ class MockApi implements ShufaApi {
     };
   }
 
-  async setTaskModel(taskId: string, provider: string, model: string): Promise<Task> {
+  async setTaskModel(taskId: string, provider: string, model: string, effort?: string | null): Promise<Task> {
     const task = mockDb.tasks.find((t) => t.id === taskId);
     if (task === undefined) throw new Error("任务不存在");
     task.modelProvider = provider;
     task.modelModel = model;
+    task.modelEffort = effort === undefined ? task.modelEffort : effort;
     return { ...task };
+  }
+
+  async kbList(): Promise<{ groups: KbGroupRef[] }> {
+    return {
+      groups: mockDb.kbGroups.map((g) => ({
+        name: g.name,
+        note: g.note,
+        keys: g.entries.map((entry) => entry.key),
+      })),
+    };
   }
 
   async getTaskResults(taskId: string): Promise<TaskResultRefView[]> {
@@ -763,6 +790,7 @@ function toTaskView(task: TaskItem): Task {
     error: task.error ?? null,
     modelProvider: task.model_provider ?? null,
     modelModel: task.model_model ?? null,
+    modelEffort: task.model_effort ?? null,
   };
 }
 
@@ -993,7 +1021,11 @@ class RpcApi implements ShufaApi {
     await rpc().tasks.followup({ id: taskId, text });
   }
 
-  async createTask(prompt: string, video: File | null, model?: { provider: string; model: string }): Promise<Task> {
+  async createTask(
+    prompt: string,
+    video: File | null,
+    model?: { provider: string; model: string; effort?: string },
+  ): Promise<Task> {
     if (video === null) throw new Error("请先选择素材视频（创建任务必须附带视频）");
     const item = await rpc().tasks.create({
       prompt,
@@ -1025,9 +1057,18 @@ class RpcApi implements ShufaApi {
     };
   }
 
-  async setTaskModel(taskId: string, provider: string, model: string): Promise<Task> {
-    const out = await rpc().tasks.setModel({ task_id: taskId, provider, model });
+  async setTaskModel(taskId: string, provider: string, model: string, effort?: string | null): Promise<Task> {
+    const out = await rpc().tasks.setModel({
+      task_id: taskId,
+      provider,
+      model,
+      ...(effort !== undefined ? { effort } : {}),
+    });
     return toTaskView(out.task);
+  }
+
+  async kbList(): Promise<{ groups: KbGroupRef[] }> {
+    return rpc().kb.list();
   }
 
   /** 任务的导出结果列表（新→旧）。after_seq 取极大值 = 只取 results 不回放帧。 */

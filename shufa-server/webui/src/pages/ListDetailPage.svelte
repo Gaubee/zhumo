@@ -25,6 +25,7 @@
   import { auth } from "$lib/stores/auth.svelte";
   import {
     getSelectedTask,
+    lastUsage,
     loadTasks,
     projectFrames,
     selectTask,
@@ -77,16 +78,31 @@
     }
   });
 
-  /** 聊天中切换模型（走查 R6）：热切会话；失败内联呈现。 */
-  async function setModel(provider: string, model: string): Promise<void> {
+  /** 聊天中切换模型/档位（走查 R6 + 2026-09-25 effort）：热切会话；失败内联呈现。 */
+  async function setModel(provider: string, model: string, effort?: string | null): Promise<void> {
     if (selected === null) return;
     try {
-      const updated = await api.setTaskModel(selected.id, provider, model);
+      const updated = await api.setTaskModel(selected.id, provider, model, effort);
       tasks.list = tasks.list.map((t) => (t.id === updated.id ? updated : t));
     } catch (e) {
       tasks.error = e instanceof Error ? e.message : String(e);
     }
   }
+
+  /** 活动模型（任务覆盖 ?? 后台默认）在可用清单中的条目（efforts/窗口数据源）。 */
+  const activeAvailable = $derived.by(() => {
+    const current =
+      selected?.modelProvider !== null && selected?.modelModel !== null && selected !== null
+        ? { provider: selected.modelProvider, model: selected.modelModel }
+        : availableDefault;
+    if (current === null) return null;
+    return (
+      availableModels?.find(
+        (m) => m.provider === current.provider && m.model === current.model,
+      ) ?? null
+    );
+  });
+  const lastUsageView = $derived(lastUsage());
 
   const selected = $derived(getSelectedTask());
   const items = $derived(projectFrames(tasks.frames));
@@ -189,8 +205,21 @@
           currentModel={selected.modelProvider !== null && selected.modelModel !== null
             ? { provider: selected.modelProvider, model: selected.modelModel }
             : null}
+          currentEffort={selected.modelEffort}
           running={selected.status === "running" || selected.status === "queued"}
+          usage={lastUsageView}
+          capacity={activeAvailable?.contextWindow ?? null}
           onsetmodel={(provider, model) => void setModel(provider, model)}
+          onseteffort={
+            activeAvailable !== null
+              ? (effort) =>
+                  void setModel(
+                    activeAvailable.provider,
+                    activeAvailable.model,
+                    effort,
+                  )
+              : undefined
+          }
         />
       </div>
     {:else}

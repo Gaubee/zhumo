@@ -45,7 +45,7 @@ import {
   resolveModelRoute,
   type ModelRoutesBundle,
 } from '../kernel/model-route.js';
-import { buildRoutesBundle, resolveRouteFor } from '../models-store.js';
+import { buildRoutesBundle, loadModelsConfig, resolveRouteFor } from '../models-store.js';
 import { buildTaskPrompt } from '../kernel/prompts.js';
 import type { TaskSessions } from '../kernel/sessions.js';
 import { createAnalysisCapabilities, type TaskLocation } from '../capability/analysis.js';
@@ -140,7 +140,7 @@ export class TaskService {
       prompt: string;
       video?: { filename: string; data_base64: string };
       video_resource_id?: string;
-      model?: { provider: string; model: string };
+      model?: { provider: string; model: string; effort?: string };
     },
   ): Promise<TaskItem> {
     if (!this.deps.kernelMounted()) {
@@ -206,6 +206,7 @@ export class TaskService {
       prompt: input.prompt,
       modelProvider: input.model?.provider ?? null,
       modelModel: input.model?.model ?? null,
+      modelEffort: input.model?.effort ?? null,
     });
     this.writeShufaMeta(shufaRow.id, shufaDir, task.id, null, null);
 
@@ -322,18 +323,29 @@ export class TaskService {
    */
   async setModel(
     user: UserRow,
-    input: { taskId: string; provider: string; model: string },
+    input: { taskId: string; provider: string; model: string; effort?: string | null },
   ): Promise<TaskItem> {
     const task = this.requireOwnedTask(user, input.taskId);
     if (isAwaitingRun(task.status)) {
       throw new Error('任务运行中，本轮结束后再切换模型');
     }
-    const bundle = buildRoutesBundle(this.deps.db);
-    const route = bundle.routes.find((candidate) => candidate.provider === input.provider);
-    if (!route || !route.models.some((entry) => entry.id === input.model)) {
+    const config = loadModelsConfig(this.deps.db);
+    const route = config.routes.find((candidate) => candidate.provider === input.provider);
+    const modelEntry = route?.models.find((entry) => entry.id === input.model);
+    if (!route || !modelEntry) {
       throw new Error(`所选模型不在已配置路由中：${input.provider} / ${input.model}`);
     }
-    updateTask(this.deps.db, task.id, { modelProvider: input.provider, modelModel: input.model });
+    // 档位校验：值必须在模型 efforts 内（有 efforts 目录时）；null/缺省=清除/保持。
+    if (input.effort !== undefined && input.effort !== null) {
+      if (modelEntry.efforts !== undefined && !modelEntry.efforts.includes(input.effort)) {
+        throw new Error(`所选档位不在模型 efforts 内：${input.effort}`);
+      }
+    }
+    updateTask(this.deps.db, task.id, {
+      modelProvider: input.provider,
+      modelModel: input.model,
+      ...(input.effort !== undefined ? { modelEffort: input.effort } : {}),
+    });
     const sessionId = task.agent_session_id;
     if (sessionId && this.deps.sessions.isLive(sessionId)) {
       await this.deps.sessions.disposeLive(sessionId);
@@ -641,6 +653,7 @@ export class TaskService {
       error: row.error ?? null,
       model_provider: row.model_provider ?? null,
       model_model: row.model_model ?? null,
+      model_effort: row.model_effort ?? null,
       created_at: row.created_at,
       updated_at: row.updated_at,
     };

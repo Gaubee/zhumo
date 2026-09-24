@@ -310,6 +310,53 @@ describe('TaskService 创建链', () => {
     await expect(service.setModel(user, { taskId: item.id, provider: 'nope', model: 'm' })).rejects.toThrow('不在已配置路由中');
   });
 
+  it('2026-09-25 effort：无档位目录的自由档可存可清；有目录时档外值拒绝', async () => {
+    const item = await service.create(user, {
+      prompt: 'x',
+      video: { filename: 'v.mp4', data_base64: Buffer.from('bytes').toString('base64') },
+    });
+    service.markSessionFailed('task-1', 'x'); // 收敛 idle
+    // legacy 链模型无 efforts 目录 → 自由档允许并落列。
+    const withEffort = await service.setModel(user, {
+      taskId: item.id,
+      provider: 'zhipu',
+      model: 'glm-5.3-flash',
+      effort: 'high',
+    });
+    expect(withEffort.model_effort).toBe('high');
+    // 显式 null = 清除档位。
+    const cleared = await service.setModel(user, {
+      taskId: item.id,
+      provider: 'zhipu',
+      model: 'glm-5.3-flash',
+      effort: null,
+    });
+    expect(cleared.model_effort).toBeNull();
+    // efforts 目录存在时：档外值拒绝、档内值可存。
+    putSetting(
+      env.db,
+      'models_routes',
+      JSON.stringify([
+        {
+          provider: 'zhipu',
+          api: 'anthropic-messages',
+          baseURL: 'https://x/api',
+          models: [{ id: 'glm-5.3-flash', efforts: ['low', 'high', 'max'] }],
+        },
+      ]),
+    );
+    await expect(
+      service.setModel(user, { taskId: item.id, provider: 'zhipu', model: 'glm-5.3-flash', effort: 'xhigh' }),
+    ).rejects.toThrow('不在模型 efforts 内');
+    const inRange = await service.setModel(user, {
+      taskId: item.id,
+      provider: 'zhipu',
+      model: 'glm-5.3-flash',
+      effort: 'max',
+    });
+    expect(inRange.model_effort).toBe('max');
+  });
+
   it('走查 R3：markSessionFailed 错误明文落库 + failed 状态帧携带详情；list/get 回放 error', async () => {
     const item = await service.create(user, {
       prompt: 'x',

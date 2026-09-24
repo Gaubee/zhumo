@@ -151,6 +151,8 @@ export interface AvailableModel {
   name: string;
   contextWindow?: number;
   inputTypes?: ModelInputType[];
+  /** 思考强度档（zcode 转录 reasoningLevel；缺省 = 模型无档位数据）。 */
+  efforts?: string[];
   iconUrl?: string;
 }
 
@@ -214,6 +216,8 @@ export interface ResourceItem {
   is_dir: boolean;
   size: number;
   meta: ResourceBadge | null;
+  /** agent 可读绝对路径（@资源面板注入用；目录/未落盘 = null）。 */
+  path?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -259,6 +263,8 @@ export interface Task {
   /** 任务级模型覆盖（走查 R6：null = 跟随后台默认模型；聊天中可切换）。 */
   modelProvider: string | null;
   modelModel: string | null;
+  /** 任务级思考强度档（2026-09-25 前台对齐；null = 不覆盖）。 */
+  modelEffort: string | null;
   /** 失败原因明文（走查 R3：failed 必须可见；null = 无）。 */
   error: string | null;
 }
@@ -324,6 +330,13 @@ export interface Frame {
 export interface KbEntryItem {
   key: string;
   value: string;
+}
+
+/** 前台知识库清单条目（$ 面板：分组/条目名，不含内容）。 */
+export interface KbGroupRef {
+  name: string;
+  note: string;
+  keys: string[];
 }
 
 export interface KbGroupView {
