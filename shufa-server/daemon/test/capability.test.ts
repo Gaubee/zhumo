@@ -181,16 +181,27 @@ describe('shufa capability 工具面', () => {
     expect(runaways).toHaveLength(1);
   });
 
-  it('summary_write：写入任务目录 summary.json；非法 JSON 拒绝', async () => {
+  it('summary_write：写入任务目录 summary.json；非法 JSON 拒绝；结构缺失拒绝（2026-09-25 lint）', async () => {
     const good = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content: '{"topic":"桂","paragraphs":["左右结构"],"key_points":["两土对齐"]}',
+      },
+      'agent',
+    );
+    expect(good).toMatchObject({ kind: 'ok' });
+    expect(existsSync(path.join(taskDir, 'summary.json'))).toBe(true);
+    const bad = await registry.call('shufa.summary_write', { workdir: taskDir, content: 'not-json' }, 'agent');
+    expect(bad).toMatchObject({ kind: 'failed' });
+    // 结构 lint：缺 paragraphs/key_points → 拒绝写入并给修复提示。
+    const incomplete = await registry.call(
       'shufa.summary_write',
       { workdir: taskDir, content: '{"topic":"桂"}' },
       'agent',
     );
-    expect(good.kind).toBe('ok');
-    expect(existsSync(path.join(taskDir, 'summary.json'))).toBe(true);
-    const bad = await registry.call('shufa.summary_write', { workdir: taskDir, content: 'not-json' }, 'agent');
-    expect(bad).toMatchObject({ kind: 'failed' });
+    expect(incomplete).toMatchObject({ kind: 'failed' });
+    expect((incomplete as { message: string }).message).toContain('已拒绝写入');
   });
 
   it('summary_write labels 双通道（走查 2026-09-23）：合法落盘、非法拒绝、值回传', async () => {
@@ -198,7 +209,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"桂"}',
+        content: '{"topic":"桂","paragraphs":["左右结构"],"key_points":["两土对齐"]}',
         labels: '{"grids":[{"index":0,"label":"桂"}],"annotations":[{"index":0,"desc":"指出主笔"}]}',
       },
       'agent',
@@ -207,10 +218,50 @@ describe('shufa capability 工具面', () => {
     expect(readFileSync(path.join(taskDir, 'labels.json'), 'utf8')).toContain('"label":"桂"');
     const badLabels = await registry.call(
       'shufa.summary_write',
-      { workdir: taskDir, content: '{"topic":"桂"}', labels: 'not-json' },
+      {
+        workdir: taskDir,
+        content: '{"topic":"桂","paragraphs":["左右结构"],"key_points":["两土对齐"]}',
+        labels: 'not-json',
+      },
       'agent',
     );
     expect(badLabels).toMatchObject({ kind: 'failed' });
+    // 结构 lint（2026-09-25）：labels index 负数 → 拒绝；grids 缺 label → 拒绝。
+    const badIndex = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content: '{"topic":"桂","paragraphs":["左右结构"],"key_points":["两土对齐"]}',
+        labels: '{"grids":[{"index":-1,"label":"桂"}],"annotations":[]}',
+      },
+      'agent',
+    );
+    expect(badIndex).toMatchObject({ kind: 'failed' });
+    expect((badIndex as { message: string }).message).toContain('从 0 起');
+  });
+
+  it('summary_write × manifest 交叉警告（2026-09-25 lint）：越界/缺格软警告随返回值', async () => {
+    // 构造 manifest：2 格 + 2 旁注（index 0/1）。
+    mkdirSync(path.join(taskDir, '.shufa-work'), { recursive: true });
+    writeFileSync(
+      path.join(taskDir, '.shufa-work', 'manifest.json'),
+      JSON.stringify({ grid: { grids: [{ idx: 0 }, { idx: 1 }] }, ink: { annotations: [{ index: 0 }, { index: 1 }] } }),
+    );
+    // labels：grids 只标 0 且出现越界 index 2；annotations 只标 0。
+    const linted = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content: '{"topic":"桂","paragraphs":["左右结构"],"key_points":["两土对齐"]}',
+        labels: '{"grids":[{"index":0,"label":"桂"},{"index":2,"label":"错位"}],"annotations":[{"index":0,"desc":"指出主笔"}]}',
+      },
+      'agent',
+    );
+    expect(linted).toMatchObject({ kind: 'ok' });
+    const warnings = (linted as { value: { warnings?: string[] } }).value.warnings ?? [];
+    expect(warnings.some((w) => w.includes('grids index 越界'))).toBe(true);
+    expect(warnings.some((w) => w.includes('未标注 label'))).toBe(true);
+    expect(warnings.some((w) => w.includes('未给 desc'))).toBe(true);
   });
 
   it('export：summary-file 注入 + bundle 命中 → onExported 附加结果链接', async () => {

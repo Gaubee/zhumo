@@ -87,8 +87,26 @@ export async function bootShufaKernel(options: ShufaKernelOptions): Promise<Shuf
   // 来自 shufa MCP）；[2] skill-filesystem config 按 id 覆盖（base bundle 已含该
   // row——cordis.yml 再插同 id entry 会 duplicate；patch 是官方的按 row 覆盖面），
   // skills/ 目录进内核技能注册表（$ 面板数据源；includeDefaultRoots 收窄只认产品技能）。
+  // session-title-llm（2026-09-25 三轮）：不配 provider/model 时 LLM 提炼因
+  // "no logged request route" 永远失败，标题回落 first-prompt 截断（mini 实证）。
+  // patch 整行替换 config（cordis 语义）——有默认模型时全量重写补 provider/model。
+  const defaultModel = options.modelRoutes?.default;
+  const titleLlmRow = defaultModel
+    ? [
+        '- id: session-title-llm\n',
+        '  config:\n',
+        '    targetWords: 5\n',
+        '    targetCjkCharacters: 10\n',
+        '    maxInputBytes: 4096\n',
+        '    maxOutputTokens: 64\n',
+        '    timeoutMs: 60000\n',
+        `    provider: ${defaultModel.provider}\n`,
+        `    model: ${defaultModel.model}\n`,
+      ].join('')
+    : '';
   const patchRows =
     KERNEL_DISABLED_TOOL_ROWS.map((id) => `- id: ${id}\n  disabled: true\n`).join('') +
+    titleLlmRow +
     `- id: skill-filesystem\n  config:\n    includeDefaultRoots: false\n    customSkillDirs:\n      - ${options.skillsDir}\n`;
   writeFileSync(path.join(profileDir, 'cordis.patch.yml'), patchRows, 'utf8');
 

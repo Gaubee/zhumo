@@ -119,6 +119,33 @@
   line-height: 19px;
 }
 
+/* markstream 的 h1-h4 按 rem 放大（18-25px）在对话流里突兀——压回正文
+   体系（h1 14 / h2 13 / h3 12.5 / h4 12；代码块 11px mono）。 */
+.msg-body :is(h1, h2, h3, h4) {
+  font-weight: 600;
+  line-height: 1.45;
+  margin: 0.8em 0 0.4em;
+}
+.msg-body :is(h1) {
+  font-size: 14px;
+}
+.msg-body :is(h2) {
+  font-size: 13px;
+}
+.msg-body :is(h3) {
+  font-size: 12.5px;
+}
+.msg-body :is(h4) {
+  font-size: 12px;
+}
+.msg-body :is(pre) {
+  font-size: 11px;
+  line-height: 1.5;
+}
+.msg-body :is(code) {
+  font-size: 11px;
+}
+
 /* 工具展开卡：mono 11px + muted 底。 */
 .tool-card {
   border-radius: 8px;

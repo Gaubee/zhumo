@@ -17,7 +17,7 @@
  *   收窄优于 §6 的字面 readonly）。
  */
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import type { CapabilityCallResult, CapabilityDefinition } from './core.js';
@@ -311,13 +311,36 @@ export function createAnalysisCapabilities(deps: AnalysisCapabilityDeps): Capabi
         if (input.data.labels !== undefined && !isJsonText(input.data.labels)) {
           return failed('labels 不是合法 JSON 文本');
         }
+        // 结构 lint（Owner 裁决 2026-09-25：不能只靠 skill 遵守——服务端 zod
+        // 校验 + manifest 交叉核对，警告随返回值给 agent 修复重写）。
+        const summaryCheck = SummaryContentSchema.safeParse(JSON.parse(input.data.content));
+        if (!summaryCheck.success) {
+          return failed(
+            `summary 结构不合法（已拒绝写入，请修复后重写）：${summaryCheck.error.issues
+              .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
+              .join('；')}`,
+          );
+        }
+        let labelsParsed: unknown;
+        if (input.data.labels !== undefined) {
+          const labelsCheck = LabelsContentSchema.safeParse(JSON.parse(input.data.labels));
+          if (!labelsCheck.success) {
+            return failed(
+              `labels 结构不合法（已拒绝写入，请修复后重写；约定 grids[].index/annotations[].index 从 0 起、对应检测顺序）：${labelsCheck.error.issues
+                .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
+                .join('；')}`,
+            );
+          }
+          labelsParsed = labelsCheck.data;
+        }
+        const warnings = lintLabelsAgainstManifest(ctx.taskDir, labelsParsed);
         const target = path.join(ctx.taskDir, 'summary.json');
         try {
           mkdirSync(ctx.taskDir, { recursive: true });
           writeFileSync(target, input.data.content, { encoding: 'utf8', mode: 0o600 });
           // labels 与摘要一并落盘（走查 2026-09-23：agent 之前没有任何工具能写
           // labels.json，旁注 desc/生字 label/关联全部静默为空）。
-          if (input.data.labels !== undefined) {
+          if (input.data.labels !== undefined && labelsParsed !== undefined) {
             writeFileSync(
               path.join(ctx.taskDir, 'labels.json'),
               input.data.labels,
@@ -333,7 +356,17 @@ export function createAnalysisCapabilities(deps: AnalysisCapabilityDeps): Capabi
         }
         return {
           kind: 'ok',
-          value: { written: target, labels: input.data.labels !== undefined },
+          value: {
+            written: target,
+            labels: input.data.labels !== undefined,
+            ...(warnings.length > 0
+              ? {
+                  warnings,
+                  warnings_note:
+                    '以上警告可修复后重新调用 summary_write 覆盖写入（summary/labels 结构已通过基本校验）',
+                }
+              : {}),
+          },
         };
       },
     },
@@ -407,4 +440,82 @@ export function wrapExportCompletion(
           };
     },
   };
+}
+
+// ---------------------------------------------------------------- summary/labels 结构 lint
+
+/** summary.json 内容结构（结果页静态总结消费面）。 */
+const SummaryContentSchema = z.object({
+  topic: z.string().min(1, 'topic 不能为空'),
+  paragraphs: z.array(z.string().min(1)).min(1, 'paragraphs 至少一段'),
+  key_points: z.array(z.string().min(1)).min(1, 'key_points 至少一条'),
+});
+
+/** labels.json 内容结构（语义层：grids[].label 生字 / annotations[].desc 旁注）。 */
+const LabelsContentSchema = z.object({
+  grids: z
+    .array(
+      z.object({
+        index: z.number().int().min(0, 'index 从 0 起'),
+        label: z.string().min(1, 'label 不能为空'),
+        note: z.string().optional(),
+      }),
+    )
+    .min(1, 'grids 至少一条（检测出田字格时）'),
+  annotations: z
+    .array(
+      z.object({
+        index: z.number().int().min(0, 'index 从 0 起'),
+        desc: z.string().min(1, 'desc 不能为空'),
+      }),
+    )
+    .default([]),
+});
+
+/**
+ * labels × manifest 交叉核对（软警告，不阻断写入）：
+ * - index 越界（≥ 检测出的 grids/annotations 数）——结果页关联会落空；
+ * - 检测出的格未全部标注 label——转录↔生字关联缺格；
+ * - manifest 缺席（早期步骤未跑）跳过交叉核对。
+ */
+function lintLabelsAgainstManifest(taskDir: string, labels: unknown): string[] {
+  if (labels === undefined || labels === null) return [];
+  const { grids, annotations } = labels as { grids: Array<{ index: number }>; annotations: Array<{ index: number }> };
+  const warnings: string[] = [];
+  let manifest: { grid?: { grids?: unknown[] }; ink?: { annotations?: unknown[] } } | null = null;
+  try {
+    // manifest 与 summary.json 同任务目录（taskDir/.shufa-work/）。
+    manifest = JSON.parse(readFileSync(path.join(taskDir, '.shufa-work', 'manifest.json'), 'utf8'));
+  } catch {
+    return warnings; // manifest 未生成：跳过交叉核对（结构校验已过）
+  }
+  const gridCount = manifest?.grid?.grids?.length ?? 0;
+  const annoCount = manifest?.ink?.annotations?.length ?? 0;
+  if (gridCount > 0) {
+    const outOfRange = grids.filter((g) => g.index >= gridCount);
+    if (outOfRange.length > 0) {
+      warnings.push(
+        `labels.grids index 越界：${outOfRange.map((g) => g.index).join(',')} ≥ 检测格数 ${gridCount}（index 从 0 起、对应检测顺序）`,
+      );
+    }
+    const labeled = new Set(grids.map((g) => g.index));
+    const missing = Array.from({ length: gridCount }, (_, i) => i).filter((i) => !labeled.has(i));
+    if (missing.length > 0) {
+      warnings.push(`检测出 ${gridCount} 个田字格中有 ${missing.length} 个未标注 label（缺格 index：${missing.join(',')}）——转录与生字的关联会缺失`);
+    }
+  }
+  if (annoCount > 0) {
+    const outOfRange = annotations.filter((a) => a.index >= annoCount);
+    if (outOfRange.length > 0) {
+      warnings.push(
+        `labels.annotations index 越界：${outOfRange.map((a) => a.index).join(',')} ≥ 检测旁注数 ${annoCount}（index 从 0 起、对应检测顺序）`,
+      );
+    }
+    const described = new Set(annotations.map((a) => a.index));
+    const missingAnno = Array.from({ length: annoCount }, (_, i) => i).filter((i) => !described.has(i));
+    if (missingAnno.length > 0) {
+      warnings.push(`检测出 ${annoCount} 条旁注中有 ${missingAnno.length} 条未给 desc（缺 index：${missingAnno.join(',')}）——旁注语义层不完整`);
+    }
+  }
+  return warnings;
 }
