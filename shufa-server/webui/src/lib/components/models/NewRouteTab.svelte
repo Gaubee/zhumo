@@ -116,7 +116,11 @@
         ...(model.name !== undefined ? { name: model.name } : {}),
         ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
         ...(model.inputTypes !== undefined ? { inputTypes: model.inputTypes } : {}),
-        efforts: [...DEFAULT_MODEL_EFFORTS],
+        // 目录带档位（zcode 策展的 reasoningLevel）优先；缺省回退三档默认。
+        efforts:
+          model.efforts !== undefined && model.efforts.length > 0
+            ? [...model.efforts]
+            : [...DEFAULT_MODEL_EFFORTS],
       }));
     const route: DshModelRoute = {
       provider: nextRouteSlug(preset.provider, routes.map((r) => r.provider)),
@@ -216,7 +220,7 @@
       <div class="space-y-2">
         <div class="space-y-1">
           <span class="text-[10px] font-medium text-muted-foreground">
-            目录（{presets.length} 个 provider，含内置 + models.dev）
+            目录（{presets.length} 个 provider，含 zcode + 内置 + models.dev）
           </span>
           <div class="grid grid-cols-1 gap-1.5 min-[520px]:grid-cols-2">
             {#each filteredPresets as preset (preset.provider + preset.name)}
@@ -251,6 +255,14 @@
                   </span>
                 </span>
                 <span class="mr-0.5 flex shrink-0 items-center gap-1">
+                  {#if preset.source === "zcode"}
+                    <span
+                      class="rounded bg-primary/10 px-1 text-[9px] font-medium text-primary"
+                      title="ZCode Registry 策展提取（coding plan 端点 + reasoning 档位）"
+                    >
+                      ZCode
+                    </span>
+                  {/if}
                   {#if copies > 0}
                     <span
                       class="rounded bg-primary/10 px-1 text-[9px] text-primary"

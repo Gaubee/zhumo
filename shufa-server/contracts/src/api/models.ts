@@ -115,12 +115,17 @@ export const ModelsAvailableOutputSchema = z.object({
 });
 export type ModelsAvailableOutput = z.infer<typeof ModelsAvailableOutputSchema>;
 
-/** 预设目录条目（五轮增强：模型带 contextWindow/inputTypes；provider 带 iconUrl）。 */
+/**
+ * 预设目录条目（五轮增强：模型带 contextWindow/inputTypes；provider 带 iconUrl。
+ * zcode 轮：模型带 efforts（ZCode Registry reasoningLevel 档位转录）；
+ * source 增 'zcode'——ZCode Registry 模板静态提取，策展质量优先于广度）。
+ */
 export const ModelPresetModelSchema = z.object({
   id: z.string(),
   name: z.string().optional(),
   contextWindow: z.number().int().positive().optional(),
   inputTypes: z.array(ModelInputTypeSchema).optional(),
+  efforts: z.array(z.string().min(1)).optional(),
 });
 export const ModelPresetSchema = z.object({
   provider: z.string(),
@@ -129,7 +134,7 @@ export const ModelPresetSchema = z.object({
   api: z.string().optional(),
   iconUrl: z.string().optional(),
   models: z.array(ModelPresetModelSchema),
-  source: z.enum(['builtin', 'models.dev']),
+  source: z.enum(['builtin', 'models.dev', 'zcode']),
 });
 export type ModelPreset = z.infer<typeof ModelPresetSchema>;
 

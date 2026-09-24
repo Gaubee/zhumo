@@ -1,0 +1,3214 @@
+/**
+ * ZCode Registry 预设（生成文件，勿手改）——由 daemon/scripts/extract-zcode-presets.mjs
+ * 从 zai-org/ZCode 的 zcode-builtin.json 静态提取。重跑：pnpm --filter daemon exec node
+ * scripts/extract-zcode-presets.mjs [本地 json 路径]（缺省拉 GitHub raw main）。
+ * 上游 Apache-2.0；数据源：local:/tmp/zcode-research/config/provider/zcode-builtin.json
+ * 上游 revision 30；20 模板 / 244 模型；生成于 2026-09-24。
+ * 语义备注：模型 efforts = ZCode reasoningLevel 档位（含 disabled/enabled 这类开关型档）；
+ * account:* 账号型 provider 不在内（本项目路由仅支持 apiKey）。
+ */
+import type { ModelPreset } from '@zhumo/contracts';
+
+export const ZCODE_PRESET_SOURCE_URL = 'local:/tmp/zcode-research/config/provider/zcode-builtin.json';
+
+export const zcodePresets: readonly ModelPreset[] = [
+  {
+    "provider": "zai-api",
+    "name": "Z.ai Coding Plan",
+    "baseURL": "https://api.z.ai/api/anthropic",
+    "api": "anthropic-messages",
+    "iconUrl": "https://models.dev/logos/zai.svg",
+    "models": [
+      {
+        "id": "GLM-5.3",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "GLM-5.3-Flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "GLM-5-Turbo",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "zai-standard-api",
+    "name": "Z.ai API",
+    "baseURL": "https://api.z.ai/api/paas/v4",
+    "api": "openai-completions",
+    "iconUrl": "https://models.dev/logos/zai.svg",
+    "models": [
+      {
+        "id": "GLM-5.3",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "GLM-5.3-Flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "GLM-5V-Turbo",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-5.1",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-5.1-Highspeed",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-5",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-5-Turbo",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.7",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.7-FlashX",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.7-Flash",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.6",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.5-Air",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.5",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.6V",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.6V-Flash",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.6V-FlashX",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.1V-Thinking-FlashX",
+        "contextWindow": 65536,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.1V-Thinking-Flash",
+        "contextWindow": 65536,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4-FlashX-250414",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4-Flash-250414",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4V-Flash",
+        "contextWindow": 16384,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "codegeex-4",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "charglm-4",
+        "contextWindow": 8192,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "emohaa",
+        "contextWindow": 8192,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "bigmodel-api",
+    "name": "BigModel Coding Plan",
+    "baseURL": "https://open.bigmodel.cn/api/anthropic",
+    "api": "anthropic-messages",
+    "iconUrl": "https://models.dev/logos/zhipuai.svg",
+    "models": [
+      {
+        "id": "GLM-5.3",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "GLM-5.3-Flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "GLM-5-Turbo",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "bigmodel-standard-api",
+    "name": "BigModel API",
+    "baseURL": "https://open.bigmodel.cn/api/paas/v4",
+    "api": "openai-completions",
+    "iconUrl": "https://models.dev/logos/zhipuai.svg",
+    "models": [
+      {
+        "id": "GLM-5.3",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "GLM-5.3-Flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "GLM-5V-Turbo",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-5.1",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-5.1-Highspeed",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-5",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-5-Turbo",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.7",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.7-FlashX",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.7-Flash",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.6",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.5-Air",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.5",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.6V",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.6V-Flash",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.6V-FlashX",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.1V-Thinking-FlashX",
+        "contextWindow": 65536,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4.1V-Thinking-Flash",
+        "contextWindow": 65536,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4-FlashX-250414",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4-Flash-250414",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "GLM-4V-Flash",
+        "contextWindow": 16384,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "codegeex-4",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "charglm-4",
+        "contextWindow": 8192,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "emohaa",
+        "contextWindow": 8192,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "moonshot-kimi",
+    "name": "Kimi",
+    "baseURL": "https://api.moonshot.cn/anthropic",
+    "api": "anthropic-messages",
+    "iconUrl": "https://models.dev/logos/moonshotai.svg",
+    "models": [
+      {
+        "id": "kimi-k3",
+        "contextWindow": 1048576,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "kimi-k2.7-code",
+        "contextWindow": 262144,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "enabled"
+        ]
+      },
+      {
+        "id": "kimi-k2.6",
+        "contextWindow": 262144,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "kimi-k2.7-code-highspeed",
+        "contextWindow": 262144,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "enabled"
+        ]
+      },
+      {
+        "id": "k3",
+        "contextWindow": 1048576,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "k3-256k",
+        "contextWindow": 262144,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "minimax",
+    "name": "MiniMax",
+    "baseURL": "https://api.minimaxi.com/anthropic",
+    "api": "anthropic-messages",
+    "iconUrl": "https://models.dev/logos/minimax.svg",
+    "models": [
+      {
+        "id": "MiniMax-M3",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "MiniMax-M2.7",
+        "contextWindow": 204800,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "MiniMax-M2.7-highspeed",
+        "contextWindow": 204800,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "MiniMax-M2.5",
+        "contextWindow": 204800,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "MiniMax-M2.5-highspeed",
+        "contextWindow": 204800,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "MiniMax-M2.1",
+        "contextWindow": 204800,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "MiniMax-M2.1-highspeed",
+        "contextWindow": 204800,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "MiniMax-M2",
+        "contextWindow": 204800,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "deepseek",
+    "name": "DeepSeek",
+    "baseURL": "https://api.deepseek.com/anthropic",
+    "api": "anthropic-messages",
+    "iconUrl": "https://models.dev/logos/deepseek.svg",
+    "models": [
+      {
+        "id": "deepseek-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "deepseek-v4-pro",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "low",
+          "high",
+          "max"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "qwen-alibaba-model-studio-cn",
+    "name": "阿里云百炼（中国）",
+    "baseURL": "https://dashscope.aliyuncs.com/apps/anthropic",
+    "api": "anthropic-messages",
+    "iconUrl": "https://models.dev/logos/alibaba-cn.svg",
+    "models": [
+      {
+        "id": "qwen3.8-max",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "qwen3.8-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "qwen3.7-max",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.7-plus",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.7-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.6-plus",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.6-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.5-plus",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.5-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3-max",
+        "contextWindow": 262144,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen-plus",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3-vl-plus",
+        "contextWindow": 262144,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "qwen-alibaba-model-studio-intl",
+    "name": "阿里云百炼（国际）",
+    "baseURL": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "api": "openai-completions",
+    "iconUrl": "https://models.dev/logos/alibaba.svg",
+    "models": [
+      {
+        "id": "qwen3.8-max",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "qwen3.8-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "qwen3.8-omni-flash",
+        "contextWindow": 65536,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "qwen3.7-max",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.7-plus",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.7-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.6-plus",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.6-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.5-plus",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.5-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3-max",
+        "contextWindow": 262144,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen-plus",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3-vl-plus",
+        "contextWindow": 262144,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "xiaomi-mimo",
+    "name": "Xiaomi MiMo",
+    "baseURL": "https://api.xiaomimimo.com/anthropic",
+    "api": "anthropic-messages",
+    "iconUrl": "https://models.dev/logos/xiaomi.svg",
+    "models": [
+      {
+        "id": "mimo-v2.5-pro",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "mimo-v2.5",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "openai",
+    "name": "OpenAI",
+    "baseURL": "https://api.openai.com/v1",
+    "api": "openai-responses",
+    "iconUrl": "https://models.dev/logos/openai.svg",
+    "models": [
+      {
+        "id": "gpt-6-astra",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "gpt-5.6-sol",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "gpt-5.6-luna",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "gpt-5.6",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "gpt-5.4",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "gpt-5.4-pro",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "gpt-5.4-mini",
+        "contextWindow": 400000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "gpt-5.4-nano",
+        "contextWindow": 400000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "gpt-5.3-codex",
+        "contextWindow": 400000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "anthropic",
+    "name": "Anthropic",
+    "baseURL": "https://api.anthropic.com/v1",
+    "api": "anthropic-messages",
+    "iconUrl": "https://models.dev/logos/anthropic.svg",
+    "models": [
+      {
+        "id": "claude-fable-5-1",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "claude-fable-5",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "claude-opus-5",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "claude-sonnet-5",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "claude-haiku-4-5-20251001",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "xai",
+    "name": "xAI",
+    "baseURL": "https://api.x.ai/v1",
+    "api": "openai-responses",
+    "iconUrl": "https://models.dev/logos/xai.svg",
+    "models": [
+      {
+        "id": "grok-4.6",
+        "contextWindow": 500000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "grok-build-0.1",
+        "contextWindow": 256000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "grok-4.3",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "openrouter",
+    "name": "OpenRouter",
+    "baseURL": "https://openrouter.ai/api",
+    "api": "anthropic-messages",
+    "iconUrl": "https://models.dev/logos/openrouter.svg",
+    "models": [
+      {
+        "id": "anthropic/claude-fable-5.1",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "openai/gpt-6-astra",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "openai/gpt-5.6-sol",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "anthropic/claude-opus-5",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "deepseek/deepseek-v4-pro",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "moonshotai/kimi-k3",
+        "contextWindow": 1048576,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "z-ai/glm-5.3",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "qwen/qwen3.8-max",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "minimax/minimax-m3",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "xiaomi/mimo-v2.5-pro",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "x-ai/grok-4.6",
+        "contextWindow": 500000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "deepseek/deepseek-v4.1-flash",
+        "contextWindow": 1048576,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "qwen/qwen3.8-max-0902",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "openai/gpt-5.6-terra",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "openai/gpt-5.6-luna",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "openai/gpt-5.6",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "openai/gpt-5.4",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "openai/gpt-5.4-pro",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "openai/gpt-5.4-mini",
+        "contextWindow": 400000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "openai/gpt-5.4-nano",
+        "contextWindow": 400000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "openai/gpt-5.3-codex",
+        "contextWindow": 400000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "anthropic/claude-sonnet-5",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "anthropic/claude-haiku-4.5",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "anthropic/claude-opus-4.8",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "anthropic/claude-opus-4.7",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "anthropic/claude-opus-4.6",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "anthropic/claude-opus-4.5",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "anthropic/claude-sonnet-4.6",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "anthropic/claude-sonnet-4.5",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "deepseek/deepseek-v4-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "moonshotai/kimi-k2.7-code",
+        "contextWindow": 262144,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "enabled"
+        ]
+      },
+      {
+        "id": "moonshotai/kimi-k2.6",
+        "contextWindow": 262144,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "moonshotai/kimi-k2.5",
+        "contextWindow": 262144,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "z-ai/glm-5.3-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "z-ai/glm-5.2",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "z-ai/glm-5.1",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "z-ai/glm-5v-turbo",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "z-ai/glm-5",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "z-ai/glm-5-turbo",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "z-ai/glm-4.7",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "z-ai/glm-4.7-flash",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "z-ai/glm-4.6",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "z-ai/glm-4.6v",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "z-ai/glm-4.5-air",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "z-ai/glm-4.5",
+        "contextWindow": 131072,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen/qwen3.8-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "qwen/qwen3.7-max",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen/qwen3.7-plus",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen/qwen3.7-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen/qwen3.6-plus",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen/qwen3.6-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen/qwen3.5-plus-20260420",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen/qwen3-vl-plus",
+        "contextWindow": 262144,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen/qwen3-vl-flash",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "minimax/minimax-m2.7",
+        "contextWindow": 204800,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "minimax/minimax-m2.5",
+        "contextWindow": 204800,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "xiaomi/mimo-v2.5",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "x-ai/grok-build-0.1",
+        "contextWindow": 256000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "x-ai/grok-4.3",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "opencode-go-chat",
+    "name": "OpenCode Go (Chat)",
+    "baseURL": "https://opencode.ai/zen/go/v1",
+    "api": "openai-completions",
+    "iconUrl": "https://models.dev/logos/opencode-go.svg",
+    "models": [
+      {
+        "id": "glm-5.3-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "glm-5.3",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "kimi-k3",
+        "contextWindow": 1048576,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "max"
+        ]
+      },
+      {
+        "id": "kimi-k2.7-code",
+        "contextWindow": 262144,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "enabled"
+        ]
+      },
+      {
+        "id": "deepseek-v4.1-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "deepseek-v4-pro",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "mimo-v2.5",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "enabled"
+        ]
+      },
+      {
+        "id": "mimo-v2.5-pro",
+        "contextWindow": 1048576,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "enabled"
+        ]
+      },
+      {
+        "id": "glm-5.2",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "glm-5.1",
+        "contextWindow": 202752,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "enabled"
+        ]
+      },
+      {
+        "id": "kimi-k2.6",
+        "contextWindow": 262144,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "enabled"
+        ]
+      },
+      {
+        "id": "deepseek-v4-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "deepseek-v4-flash-vision-exp",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "hy4-preview",
+        "contextWindow": 1024000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "none",
+          "high"
+        ]
+      },
+      {
+        "id": "hy3",
+        "contextWindow": 256000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "high"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "opencode-go-messages",
+    "name": "OpenCode Go (Anthropic)",
+    "baseURL": "https://opencode.ai/zen/go/v1",
+    "api": "anthropic-messages",
+    "iconUrl": "https://models.dev/logos/opencode-go.svg",
+    "models": [
+      {
+        "id": "minimax-m3",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.8-max",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "qwen3.8-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "minimax-m2.7",
+        "contextWindow": 204800,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "enabled"
+        ]
+      },
+      {
+        "id": "minimax-m2.5",
+        "contextWindow": 204800,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.7-max",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.7-plus",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.6-plus",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "opencode-go-responses",
+    "name": "OpenCode Go (Responses)",
+    "baseURL": "https://opencode.ai/zen/go/v1",
+    "api": "openai-responses",
+    "iconUrl": "https://models.dev/logos/opencode-go.svg",
+    "models": [
+      {
+        "id": "gpt-5.6-luna",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "grok-4.6",
+        "contextWindow": 500000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "opencode-zen-responses",
+    "name": "OpenCode Zen (Responses)",
+    "baseURL": "https://opencode.ai/zen/v1",
+    "api": "openai-responses",
+    "iconUrl": "https://models.dev/logos/opencode.svg",
+    "models": [
+      {
+        "id": "gpt-6-astra",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "gpt-5.6-sol",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "gpt-5.6-luna",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "gpt-5.5",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "gpt-5.5-pro",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "gpt-5.4",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "gpt-5.4-pro",
+        "contextWindow": 1050000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "gpt-5.4-mini",
+        "contextWindow": 400000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "gpt-5.4-nano",
+        "contextWindow": 400000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "gpt-5.3-codex",
+        "contextWindow": 400000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "gpt-5.3-codex-spark",
+        "contextWindow": 400000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "gpt-5.2",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "gpt-5.1",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "opencode-zen-messages",
+    "name": "OpenCode Zen (Anthropic)",
+    "baseURL": "https://opencode.ai/zen/v1",
+    "api": "anthropic-messages",
+    "iconUrl": "https://models.dev/logos/opencode.svg",
+    "models": [
+      {
+        "id": "claude-fable-5-1",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "claude-fable-5",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "qwen3.7-max",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.6-plus",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.5-plus",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "claude-opus-5",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "claude-sonnet-5",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "claude-haiku-4-5",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "claude-opus-4-8",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "claude-opus-4-7",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "claude-opus-4-6",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "claude-opus-4-5",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "claude-sonnet-4-6",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "claude-sonnet-4-5",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "qwen3.7-plus",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      }
+    ],
+    "source": "zcode"
+  },
+  {
+    "provider": "opencode-zen-chat",
+    "name": "OpenCode Zen (Chat)",
+    "baseURL": "https://opencode.ai/zen/v1",
+    "api": "openai-completions",
+    "iconUrl": "https://models.dev/logos/opencode.svg",
+    "models": [
+      {
+        "id": "kimi-k3",
+        "contextWindow": 1048576,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "minimax-m3",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "deepseek-v4-pro",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "glm-5.2",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "big-pickle",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "mimo-v2.5-free",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text",
+          "image"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "hy3-free",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "ling-3.0-flash-fin-free",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "nemotron-3-ultra-free",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "muse-spark-1.2-contributor-free",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "minimax-m2.7",
+        "contextWindow": 204800,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "deepseek-v4-flash",
+        "contextWindow": 1000000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "glm-5.1",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      },
+      {
+        "id": "nemotron-3.5-lightning-free",
+        "contextWindow": 200000,
+        "inputTypes": [
+          "text"
+        ],
+        "efforts": [
+          "disabled",
+          "enabled"
+        ]
+      }
+    ],
+    "source": "zcode"
+  }
+];

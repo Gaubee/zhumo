@@ -2,17 +2,21 @@
  * Models 预设目录（走查 BUG4，2026-09-23；skill-creator-v2 开箱预设语义）：
  * builtin 预设从 @earendil-works/pi-ai 包内嵌 provider 数据（dist/providers/data
  * 经 `providers/all` 公共子路径导出）生成；models.dev 在线刷新映射后连同 fetched_at
- * 缓存进 settings 表；catalog = builtin 恒在 + 缓存追加。
+ * 缓存进 settings 表；catalog = zcode 静态 + builtin 恒在 + 缓存追加。
  * 正交意图：
  *   [1] builtin：只收有 baseUrl 的 provider，每家取前若干代表型号（全量太大）。
  *   [2] models.dev 刷新：GET api.json → presets（baseURL 取 provider.api 字段）→
  *       settings 缓存（models_dev_cache / models_dev_fetched_at，内部键不进 API 白名单）。
- *   [3] catalog 读面：缓存过期与否都返回 builtin；缓存存在即追加。
+ *   [3] catalog 读面：缓存过期与否都返回 zcode+builtin；缓存存在即追加。
+ *   [4] zcode（2026-09-22 调查落地）：ZCode Registry 模板静态提取（20 模板/244 模型，
+ *       含 coding plan 双端点与 reasoning 档位），策展质量优先故排最前；重跑
+ *       scripts/extract-zcode-presets.mjs 随上游 revision 升级。
  */
 import { builtinProviders, getBuiltinModels } from '@earendil-works/pi-ai/providers/all';
 import type { ModelCatalogOutput, ModelPreset } from '@zhumo/contracts';
 import type { SqliteDb } from './db/database.js';
 import { getSetting, nowIso, putSetting } from './db/store.js';
+import { zcodePresets } from './zcode-presets.js';
 
 export const MODELS_DEV_API_URL = 'https://models.dev/api.json';
 /** settings 表内部缓存键（不进 admin.settings 白名单，属内部状态）。 */
@@ -144,7 +148,7 @@ export async function refreshModelsDevCache(
   putSetting(db, SETTING_MODELS_DEV_FETCHED_AT, nowIso());
 }
 
-/** 目录读面：builtin 恒在；settings 缓存有则追加；fetched_at 为缓存时间或 null。 */
+/** 目录读面：zcode+builtin 恒在（zcode 策展质量优先排前）；settings 缓存有则追加；fetched_at 为缓存时间或 null。 */
 export function modelCatalog(db: SqliteDb): ModelCatalogOutput {
   let cached: ModelPreset[] = [];
   const raw = getSetting(db, SETTING_MODELS_DEV_CACHE);
@@ -153,11 +157,11 @@ export function modelCatalog(db: SqliteDb): ModelCatalogOutput {
       const parsed: unknown = JSON.parse(raw);
       if (Array.isArray(parsed)) cached = parsed as ModelPreset[];
     } catch {
-      // 缓存损坏按未刷新处理（builtin 不受影响，下次刷新覆盖）。
+      // 缓存损坏按未刷新处理（zcode/builtin 不受影响，下次刷新覆盖）。
     }
   }
   return {
-    presets: [...builtinModelPresets(), ...cached],
+    presets: [...zcodePresets, ...builtinModelPresets(), ...cached],
     fetched_at: getSetting(db, SETTING_MODELS_DEV_FETCHED_AT),
   };
 }

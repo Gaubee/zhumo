@@ -157,15 +157,24 @@ export interface AvailableModel {
 // ---- [3'] 模型预设目录（BUG4，2026-09-24） ----
 // 【本地镜像】契约 admin.models.catalog 出参由 daemon 代理并行落地中，先行镜像并注明。
 
-/** 预设路由条目：source=builtin 内置常量 | models.dev 远端拉取（五轮带模态/窗口/图标）。 */
+/**
+ * 预设路由条目：source=zcode ZCode Registry 策展提取（coding plan 双端点+档位，
+ * 2026-09-22）| builtin 内置常量 | models.dev 远端拉取（五轮带模态/窗口/图标）。
+ */
 export interface ModelsCatalogPreset {
   provider: string;
   name: string;
   baseURL?: string;
   api?: string;
   iconUrl?: string;
-  models: Array<{ id: string; name?: string; contextWindow?: number; inputTypes?: ModelInputType[] }>;
-  source: "builtin" | "models.dev";
+  models: Array<{
+    id: string;
+    name?: string;
+    contextWindow?: number;
+    inputTypes?: ModelInputType[];
+    efforts?: string[];
+  }>;
+  source: "zcode" | "builtin" | "models.dev";
 }
 
 /** admin.models.catalog / catalogRefresh 出参；fetched_at=null 表示从未拉取过 models.dev。 */
