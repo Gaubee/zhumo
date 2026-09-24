@@ -262,3 +262,21 @@ export function createResult(
   ).run(row.id, row.public_id, row.task_id, row.owner_id, row.title, row.bundle_path, row.created_at);
   return row;
 }
+
+/** 任务 + bundle 已有的结果行（重导合并入口；Owner 2026-09-25：agent 会话中途
+ * 反复重导不应每次各产生一个链接——同 bundle 重导复用 public_id、刷新时间）。 */
+export function getResultByTaskBundle(
+  db: SqliteDb,
+  taskId: string,
+  bundlePath: string,
+): ResultRow | null {
+  const row = db
+    .prepare('SELECT * FROM results WHERE task_id = ? AND bundle_path = ? ORDER BY created_at DESC LIMIT 1')
+    .get(taskId, bundlePath);
+  return (row as ResultRow | undefined) ?? null;
+}
+
+/** 重导合并：复用既有行（刷新时间戳，public_id 不变）。 */
+export function touchResult(db: SqliteDb, resultId: string): void {
+  db.prepare('UPDATE results SET created_at = ? WHERE id = ?').run(nowIso(), resultId);
+}

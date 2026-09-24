@@ -240,17 +240,30 @@ describe('TaskService 创建链', () => {
     // 无 data.json 的 bundle：收尾返回 null。
     expect(service.onExported(item.id, path.join(env.root, 'nope'))).toBeNull();
 
+    // 重导合并（2026-09-25）：同任务同 bundle 重导 → 复用 public_id、结果仍 1 条。
+    const reExport = service.onExported(item.id, bundle);
+    expect(reExport?.public_id).toBe(outcome?.public_id);
+    let detail = await service.get(user, item.id, Number.MAX_SAFE_INTEGER);
+    expect(detail.results).toHaveLength(1);
+
+    // 不同 bundle（真正的新导出）→ 新行。
+    const bundle2 = path.join(env.root, 'bundle-out-2');
+    mkdirSync(bundle2, { recursive: true });
+    writeFileSync(path.join(bundle2, 'data.json'), '{"video":{}}', 'utf8');
+    const second = service.onExported(item.id, bundle2);
+    expect(second?.public_id).not.toBe(outcome?.public_id);
+
     // 走查 2026-09-25：SITE_BASE_URL 缺省 + HOST=0.0.0.0 → 结果链接以本机
     // mDNS 主机名替换绑定通配地址（http://0.0.0.0 浏览器不可达）。
     const originalBase = env.config.siteBaseUrl;
     env.config.siteBaseUrl = 'http://0.0.0.0:8217';
-    const mdnsOutcome = service.onExported(item.id, bundle);
+    const mdnsOutcome = service.onExported(item.id, bundle2);
     expect(mdnsOutcome?.url).not.toContain('0.0.0.0');
     expect(mdnsOutcome?.url).toMatch(/^http:\/\/[^/]+\.local:8217\/r\//);
     env.config.siteBaseUrl = originalBase;
 
-    // 详情面补全（G2/G3）：video_name 资源名投影 + 任务关联结果列表（可多次导出）。
-    const detail = await service.get(user, item.id, Number.MAX_SAFE_INTEGER);
+    // 详情面补全（G2/G3）：video_name 资源名投影 + 任务关联结果列表。
+    detail = await service.get(user, item.id, Number.MAX_SAFE_INTEGER);
     expect(detail.task.video_name).toBe('v.mp4');
     expect(detail.results.map((r) => r.public_id)).toEqual(
       expect.arrayContaining([outcome?.public_id, mdnsOutcome?.public_id]),

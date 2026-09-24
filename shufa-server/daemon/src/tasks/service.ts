@@ -40,7 +40,7 @@ import {
   type ResourceRow,
   type TaskRow,
 } from '../db/tasks.js';
-import { createResult, listResultsByTask, type UserRow } from '../db/store.js';
+import { createResult, getResultByTaskBundle, listResultsByTask, touchResult, type UserRow } from '../db/store.js';
 import {
   resolveModelRoute,
   type ModelRoutesBundle,
@@ -526,14 +526,19 @@ export class TaskService {
     if (!task) return null;
     // bundle 存在性由 data.json 标记（§0 结果页契约的最低要求）。
     if (!existsSync(path.join(bundlePath, 'data.json'))) return null;
-    const publicId = newPublicId();
-    const row = createResult(this.deps.db, {
-      publicId,
-      taskId: task.id,
-      ownerId: task.owner_id,
-      title: null,
-      bundlePath,
-    });
+    // 重导合并（Owner 2026-09-25）：同任务同 bundle 的重导复用既有结果行
+    // （public_id 不变、时间刷新）——agent 会话中改摘要重导 5 次不该留下 5 个链接。
+    const existing = getResultByTaskBundle(this.deps.db, task.id, bundlePath);
+    const publicId = existing?.public_id ?? newPublicId();
+    const row = existing
+      ? (touchResult(this.deps.db, existing.id), existing)
+      : createResult(this.deps.db, {
+          publicId,
+          taskId: task.id,
+          ownerId: task.owner_id,
+          title: null,
+          bundlePath,
+        });
     updateTask(this.deps.db, task.id, { resultId: row.id, status: 'done' });
     if (task.resource_id) {
       const resource = getResourceById(this.deps.db, task.resource_id);
