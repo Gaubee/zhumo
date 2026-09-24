@@ -83,9 +83,14 @@ export async function bootShufaKernel(options: ShufaKernelOptions): Promise<Shuf
   const profileDir = resolveProfileDir('kernel', home);
   initProfile(profileDir, ['@deepseek-ai/dsh-base'], 'startup');
 
-  // 工具面收窄 patch：disable 通用 fs/shell/web 行（模型可见工具只能来自 shufa MCP）。
-  const disableYaml = KERNEL_DISABLED_TOOL_ROWS.map((id) => `- id: ${id}\n  disabled: true\n`).join('');
-  writeFileSync(path.join(profileDir, 'cordis.patch.yml'), disableYaml, 'utf8');
+  // 用户层 patch：[1] 工具面收窄（disable 通用 fs/shell/web 行——模型可见工具只能
+  // 来自 shufa MCP）；[2] skill-filesystem config 按 id 覆盖（base bundle 已含该
+  // row——cordis.yml 再插同 id entry 会 duplicate；patch 是官方的按 row 覆盖面），
+  // skills/ 目录进内核技能注册表（$ 面板数据源；includeDefaultRoots 收窄只认产品技能）。
+  const patchRows =
+    KERNEL_DISABLED_TOOL_ROWS.map((id) => `- id: ${id}\n  disabled: true\n`).join('') +
+    `- id: skill-filesystem\n  config:\n    includeDefaultRoots: false\n    customSkillDirs:\n      - ${options.skillsDir}\n`;
+  writeFileSync(path.join(profileDir, 'cordis.patch.yml'), patchRows, 'utf8');
 
   // 模型路由桥（热面，五轮多路由）：settings.yaml providers 全量 + 默认模型
   // + .credentials.yaml version-1 refs 全量密钥。
@@ -116,10 +121,9 @@ export async function bootShufaKernel(options: ShufaKernelOptions): Promise<Shuf
     'utf8',
   );
 
-  // entry rows：agent-presets roster + workspace + skill-filesystem + mcp-client
-  // （token 经 env 模板，不落盘明文）。skill-filesystem（2026-09-25 前台对齐·二轮）：
-  // skills/ 目录进内核技能注册表（ctx.skills——$ 面板数据源；SKILL.md frontmatter
-  // name/description 由 provider 解析，includeDefaultRoots 收窄为 false——只认产品技能）。
+  // entry rows：agent-presets roster + workspace + mcp-client（token 经 env 模板，
+  // 不落盘明文）。skill-filesystem 不在此——base bundle 已有该 row，其 config 经
+  // cordis.patch.yml 按 id 覆盖（见上）。
   const configPath = path.join(profileDir, 'cordis.yml');
   const mcpRow = options.mcp
     ? [
@@ -143,11 +147,6 @@ export async function bootShufaKernel(options: ShufaKernelOptions): Promise<Shuf
       '    includeShippedRoot: false\n',
       '- id: workspace\n',
       "  name: '@deepseek-ai/dsh-workspace'\n",
-      '- id: skill-filesystem\n',
-      "  name: '@deepseek-ai/dsh-skill-filesystem'\n",
-      '  config:\n',
-      '    includeDefaultRoots: false\n',
-      `    customSkillDirs:\n      - ${options.skillsDir}\n`,
       mcpRow,
     ].join(''),
     'utf8',
