@@ -76,6 +76,7 @@
   let nameTouched = $state(false);
   let contextTouched = $state(false);
   let inputsTouched = $state(false);
+  let effortsTouched = $state(false);
   let contextInvalid = $state(false);
   let testing = $state(false);
   let testResult = $state<{ ok: boolean; latencyMs?: number; detail?: string } | null>(null);
@@ -110,6 +111,11 @@
       contextText = formatTokenCount(hit.contextWindow);
     }
     if (!inputsTouched && hit.inputTypes !== undefined) emit({ inputTypes: hit.inputTypes });
+    // 目录档位（zcode 策展 reasoningLevel）覆盖新建默认三档；手触位不覆盖。
+    if (!effortsTouched && hit.efforts !== undefined && hit.efforts.length > 0) {
+      effortsText = hit.efforts.join(",");
+      emit({ efforts: [...hit.efforts] });
+    }
   }
 
   function onNameInput(value: string): void {
@@ -119,6 +125,7 @@
 
   function onEffortsInput(value: string): void {
     effortsText = value;
+    effortsTouched = true;
     const efforts = value
       .split(",")
       .map((s) => s.trim())

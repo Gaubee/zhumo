@@ -21,6 +21,7 @@ export interface ModelCandidate {
   name?: string;
   contextWindow?: number;
   inputTypes?: RouteModel["inputTypes"];
+  efforts?: string[];
 }
 
 /**
@@ -29,9 +30,24 @@ export interface ModelCandidate {
  * provider 剔除命名空间 id；并入已建路由的模型并集。手输仍允许任意 id。
  */
 export function modelIdCandidates(
-  presets: Array<{ provider: string; models: Array<{ id: string; name?: string; contextWindow?: number; inputTypes?: RouteModel["inputTypes"] }> }>,
+  presets: Array<{
+    provider: string;
+    models: Array<{
+      id: string;
+      name?: string;
+      contextWindow?: number;
+      inputTypes?: RouteModel["inputTypes"];
+      efforts?: string[];
+    }>;
+  }>,
   routeProvider: string,
-  routeModels: Array<{ id: string; name?: string; contextWindow?: number; inputTypes?: RouteModel["inputTypes"] }>,
+  routeModels: Array<{
+    id: string;
+    name?: string;
+    contextWindow?: number;
+    inputTypes?: RouteModel["inputTypes"];
+    efforts?: string[];
+  }>,
 ): ModelCandidate[] {
   const base = slugBase(routeProvider);
   const own = presets.find((p) => p.provider === base)?.models ?? [];
@@ -49,6 +65,7 @@ export function modelIdCandidates(
       name: "name" in m ? m.name : undefined,
       contextWindow: "contextWindow" in m ? m.contextWindow : undefined,
       inputTypes: "inputTypes" in m ? m.inputTypes : undefined,
+      efforts: "efforts" in m ? m.efforts : undefined,
     });
   }
   return out;
