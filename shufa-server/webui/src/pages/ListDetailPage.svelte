@@ -1,21 +1,22 @@
 <!--
-  / 前台 list-detail（PRODUCT_DESIGN §3：左列任务列表时间倒序+进行中徽标；
-  右列详情 = agent 对话 + 素材视频展示位；顶栏后台入口）。
-  走查反馈 [2026-09-23]：新建入口从左列移入 detail 面板——左列专注列表导航；
-  未选中任务时 detail 即新建面板（预设开场），详情头部提供「新建任务」切回。
-  朱墨前端改造 [2026-09-24]：匿名默认关闭——未登录会话渲染「请先登录」守卫卡
-  （结果页 /r/{id} 不受影响，仍公开可读）。
-  正交意图：
-  1. 任务列表（倒序/状态徽标/选中态）——纯导航。
-  2. 详情：选中 = 素材视频展示位 + TranscriptView + ComposerCard；
-     未选中 = TaskComposer（新建分析任务）。
-  3. 顶栏（站点名/身份/后台入口）。
-  4. 未登录守卫（匿名关闭后前台必须登录）。
+  / 前台 list-detail（PRODUCT_DESIGN §3）。
+  布局改版（Owner 2026-09-25）：
+  1. 桌面（≥md）：三栏 Resizable（shadcn resizable / paneforge）——任务列表 | 对话 |
+     任务详情（TaskDetailPanel 标签页），两根分隔条可拖拽，autoSaveId 记忆比例。
+  2. 移动（<md）：对话全宽；任务列表与任务详情收纳为 Sheet 抽屉（顶栏汉堡 +
+     详情按钮唤起）。
+  3. 任务列表/对话栏以 snippet 复用（桌面 Pane 与移动 Sheet 共享同一份标记，
+     单实例不双挂 Composer）。
+  历史注：新建入口在 detail 面板（未选中 = TaskComposer）；未登录守卫卡。
 -->
 <script lang="ts">
+  import IconListTodo from "@lucide/svelte/icons/list-todo";
   import IconLogIn from "@lucide/svelte/icons/log-in";
+  import IconPanelRight from "@lucide/svelte/icons/panel-right";
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
+  import * as Sheet from "$lib/components/ui/sheet";
+  import { Pane, PaneGroup, Handle } from "$lib/components/ui/resizable";
   import ComposerCard from "$lib/components/agent/ComposerCard.svelte";
   import TaskComposer from "$lib/components/agent/TaskComposer.svelte";
   import TaskDetailPanel from "$lib/components/agent/TaskDetailPanel.svelte";
@@ -41,6 +42,20 @@
     failed: "失败",
     cancelled: "已取消",
   };
+
+  /** 桌面/移动切换（md 768px）：桌面走三栏 PaneGroup，移动走全宽 + 抽屉。 */
+  let desktop = $state(true);
+  $effect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    const sync = () => (desktop = mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  });
+
+  /** 移动抽屉开关。 */
+  let listOpen = $state(false);
+  let detailOpen = $state(false);
 
   onMount(() => {
     // 未登录（匿名关闭）不拉任务面——守卫卡呈现，避免 401 噪音。
@@ -87,14 +102,123 @@
     tasks.frames = [];
     tasks.results = [];
   }
+
+  /** 移动抽屉内选任务：选中即收抽屉。 */
+  function pickTask(taskId: string): void {
+    void selectTask(taskId);
+    listOpen = false;
+  }
 </script>
+
+{#snippet taskListColumn()}
+  <div class="flex h-full min-h-0 flex-col bg-card/60">
+    <div class="shrink-0 border-b border-border px-3 py-2.5">
+      <span class="text-xs font-medium text-muted-foreground">任务列表</span>
+    </div>
+    <div class="min-h-0 flex-1 overflow-y-auto p-2">
+      {#each tasks.list as task (task.id)}
+        <button
+          type="button"
+          class="mb-1 w-full rounded-lg px-2.5 py-2 text-left transition-colors {tasks.selectedId ===
+          task.id
+            ? 'bg-accent-soft'
+            : 'hover:bg-muted/60'}"
+          onclick={() => (desktop ? void selectTask(task.id) : pickTask(task.id))}
+        >
+          <span class="flex items-center gap-2">
+            <span class="min-w-0 flex-1 truncate text-xs font-medium">{task.title}</span>
+            {#if task.status === "running" || task.status === "queued"}
+              <Badge class="shrink-0 text-[9px]">进行中</Badge>
+            {:else if task.status === "failed"}
+              <Badge variant="destructive" class="shrink-0 text-[9px]">失败</Badge>
+            {/if}
+          </span>
+          <span class="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+            <span class="truncate">{task.videoName}</span>
+            <span class="shrink-0">{timeLabel(task.createdAt)}</span>
+          </span>
+        </button>
+      {/each}
+      {#if tasks.list.length === 0 && !tasks.loading}
+        <p class="p-4 text-center text-xs text-muted-foreground">
+          还没有任务<br />创建第一个分析任务
+        </p>
+      {/if}
+    </div>
+  </div>
+{/snippet}
+
+{#snippet chatColumn()}
+  <div class="flex h-full min-h-0 flex-col">
+    {#if selected}
+      <div class="flex items-center gap-3 border-b border-border px-4 py-2">
+        <h2 class="min-w-0 flex-1 truncate text-sm font-medium">{selected.title}</h2>
+        <Badge variant="outline" class="text-[10px]">
+          {statusLabel[selected.status] ?? selected.status}
+        </Badge>
+        <Button size="sm" variant="outline" onclick={openComposer}>新建任务</Button>
+      </div>
+      {#if selected.status === "failed"}
+        <!-- 失败摘要行（走查 R3：库内 error 是兜底真源）。 -->
+        <div
+          class="flex items-start gap-2 border-b border-destructive/40 bg-destructive/10 px-4 py-1.5"
+          role="alert"
+        >
+          <span class="mt-px shrink-0 text-[11px] font-medium text-destructive">失败原因</span>
+          <span class="min-w-0 flex-1 font-mono text-[11px] leading-relaxed break-all text-destructive/90">
+            {selected.error ?? "未知错误（无详情记录——可在对话中重发触发重试）"}
+          </span>
+        </div>
+      {/if}
+      <TranscriptView {items} running={detailRunning} />
+      <div class="border-t border-border p-3">
+        <ComposerCard
+          onsend={(text) => void sendPrompt(text)}
+          sending={tasks.sending}
+          videoName={selected.videoName}
+          models={availableModels}
+          defaultModel={availableDefault}
+          currentModel={selected.modelProvider !== null && selected.modelModel !== null
+            ? { provider: selected.modelProvider, model: selected.modelModel }
+            : null}
+          running={selected.status === "running" || selected.status === "queued"}
+          onsetmodel={(provider, model) => void setModel(provider, model)}
+        />
+      </div>
+    {:else}
+      <div class="min-h-0 flex-1 overflow-y-auto">
+        <TaskComposer />
+      </div>
+    {/if}
+  </div>
+{/snippet}
 
 <div class="flex h-screen flex-col bg-paper">
   <!-- 顶栏 -->
-  <header class="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-card px-4">
+  <header class="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-card px-3 md:px-4">
+    {#if !desktop}
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        aria-label="打开任务列表"
+        onclick={() => (listOpen = true)}
+      >
+        <IconListTodo class="size-4" aria-hidden="true" />
+      </Button>
+    {/if}
     <span class="text-sm font-semibold tracking-wide">朱墨</span>
-    <span class="text-[11px] text-muted-foreground">书法视频 · agent 分析工作台</span>
+    <span class="hidden text-[11px] text-muted-foreground md:inline">书法视频 · agent 分析工作台</span>
     <span class="flex-1"></span>
+    {#if !desktop && selected}
+      <Button
+        size="sm"
+        variant="outline"
+        onclick={() => (detailOpen = true)}
+      >
+        <IconPanelRight data-icon="inline-start" />
+        详情
+      </Button>
+    {/if}
     {#if auth.session}
       <span class="text-[11px] text-muted-foreground">
         {auth.session.role === "anonymous" ? "匿名用户" : auth.session.username}
@@ -123,95 +247,52 @@
         </Button>
       </div>
     </div>
-  {:else}
-    <div class="flex min-h-0 flex-1">
-      <!-- 左列：任务列表（纯导航） -->
-      <aside class="flex w-72 shrink-0 flex-col border-r border-border bg-card/60">
-      <div class="border-b border-border px-3 py-2.5">
-        <span class="text-xs font-medium text-muted-foreground">任务列表</span>
-      </div>
-      <div class="min-h-0 flex-1 overflow-y-auto p-2">
-        {#each tasks.list as task (task.id)}
-          <button
-            type="button"
-            class="mb-1 w-full rounded-lg px-2.5 py-2 text-left transition-colors {tasks.selectedId ===
-            task.id
-              ? 'bg-accent-soft'
-              : 'hover:bg-muted/60'}"
-            onclick={() => void selectTask(task.id)}
-          >
-            <span class="flex items-center gap-2">
-              <span class="min-w-0 flex-1 truncate text-xs font-medium">{task.title}</span>
-              {#if task.status === "running" || task.status === "queued"}
-                <Badge class="shrink-0 text-[9px]">进行中</Badge>
-              {:else if task.status === "failed"}
-                <Badge variant="destructive" class="shrink-0 text-[9px]">失败</Badge>
-              {/if}
-            </span>
-            <span class="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
-              <span class="truncate">{task.videoName}</span>
-              <span class="shrink-0">{timeLabel(task.createdAt)}</span>
-            </span>
-          </button>
-        {/each}
-        {#if tasks.list.length === 0 && !tasks.loading}
-          <p class="p-4 text-center text-xs text-muted-foreground">
-            还没有任务<br />在右侧创建第一个分析任务
-          </p>
-        {/if}
-      </div>
-    </aside>
-
-    <!-- 右列：详情 = 对话（左） + 任务详情标签页（右；Owner 2026-09-25 布局升级） -->
-    <section class="flex min-w-0 flex-1">
+  {:else if desktop}
+    <!-- 桌面：三栏可拖拽（任务列表 | 对话 | 任务详情） -->
+    <PaneGroup direction="horizontal" autoSaveId="zhumo-home-panes" class="min-h-0 flex-1">
+      <Pane defaultSize={18} minSize={10} class="min-w-44">
+        {@render taskListColumn()}
+      </Pane>
+      <Handle />
+      <Pane minSize={26}>
+        {@render chatColumn()}
+      </Pane>
       {#if selected}
-      <div class="flex min-w-0 flex-1 flex-col">
-        <div class="flex items-center gap-3 border-b border-border px-4 py-2">
-          <h2 class="min-w-0 flex-1 truncate text-sm font-medium">{selected.title}</h2>
-          <Badge variant="outline" class="text-[10px]">
-            {statusLabel[selected.status] ?? selected.status}
-          </Badge>
-          <Button size="sm" variant="outline" onclick={openComposer}>新建任务</Button>
+        <Handle />
+        <Pane defaultSize={32} minSize={18} class="min-w-72">
+          <TaskDetailPanel task={selected} results={tasks.results} running={detailRunning} />
+        </Pane>
+      {/if}
+    </PaneGroup>
+  {:else}
+    <!-- 移动：对话全宽；列表/详情抽屉收纳 -->
+    <main class="min-h-0 flex-1">
+      {@render chatColumn()}
+    </main>
+
+    <Sheet.Root bind:open={listOpen}>
+      <Sheet.Content side="left" class="w-80 p-0">
+        <Sheet.Header class="border-b px-3 py-2.5">
+          <Sheet.Title class="text-xs font-medium text-muted-foreground">任务列表</Sheet.Title>
+        </Sheet.Header>
+        <div class="h-[calc(100%-3rem)]">
+          {@render taskListColumn()}
         </div>
-        {#if selected.status === "failed"}
-          <!-- 失败摘要行（走查 R3：任务列表点开即见原因——历史任务的帧里可能
-               没有错误详情，库内 error 是兜底真源）。 -->
-          <div
-            class="flex items-start gap-2 border-b border-destructive/40 bg-destructive/10 px-4 py-1.5"
-            role="alert"
-          >
-            <span class="mt-px shrink-0 text-[11px] font-medium text-destructive">失败原因</span>
-            <span class="min-w-0 flex-1 font-mono text-[11px] leading-relaxed break-all text-destructive/90">
-              {selected.error ?? "未知错误（无详情记录——可在对话中重发触发重试）"}
-            </span>
+      </Sheet.Content>
+    </Sheet.Root>
+
+    <Sheet.Root bind:open={detailOpen}>
+      <Sheet.Content side="right" class="w-[92%] max-w-md p-0">
+        <Sheet.Header class="sr-only">
+          <Sheet.Title>任务详情</Sheet.Title>
+          <Sheet.Description>素材视频、元数据与导出结果</Sheet.Description>
+        </Sheet.Header>
+        {#if selected}
+          <div class="h-full">
+            <TaskDetailPanel task={selected} results={tasks.results} running={detailRunning} />
           </div>
         {/if}
-        <TranscriptView {items} running={detailRunning} />
-        <div class="border-t border-border p-3">
-          <ComposerCard
-            onsend={(text) => void sendPrompt(text)}
-            sending={tasks.sending}
-            videoName={selected.videoName}
-            models={availableModels}
-            defaultModel={availableDefault}
-            currentModel={selected.modelProvider !== null && selected.modelModel !== null
-              ? { provider: selected.modelProvider, model: selected.modelModel }
-              : null}
-            running={selected.status === "running" || selected.status === "queued"}
-            onsetmodel={(provider, model) => void setModel(provider, model)}
-          />
-        </div>
-      </div>
-      <!-- 任务详情（标签式：详情 + 每个导出结果一页；素材视频预览播放也在此） -->
-      <div class="hidden w-[380px] shrink-0 border-l border-border md:block">
-        <TaskDetailPanel task={selected} results={tasks.results} running={detailRunning} />
-      </div>
-      {:else}
-        <div class="min-h-0 flex-1 overflow-y-auto">
-          <TaskComposer />
-        </div>
-      {/if}
-      </section>
-    </div>
+      </Sheet.Content>
+    </Sheet.Root>
   {/if}
 </div>

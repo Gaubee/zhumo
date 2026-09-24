@@ -33,6 +33,7 @@
     "@orpc/client": "^1.15.3",
     "@orpc/contract": "^1.15.3",
     "markstream-svelte": "^2.0.13",
-    "minisearch": "^7.2.0"
+    "minisearch": "^7.2.0",
+    "paneforge": "^1.0.2"
   }
 }
