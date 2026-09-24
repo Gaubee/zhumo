@@ -10,11 +10,19 @@
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-/** 交付物定位：skills/shufa/SKILL.md（W6 交付物；已就位，只读不写）。 */
-export function defaultSkillDocPath(daemonRoot: string): string {
-  // node:path 拼接（Windows 反斜杠语义下 `/` 手拼虽多数 API 可容忍，仍统一走 path）。
-  return path.join(daemonRoot, '..', 'skills', 'shufa', 'SKILL.md');
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * 交付物定位：skills/shufa/SKILL.md（W6 交付物；已就位，只读不写）。
+ * 锚定修正（2026-09-25 存量 bug）：以模块位置上溯（kernel → src → daemon →
+ * shufa-server/skills）——旧实现以 envFile 所在目录为锚，SHUFA_ENV 指向
+ * shufa-server/.env 的部署（mini 实况）解析到 <repo>/skills 悬空路径，
+ * persona 技能注入长期降级为简短兜底。模块锚定不受 cwd/envFile 影响。
+ */
+export function defaultSkillDocPath(): string {
+  return path.resolve(MODULE_DIR, '..', '..', '..', 'skills', 'shufa', 'SKILL.md');
 }
 
 /** 系统段（persona 行 config.text）。 */

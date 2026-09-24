@@ -7,14 +7,18 @@
  *   [2] agent 级 restrict deny 名单计算（setup 时应用，导出供单测）。
  */
 
-/** dsh-base 里注册模型可见通用工具的行（cordis.patch.yml disable 整行）。 */
+/**
+ * dsh-base 里注册模型可见通用工具的行（cordis.patch.yml disable 整行）。
+ * skill-filesystem（2026-09-25 二轮撤出禁用）：产品技能进内核注册表（$ 面板
+ * 数据源 + skill-invocation 注入）；模型侧仍经 persona 常驻注入，tool-skill
+ * （模型自取技能工具）保持禁用——技能消费走 host 注入，不给模型自由加载面。
+ */
 export const KERNEL_DISABLED_TOOL_ROWS: readonly string[] = [
   'tool-pwsh',
   'tool-fs',
   'tool-fs-search',
   'tool-jobs',
   'tool-web',
-  'skill-filesystem',
   'tool-skill',
 ];
 
