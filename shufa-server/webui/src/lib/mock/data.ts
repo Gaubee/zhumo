@@ -64,7 +64,6 @@ export const mockDb = {
           { id: "GLM-5.3", contextWindow: 1000000, inputTypes: ["text", "image"], efforts: ["low", "high", "max"] },
           { id: "GLM-5.3-Flash", contextWindow: 1000000, inputTypes: ["text", "image"], efforts: ["low", "high", "max"] },
         ],
-        source: "zcode",
       },
       {
         provider: "deepseek",
@@ -75,7 +74,6 @@ export const mockDb = {
         models: [
           { id: "deepseek-chat", contextWindow: 128000, inputTypes: ["text"], efforts: ["disabled", "enabled"] },
         ],
-        source: "zcode",
       },
       {
         provider: "moonshot-kimi",
@@ -86,7 +84,6 @@ export const mockDb = {
         models: [
           { id: "kimi-k2-thinking", contextWindow: 256000, inputTypes: ["text"], efforts: ["disabled", "enabled"] },
         ],
-        source: "zcode",
       },
     ],
     fetched_at: null,

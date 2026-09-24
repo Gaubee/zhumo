@@ -1,7 +1,7 @@
 /**
  * Models 预设目录测试：zcode 策展主体（ZCode Registry 静态提取，2026-09-25 对齐
  * 裁决：pi-ai 内置长尾退出）、models.dev 刷新映射与 settings 缓存、catalog 合并
- * 读面、RPC 权限与失败语义。
+ * 读面、RPC 权限与失败语义。source 不进输出面（同日裁决），无逐条来源断言。
  */
 import {
   MODELS_DEV_API_URL,
@@ -66,9 +66,8 @@ describe('catalog 主体：zcode 预设（ZCode Registry 静态提取）', () =>
       const catalog = modelCatalog(s.db);
       expect(catalog.fetched_at).toBeNull();
       expect(catalog.presets).toEqual([...zcodePresets]);
-      expect(catalog.presets.every((p) => p.source === 'zcode')).toBe(true);
-      // pi-ai 内置长尾退出目录的回归锚（曾以 source='builtin' 混入一百余家）。
-      expect(catalog.presets.some((p) => (p as { source?: string }).source === 'builtin')).toBe(false);
+      // pi-ai 内置长尾退出目录的回归锚（曾混入一百余家，目录膨胀到 120+）。
+      expect(catalog.presets.length).toBe(20);
     } finally {
       s.dispose();
     }
@@ -81,7 +80,6 @@ describe('catalog 主体：zcode 预设（ZCode Registry 静态提取）', () =>
     for (const preset of zcodePresets) {
       expect(preset.baseURL).toMatch(/^https:\/\//);
       expect(preset.models.length).toBeGreaterThan(0);
-      expect(preset.source).toBe('zcode');
     }
   });
 
@@ -131,9 +129,7 @@ describe('models.dev 刷新与缓存（广度补充，手动触发）', () => {
       // catalog 合并：zcode 主体在前 + models.dev 追加；fetched_at 非空。
       const catalog = modelCatalog(s.db);
       expect(catalog.fetched_at).toBe(getSetting(s.db, SETTING_MODELS_DEV_FETCHED_AT));
-      const sources = new Set(catalog.presets.map((p) => p.source));
-      expect(sources.has('zcode')).toBe(true);
-      expect(sources.has('models.dev')).toBe(true);
+      expect(catalog.presets.length).toBe(zcodePresets.length + 2);
       const zhipu = catalog.presets.find((p) => p.provider === 'zhipuai');
       expect(zhipu?.baseURL).toBe('https://open.bigmodel.cn/api/paas/v4');
       expect(zhipu?.name).toBe('Zhipu AI');
@@ -164,7 +160,6 @@ describe('models.dev 刷新与缓存（广度补充，手动触发）', () => {
         (async () => okResponse(modelsDevPayload())) as unknown as typeof fetch,
       );
       expect(direct.map((p) => p.provider).sort()).toEqual(['many', 'zhipuai']);
-      expect(direct.every((p) => p.source === 'models.dev')).toBe(true);
 
       // HTTP 非 200 → 中文报错。
       await expect(
@@ -230,7 +225,7 @@ describe('RPC 面：admin.models.catalog / catalogRefresh', () => {
       const catalog = await admin.admin.models.catalog();
       expect(catalog.fetched_at).toBeNull();
       expect(catalog.presets.length).toBe(zcodePresets.length);
-      expect(catalog.presets.some((p) => p.provider === 'zai-api' && p.source === 'zcode')).toBe(true);
+      expect(catalog.presets.some((p) => p.provider === 'zai-api')).toBe(true);
 
       // 刷新走 context 注入的 fetchImpl（RpcContext 测试注入口）。
       const refreshAdmin = clientFor(
@@ -241,8 +236,8 @@ describe('RPC 面：admin.models.catalog / catalogRefresh', () => {
       );
       const refreshed = await refreshAdmin.admin.models.catalogRefresh();
       expect(refreshed.fetched_at).toBeTruthy();
-      expect(refreshed.presets.some((p) => p.provider === 'zhipuai' && p.source === 'models.dev')).toBe(true);
-      expect(refreshed.presets.some((p) => p.source === 'zcode')).toBe(true);
+      expect(refreshed.presets.some((p) => p.provider === 'zhipuai')).toBe(true);
+      expect(refreshed.presets.some((p) => p.provider === 'zai-api')).toBe(true);
     } finally {
       s.dispose();
     }

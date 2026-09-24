@@ -1,6 +1,8 @@
 /**
  * Models 预设目录（2026-09-25 Owner 裁决：目录主体对齐 ZCode Registry）：
  * catalog = zcode 静态策展（20 模板/244 模型，恒在）+ models.dev 手动刷新缓存（追加）。
+ * source 不进输出面：zcode 条目随生成文件整体换新、models.dev 条目随缓存整体
+ * 换新，均为管道替换单位标记而非逐条展示数据（同日裁决）。
  * pi-ai 内置长尾已整体退出目录（原 builtinModelPresets 撤除）——范围广但非策展，
  * 自定义端点仍可手填任意 provider。
  * models.dev 刷新：GET api.json → presets（baseURL 取 provider.api 字段）→
@@ -91,7 +93,6 @@ export async function fetchModelsDevPresets(
       baseURL,
       iconUrl: modelsDevLogo(providerId),
       models,
-      source: 'models.dev',
     });
   }
   if (presets.length === 0) throw new Error('models.dev 响应中没有可用的 provider 预设');

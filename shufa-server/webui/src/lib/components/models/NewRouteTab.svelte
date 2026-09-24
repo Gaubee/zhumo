@@ -220,7 +220,7 @@
       <div class="space-y-2">
         <div class="space-y-1">
           <span class="text-[10px] font-medium text-muted-foreground">
-            目录（{presets.length} 个 provider，zcode 策展{presets.some((p) => p.source === "models.dev") ? " + models.dev" : ""}）
+            目录（{presets.length} 个 provider）
           </span>
           <div class="grid grid-cols-1 gap-1.5 min-[520px]:grid-cols-2">
             {#each filteredPresets as preset (preset.provider + preset.name)}
@@ -255,14 +255,6 @@
                   </span>
                 </span>
                 <span class="mr-0.5 flex shrink-0 items-center gap-1">
-                  {#if preset.source === "zcode"}
-                    <span
-                      class="rounded bg-primary/10 px-1 text-[9px] font-medium text-primary"
-                      title="ZCode Registry 策展提取（coding plan 端点 + reasoning 档位）"
-                    >
-                      ZCode
-                    </span>
-                  {/if}
                   {#if copies > 0}
                     <span
                       class="rounded bg-primary/10 px-1 text-[9px] text-primary"

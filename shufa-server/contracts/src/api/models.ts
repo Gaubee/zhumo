@@ -117,9 +117,10 @@ export type ModelsAvailableOutput = z.infer<typeof ModelsAvailableOutputSchema>;
 
 /**
  * 预设目录条目（zcode 轮，2026-09-25 Owner 裁决：目录主体对齐 ZCode Registry，
- * pi-ai 内置长尾退出）：模型带 contextWindow/inputTypes/efforts（ZCode
- * reasoningLevel 档位转录）；source = zcode（策展主体，恒在）| models.dev
- * （广度补充，手动刷新后追加）。
+ * pi-ai 内置长尾退出；source 不进输出面——它只是后端数据管道的替换单位标记：
+ * zcode = 生成文件整体随 scripts/extract-zcode-presets.mjs 重跑全量换新，
+ * models.dev = settings 缓存整体随刷新换新，均无需逐条标识）。
+ * 模型带 contextWindow/inputTypes/efforts（ZCode reasoningLevel 档位转录）。
  */
 export const ModelPresetModelSchema = z.object({
   id: z.string(),
@@ -135,7 +136,6 @@ export const ModelPresetSchema = z.object({
   api: z.string().optional(),
   iconUrl: z.string().optional(),
   models: z.array(ModelPresetModelSchema),
-  source: z.enum(['zcode', 'models.dev']),
 });
 export type ModelPreset = z.infer<typeof ModelPresetSchema>;
 

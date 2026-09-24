@@ -6,6 +6,8 @@
  *
  * 提取范围（有意收窄，只转录本项目契约用得上的叶子）：
  *   provider = templateId（作路由 provider 标识，天然区分 zai-api/zai-standard-api）
+ *   不产 source 字段——它是后端管道标记而非展示数据：本脚本重跑 = 生成文件
+ *   （即全部 zcode 条目）整体换新，无需逐条标识（Owner 裁决 2026-09-25）
  *   name     = templateNameMap["zh-CN"] ?? en-US
  *   baseURL  = api.baseUrl；api = 协议名映射（openai-chat-completions → 本项目 openai-completions）
  *   iconUrl  = models.dev logo（templateId → slug 硬编码对照表，缺失则字母头像回退）
@@ -184,7 +186,6 @@ function extract(release) {
         ? { iconUrl: `https://models.dev/logos/${LOGO_SLUGS[templateId]}.svg` }
         : {}),
       models: [],
-      source: 'zcode',
     };
 
     // 模型清单：builtinModelIds 保序在前，templateModelRules 的增量补后。

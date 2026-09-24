@@ -57,8 +57,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "enabled"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "zai-standard-api",
@@ -341,8 +340,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "enabled"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "bigmodel-api",
@@ -389,8 +387,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "enabled"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "bigmodel-standard-api",
@@ -673,8 +670,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "enabled"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "moonshot-kimi",
@@ -756,8 +752,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "max"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "minimax",
@@ -855,8 +850,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "enabled"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "deepseek",
@@ -892,8 +886,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "max"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "qwen-alibaba-model-studio-cn",
@@ -1056,8 +1049,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "enabled"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "qwen-alibaba-model-studio-intl",
@@ -1237,8 +1229,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "enabled"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "xiaomi-mimo",
@@ -1270,8 +1261,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "enabled"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "openai",
@@ -1431,8 +1421,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "xhigh"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "anthropic",
@@ -1513,8 +1502,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "enabled"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "xai",
@@ -1561,8 +1549,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "enabled"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "openrouter",
@@ -2312,8 +2299,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "enabled"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "opencode-go-chat",
@@ -2494,8 +2480,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "high"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "opencode-go-messages",
@@ -2597,8 +2582,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "enabled"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "opencode-go-responses",
@@ -2637,8 +2621,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "xhigh"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "opencode-zen-responses",
@@ -2840,8 +2823,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "enabled"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "opencode-zen-messages",
@@ -3035,8 +3017,7 @@ export const zcodePresets: readonly ModelPreset[] = [
           "enabled"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   },
   {
     "provider": "opencode-zen-chat",
@@ -3208,7 +3189,6 @@ export const zcodePresets: readonly ModelPreset[] = [
           "enabled"
         ]
       }
-    ],
-    "source": "zcode"
+    ]
   }
 ];

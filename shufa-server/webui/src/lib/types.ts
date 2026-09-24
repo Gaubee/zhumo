@@ -158,8 +158,9 @@ export interface AvailableModel {
 // 【本地镜像】契约 admin.models.catalog 出参由 daemon 代理并行落地中，先行镜像并注明。
 
 /**
- * 预设路由条目（2026-09-25 对齐 ZCode Registry）：source=zcode 策展主体（coding
- * plan 双端点+档位）| models.dev 手动刷新的广度补充。pi-ai 内置长尾已退出目录。
+ * 预设路由条目（2026-09-25 对齐 ZCode Registry）：zcode 策展主体（coding plan
+ * 双端点+档位）+ models.dev 手动刷新的广度补充；pi-ai 内置长尾已退出目录。
+ * source 不进前端——它只是后端管道的替换单位标记（生成文件/缓存整体换新）。
  */
 export interface ModelsCatalogPreset {
   provider: string;
@@ -174,7 +175,6 @@ export interface ModelsCatalogPreset {
     inputTypes?: ModelInputType[];
     efforts?: string[];
   }>;
-  source: "zcode" | "models.dev";
 }
 
 /** admin.models.catalog / catalogRefresh 出参；fetched_at=null 表示从未拉取过 models.dev。 */
