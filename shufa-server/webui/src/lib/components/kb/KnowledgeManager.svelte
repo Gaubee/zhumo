@@ -25,9 +25,10 @@
   let selected = $state<string | null>(null);
   let loadError = $state<string | null>(null);
   let busy = $state(false);
-  /** 编辑中的条目草稿：group/key → value。仅未手动修改过的草稿会被轮询回填覆盖。 */
+  /** 编辑草稿：group/key → 用户改过的值。未动过的条目不进表——渲染只读
+   * （Svelte 5 禁止渲染期改 $state，懒初始化写法会让条目块整个渲染失败），
+   * 轮询回填也因此天然不覆盖未编辑内容。 */
   let drafts = $state<Record<string, string>>({});
-  let draftTouched = $state<Record<string, boolean>>({});
 
   // ---- 分组操作 ----
   let newGroupName = $state("");
@@ -72,13 +73,13 @@
     }
   }
 
-  function draftOf(group: string, key: string, fallback: string): string {
-    const id = `${group}/${key}`;
-    if (drafts[id] === undefined) {
-      drafts[id] = fallback;
-      draftTouched[id] = false;
-    }
-    return drafts[id]!;
+  /** 渲染期只读：未编辑 → 服务端值；已编辑 → 草稿值。 */
+  function draftValue(id: string, original: string): string {
+    return drafts[id] ?? original;
+  }
+
+  function draftDirty(id: string, original: string): boolean {
+    return drafts[id] !== undefined && drafts[id] !== original;
   }
 
   async function run(action: () => Promise<KbGroupView[]>): Promise<void> {
@@ -133,14 +134,11 @@
   async function saveEntry(key: string, newKey?: string): Promise<void> {
     if (current === null) return;
     const id = `${current.name}/${key}`;
-    await run(() =>
-      api.saveKbEntry({ group: current.name, key, value: drafts[id] ?? "", newKey }),
-    );
-    if (newKey) {
-      drafts[`${current.name}/${newKey}`] = drafts[id] ?? "";
-      delete drafts[id];
-    }
-    draftTouched[id] = false;
+    const value = drafts[id];
+    if (value === undefined) return;
+    await run(() => api.saveKbEntry({ group: current.name, key, value, newKey }));
+    delete drafts[id];
+    if (newKey !== undefined) delete drafts[`${current.name}/${newKey}`];
   }
 
   async function removeEntry(): Promise<void> {
@@ -148,7 +146,6 @@
     if (current === null || target === null) return;
     await run(() => api.deleteKbEntry(current.name, target));
     delete drafts[`${current.name}/${target}`];
-    delete draftTouched[`${current.name}/${target}`];
     deleteEntryTarget = null;
   }
 
@@ -318,7 +315,7 @@
                   }}
                 />
                 <span class="flex items-center gap-1">
-                  <Button size="xs" disabled={busy || !draftTouched[id]} onclick={() => void saveEntry(entry.key)}>保存</Button>
+                  <Button size="xs" disabled={busy || !draftDirty(id, entry.value)} onclick={() => void saveEntry(entry.key)}>保存</Button>
                   <Button size="xs" variant="ghost" class="text-destructive" disabled={busy} onclick={() => (deleteEntryTarget = entry.key)}>
                     删除
                   </Button>
@@ -327,10 +324,9 @@
               <textarea
                 rows="5"
                 class="w-full resize-y rounded-md border bg-background px-2 py-1.5 text-xs leading-relaxed"
-                value={draftOf(current.name, entry.key, entry.value)}
+                value={draftValue(id, entry.value)}
                 oninput={(e) => {
                   drafts[id] = e.currentTarget.value;
-                  draftTouched[id] = e.currentTarget.value !== entry.value;
                 }}
                 aria-label="条目内容"
               ></textarea>
