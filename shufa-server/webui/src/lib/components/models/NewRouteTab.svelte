@@ -220,7 +220,7 @@
       <div class="space-y-2">
         <div class="space-y-1">
           <span class="text-[10px] font-medium text-muted-foreground">
-            目录（{presets.length} 个 provider，含 zcode + 内置 + models.dev）
+            目录（{presets.length} 个 provider，zcode 策展{presets.some((p) => p.source === "models.dev") ? " + models.dev" : ""}）
           </span>
           <div class="grid grid-cols-1 gap-1.5 min-[520px]:grid-cols-2">
             {#each filteredPresets as preset (preset.provider + preset.name)}

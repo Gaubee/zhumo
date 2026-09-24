@@ -1,18 +1,12 @@
 /**
- * Models 预设目录（走查 BUG4，2026-09-23；skill-creator-v2 开箱预设语义）：
- * builtin 预设从 @earendil-works/pi-ai 包内嵌 provider 数据（dist/providers/data
- * 经 `providers/all` 公共子路径导出）生成；models.dev 在线刷新映射后连同 fetched_at
- * 缓存进 settings 表；catalog = zcode 静态 + builtin 恒在 + 缓存追加。
- * 正交意图：
- *   [1] builtin：只收有 baseUrl 的 provider，每家取前若干代表型号（全量太大）。
- *   [2] models.dev 刷新：GET api.json → presets（baseURL 取 provider.api 字段）→
- *       settings 缓存（models_dev_cache / models_dev_fetched_at，内部键不进 API 白名单）。
- *   [3] catalog 读面：缓存过期与否都返回 zcode+builtin；缓存存在即追加。
- *   [4] zcode（2026-09-22 调查落地）：ZCode Registry 模板静态提取（20 模板/244 模型，
- *       含 coding plan 双端点与 reasoning 档位），策展质量优先故排最前；重跑
- *       scripts/extract-zcode-presets.mjs 随上游 revision 升级。
+ * Models 预设目录（2026-09-25 Owner 裁决：目录主体对齐 ZCode Registry）：
+ * catalog = zcode 静态策展（20 模板/244 模型，恒在）+ models.dev 手动刷新缓存（追加）。
+ * pi-ai 内置长尾已整体退出目录（原 builtinModelPresets 撤除）——范围广但非策展，
+ * 自定义端点仍可手填任意 provider。
+ * models.dev 刷新：GET api.json → presets（baseURL 取 provider.api 字段）→
+ * settings 缓存（models_dev_cache / models_dev_fetched_at，内部键不进 API 白名单）。
+ * zcode 数据随上游 revision 升级：重跑 scripts/extract-zcode-presets.mjs。
  */
-import { builtinProviders, getBuiltinModels } from '@earendil-works/pi-ai/providers/all';
 import type { ModelCatalogOutput, ModelPreset } from '@zhumo/contracts';
 import type { SqliteDb } from './db/database.js';
 import { getSetting, nowIso, putSetting } from './db/store.js';
@@ -24,40 +18,6 @@ export const SETTING_MODELS_DEV_CACHE = 'models_dev_cache';
 export const SETTING_MODELS_DEV_FETCHED_AT = 'models_dev_fetched_at';
 /** 每家预设收录的代表型号上限。 */
 export const PRESET_MODEL_LIMIT = 12;
-
-/**
- * builtin 预设：pi-ai 内嵌 provider 目录（有 baseUrl 的），每家取前
- * PRESET_MODEL_LIMIT 个代表型号；api 取首个型号的协议类型（openai-completions 等）。
- * Z.AI（zai）、智谱 bigmodel.cn 端点（zai-coding-cn）、DeepSeek、OpenAI、
- * Anthropic、OpenRouter 均在内。
- */
-export function builtinModelPresets(): ModelPreset[] {
-  // getBuiltinModels 的泛型收窄到字面量联合；此处按运行时 provider id 动态取。
-  const modelsOf = getBuiltinModels as unknown as (
-    provider: string,
-  ) => Array<{ id: string; name?: string; api?: string; input?: string[]; contextWindow?: number }>;
-  const presets: ModelPreset[] = [];
-  for (const provider of builtinProviders()) {
-    if (!provider.baseUrl) continue; // 过滤：只收有 baseUrl 的 provider
-    const models = modelsOf(provider.id);
-    if (models.length === 0) continue;
-    presets.push({
-      provider: provider.id,
-      name: provider.name,
-      baseURL: provider.baseUrl,
-      api: models[0]?.api,
-      iconUrl: modelsDevLogo(provider.id),
-      models: models.slice(0, PRESET_MODEL_LIMIT).map((m) => ({
-        id: m.id,
-        name: m.name,
-        ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
-        inputTypes: m.input?.includes('image') ? ['text', 'image'] : ['text'],
-      })),
-      source: 'builtin',
-    });
-  }
-  return presets;
-}
 
 /** models.dev logo URL（在线图标源；UI 离线缺失时回退字母头像）。 */
 export function modelsDevLogo(providerId: string): string {
@@ -148,7 +108,7 @@ export async function refreshModelsDevCache(
   putSetting(db, SETTING_MODELS_DEV_FETCHED_AT, nowIso());
 }
 
-/** 目录读面：zcode+builtin 恒在（zcode 策展质量优先排前）；settings 缓存有则追加；fetched_at 为缓存时间或 null。 */
+/** 目录读面：zcode 策展恒在（目录主体）；models.dev 缓存有则追加；fetched_at 为缓存时间或 null。 */
 export function modelCatalog(db: SqliteDb): ModelCatalogOutput {
   let cached: ModelPreset[] = [];
   const raw = getSetting(db, SETTING_MODELS_DEV_CACHE);
@@ -157,11 +117,11 @@ export function modelCatalog(db: SqliteDb): ModelCatalogOutput {
       const parsed: unknown = JSON.parse(raw);
       if (Array.isArray(parsed)) cached = parsed as ModelPreset[];
     } catch {
-      // 缓存损坏按未刷新处理（zcode/builtin 不受影响，下次刷新覆盖）。
+      // 缓存损坏按未刷新处理（zcode 主体不受影响，下次刷新覆盖）。
     }
   }
   return {
-    presets: [...zcodePresets, ...builtinModelPresets(), ...cached],
+    presets: [...zcodePresets, ...cached],
     fetched_at: getSetting(db, SETTING_MODELS_DEV_FETCHED_AT),
   };
 }

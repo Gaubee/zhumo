@@ -1,14 +1,13 @@
 /**
- * Models 预设目录测试（走查 BUG4，2026-09-23）：builtin（pi-ai 内嵌 provider 数据）、
- * models.dev 刷新映射与 settings 缓存、catalog 合并读面、RPC 权限与失败语义。
- * zcode 轮（2026-09-22）：ZCode Registry 静态提取预设的数据质量与合并优先级。
+ * Models 预设目录测试：zcode 策展主体（ZCode Registry 静态提取，2026-09-25 对齐
+ * 裁决：pi-ai 内置长尾退出）、models.dev 刷新映射与 settings 缓存、catalog 合并
+ * 读面、RPC 权限与失败语义。
  */
 import {
   MODELS_DEV_API_URL,
   SETTING_MODELS_DEV_CACHE,
   SETTING_MODELS_DEV_FETCHED_AT,
   PRESET_MODEL_LIMIT,
-  builtinModelPresets,
   fetchModelsDevPresets,
   modelCatalog,
   refreshModelsDevCache,
@@ -60,47 +59,21 @@ function okResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
 }
 
-describe('BUG4 builtin 预设（pi-ai 内嵌 provider 数据）', () => {
-  test('必备 provider 在内且形状合法：只含有 baseUrl 的，每家 ≤ 代表型号上限', () => {
-    const presets = builtinModelPresets();
-    const byId = new Map(presets.map((p) => [p.provider, p]));
-    // Z.ai、智谱 bigmodel.cn 端点（zai-coding-cn）、DeepSeek、OpenAI、Anthropic、OpenRouter。
-    for (const required of ['zai', 'zai-coding-cn', 'deepseek', 'openai', 'anthropic', 'openrouter']) {
-      const preset = byId.get(required);
-      expect(preset, `缺少 builtin 预设：${required}`).toBeTruthy();
-      expect(preset?.baseURL, `${required} 缺 baseURL`).toMatch(/^https:\/\//);
-      expect(preset?.source).toBe('builtin');
-      expect(preset?.name).toBeTruthy();
-      expect(preset?.models.length).toBeGreaterThan(0);
-      expect(preset?.models.length).toBeLessThanOrEqual(PRESET_MODEL_LIMIT);
-      for (const model of preset?.models ?? []) {
-        expect(model.id).toBeTruthy();
-        expect(model.name).toBeTruthy();
-      }
-    }
-    // 全体预设同样满足过滤与上限约束。
-    for (const preset of presets) {
-      expect(preset.baseURL).toMatch(/^https:\/\//);
-      expect(preset.models.length).toBeLessThanOrEqual(PRESET_MODEL_LIMIT);
-      expect(preset.models.length).toBeGreaterThan(0);
-    }
-  });
-
-  test('catalog 无缓存：zcode+builtin 恒在（zcode 优先），fetched_at=null', () => {
+describe('catalog 主体：zcode 预设（ZCode Registry 静态提取）', () => {
+  test('无缓存时目录 = zcode 20 模板，无任何旧 builtin 长尾，fetched_at=null', () => {
     const s = createServices();
     try {
       const catalog = modelCatalog(s.db);
       expect(catalog.fetched_at).toBeNull();
-      expect(catalog.presets).toEqual([...zcodePresets, ...builtinModelPresets()]);
-      expect(catalog.presets.slice(0, zcodePresets.length).every((p) => p.source === 'zcode')).toBe(true);
-      expect(catalog.presets.some((p) => p.source === 'builtin')).toBe(true);
+      expect(catalog.presets).toEqual([...zcodePresets]);
+      expect(catalog.presets.every((p) => p.source === 'zcode')).toBe(true);
+      // pi-ai 内置长尾退出目录的回归锚（曾以 source='builtin' 混入一百余家）。
+      expect(catalog.presets.some((p) => (p as { source?: string }).source === 'builtin')).toBe(false);
     } finally {
       s.dispose();
     }
   });
-});
 
-describe('zcode 预设（ZCode Registry 静态提取，2026-09-22）', () => {
   test('20 模板全量在内，协议名全部落在 ROUTE_APIS 语义内', () => {
     expect(zcodePresets.length).toBe(20);
     const apis = new Set(zcodePresets.flatMap((p) => (p.api ? [p.api] : [])));
@@ -136,7 +109,7 @@ describe('zcode 预设（ZCode Registry 静态提取，2026-09-22）', () => {
   });
 });
 
-describe('BUG4 models.dev 刷新与缓存', () => {
+describe('models.dev 刷新与缓存（广度补充，手动触发）', () => {
   test('映射过滤：只收 http api 的 provider；模型截到上限；缓存与 fetched_at 落 settings', async () => {
     const s = createServices();
     try {
@@ -155,12 +128,11 @@ describe('BUG4 models.dev 刷新与缓存', () => {
       }>;
       expect(cached.map((p) => p.provider).sort()).toEqual(['many', 'zhipuai']);
 
-      // catalog 合并：zcode+builtin 在前 + models.dev 追加；fetched_at 非空。
+      // catalog 合并：zcode 主体在前 + models.dev 追加；fetched_at 非空。
       const catalog = modelCatalog(s.db);
       expect(catalog.fetched_at).toBe(getSetting(s.db, SETTING_MODELS_DEV_FETCHED_AT));
       const sources = new Set(catalog.presets.map((p) => p.source));
       expect(sources.has('zcode')).toBe(true);
-      expect(sources.has('builtin')).toBe(true);
       expect(sources.has('models.dev')).toBe(true);
       const zhipu = catalog.presets.find((p) => p.provider === 'zhipuai');
       expect(zhipu?.baseURL).toBe('https://open.bigmodel.cn/api/paas/v4');
@@ -178,11 +150,8 @@ describe('BUG4 models.dev 刷新与缓存', () => {
       const many = catalog.presets.find((p) => p.provider === 'many');
       expect(many?.models.length).toBe(PRESET_MODEL_LIMIT);
       expect(many?.models[0]?.id).toBe('many-1');
-      // zcode+builtin 前缀不受缓存影响。
-      expect(catalog.presets.slice(0, zcodePresets.length + builtinModelPresets().length)).toEqual([
-        ...zcodePresets,
-        ...builtinModelPresets(),
-      ]);
+      // zcode 主体前缀不受缓存影响。
+      expect(catalog.presets.slice(0, zcodePresets.length)).toEqual([...zcodePresets]);
     } finally {
       s.dispose();
     }
@@ -212,14 +181,14 @@ describe('BUG4 models.dev 刷新与缓存', () => {
       // 失败后缓存键不被写入（旧缓存若有则保留——此处为从未刷新）。
       expect(getSetting(s.db, SETTING_MODELS_DEV_CACHE)).toBeNull();
       expect(modelCatalog(s.db).fetched_at).toBeNull();
-      // zcode+builtin 不受影响。
-      expect(modelCatalog(s.db).presets.length).toBe(zcodePresets.length + builtinModelPresets().length);
+      // zcode 主体不受影响。
+      expect(modelCatalog(s.db).presets.length).toBe(zcodePresets.length);
     } finally {
       s.dispose();
     }
   });
 
-  test('缓存损坏按未刷新处理（builtin 不受影响）', () => {
+  test('缓存损坏按未刷新处理（zcode 主体不受影响）', () => {
     const s = createServices();
     try {
       s.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(
@@ -231,7 +200,7 @@ describe('BUG4 models.dev 刷新与缓存', () => {
         '2026-09-23T00:00:00.000Z',
       );
       const catalog = modelCatalog(s.db);
-      expect(catalog.presets).toEqual([...zcodePresets, ...builtinModelPresets()]);
+      expect(catalog.presets).toEqual([...zcodePresets]);
       expect(catalog.fetched_at).toBe('2026-09-23T00:00:00.000Z');
     } finally {
       s.dispose();
@@ -239,8 +208,8 @@ describe('BUG4 models.dev 刷新与缓存', () => {
   });
 });
 
-describe('BUG4 RPC 面：admin.models.catalog / catalogRefresh', () => {
-  test('非 admin 403；admin 读取 builtin；刷新经注入 fetch 合并目录', async () => {
+describe('RPC 面：admin.models.catalog / catalogRefresh', () => {
+  test('非 admin 403；admin 读取 zcode 主体；刷新经注入 fetch 合并目录', async () => {
     const s = createServices();
     try {
       const boot = clientFor(s.context());
@@ -260,8 +229,8 @@ describe('BUG4 RPC 面：admin.models.catalog / catalogRefresh', () => {
 
       const catalog = await admin.admin.models.catalog();
       expect(catalog.fetched_at).toBeNull();
-      expect(catalog.presets.length).toBe(zcodePresets.length + builtinModelPresets().length);
-      expect(catalog.presets.some((p) => p.provider === 'zai')).toBe(true);
+      expect(catalog.presets.length).toBe(zcodePresets.length);
+      expect(catalog.presets.some((p) => p.provider === 'zai-api' && p.source === 'zcode')).toBe(true);
 
       // 刷新走 context 注入的 fetchImpl（RpcContext 测试注入口）。
       const refreshAdmin = clientFor(
@@ -273,13 +242,13 @@ describe('BUG4 RPC 面：admin.models.catalog / catalogRefresh', () => {
       const refreshed = await refreshAdmin.admin.models.catalogRefresh();
       expect(refreshed.fetched_at).toBeTruthy();
       expect(refreshed.presets.some((p) => p.provider === 'zhipuai' && p.source === 'models.dev')).toBe(true);
-      expect(refreshed.presets.some((p) => p.source === 'builtin')).toBe(true);
+      expect(refreshed.presets.some((p) => p.source === 'zcode')).toBe(true);
     } finally {
       s.dispose();
     }
   });
 
-  test('刷新失败 → BAD_REQUEST 中文报错，builtin 与旧缓存保留', async () => {
+  test('刷新失败 → BAD_REQUEST 中文报错，zcode 主体与旧缓存保留', async () => {
     const s = createServices();
     try {
       const boot = clientFor(s.context());
@@ -296,9 +265,9 @@ describe('BUG4 RPC 面：admin.models.catalog / catalogRefresh', () => {
         message: expect.stringContaining('models.dev 预设刷新失败'),
       });
 
-      // builtin 完好；fetched_at 仍为空。
+      // zcode 主体完好；fetched_at 仍为空。
       const catalog = await admin.admin.models.catalog();
-      expect(catalog.presets.length).toBe(zcodePresets.length + builtinModelPresets().length);
+      expect(catalog.presets.length).toBe(zcodePresets.length);
       expect(catalog.fetched_at).toBeNull();
     } finally {
       s.dispose();

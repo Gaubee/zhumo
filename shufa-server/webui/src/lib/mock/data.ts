@@ -51,48 +51,42 @@ export const mockDb = {
   adminSettings: { siteBaseUrl: "http://localhost:8000", allowAnonymous: false } as AdminSettings,
   /** mock 自增用户 id（createUser 用，删除后重建不撞号）。 */
   userIdSeq: 0,
-  /** BUG4 模型预设目录：builtin 常量 + models.dev 拉取缓存（fetched_at=null=未拉取）。 */
+  /** 模型预设目录：zcode 策展主体（抽样）+ models.dev 可刷新（fetched_at=null=未拉取）。 */
   modelsCatalog: {
     presets: [
       {
-        provider: "zai",
-        name: "智谱 GLM",
-        baseURL: "https://api.z.ai/api/paas/v4",
-        api: "openai-completions",
-        models: [{ id: "glm-5.3-flash" }, { id: "glm-5.3" }, { id: "glm-5.3-air" }],
-        source: "builtin",
+        provider: "zai-api",
+        name: "Z.ai Coding Plan",
+        baseURL: "https://api.z.ai/api/anthropic",
+        api: "anthropic-messages",
+        iconUrl: "https://models.dev/logos/zai.svg",
+        models: [
+          { id: "GLM-5.3", contextWindow: 1000000, inputTypes: ["text", "image"], efforts: ["low", "high", "max"] },
+          { id: "GLM-5.3-Flash", contextWindow: 1000000, inputTypes: ["text", "image"], efforts: ["low", "high", "max"] },
+        ],
+        source: "zcode",
       },
       {
         provider: "deepseek",
         name: "DeepSeek",
-        baseURL: "https://api.deepseek.com/v1",
-        api: "openai-completions",
-        models: [{ id: "deepseek-chat" }, { id: "deepseek-reasoner" }],
-        source: "builtin",
-      },
-      {
-        provider: "moonshot",
-        name: "月之暗面 Kimi",
-        baseURL: "https://api.moonshot.cn/v1",
-        api: "openai-completions",
-        models: [{ id: "kimi-k2-0905-preview" }, { id: "kimi-latest" }],
-        source: "builtin",
-      },
-      {
-        provider: "openai",
-        name: "OpenAI",
-        baseURL: "https://api.openai.com/v1",
-        api: "openai-completions",
-        models: [{ id: "gpt-5.3" }, { id: "gpt-5.3-mini" }, { id: "gpt-4.1" }],
-        source: "models.dev",
-      },
-      {
-        provider: "anthropic",
-        name: "Anthropic",
-        baseURL: "https://api.anthropic.com",
+        baseURL: "https://api.deepseek.com/anthropic",
         api: "anthropic-messages",
-        models: [{ id: "claude-sonnet-4-6" }, { id: "claude-opus-4-1" }],
-        source: "models.dev",
+        iconUrl: "https://models.dev/logos/deepseek.svg",
+        models: [
+          { id: "deepseek-chat", contextWindow: 128000, inputTypes: ["text"], efforts: ["disabled", "enabled"] },
+        ],
+        source: "zcode",
+      },
+      {
+        provider: "moonshot-kimi",
+        name: "Moonshot Kimi",
+        baseURL: "https://api.moonshot.cn/anthropic",
+        api: "anthropic-messages",
+        iconUrl: "https://models.dev/logos/moonshotai.svg",
+        models: [
+          { id: "kimi-k2-thinking", contextWindow: 256000, inputTypes: ["text"], efforts: ["disabled", "enabled"] },
+        ],
+        source: "zcode",
       },
     ],
     fetched_at: null,
