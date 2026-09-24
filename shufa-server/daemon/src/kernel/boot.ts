@@ -59,6 +59,8 @@ export interface ShufaKernelOptions {
   modelRoutes: ModelRoutesBundle | null;
   /** skills/shufa/SKILL.md 路径（persona 注入）。 */
   skillDocPath: string;
+  /** 技能根目录（skills/；dsh-skill-filesystem customSkillDirs——内核技能注册表源）。 */
+  skillsDir: string;
 }
 
 /** daemon 根（src/kernel/boot.ts → ../../package.json；tsx 源码态）。 */
@@ -114,7 +116,10 @@ export async function bootShufaKernel(options: ShufaKernelOptions): Promise<Shuf
     'utf8',
   );
 
-  // entry rows：agent-presets roster + workspace + mcp-client（token 经 env 模板，不落盘明文）。
+  // entry rows：agent-presets roster + workspace + skill-filesystem + mcp-client
+  // （token 经 env 模板，不落盘明文）。skill-filesystem（2026-09-25 前台对齐·二轮）：
+  // skills/ 目录进内核技能注册表（ctx.skills——$ 面板数据源；SKILL.md frontmatter
+  // name/description 由 provider 解析，includeDefaultRoots 收窄为 false——只认产品技能）。
   const configPath = path.join(profileDir, 'cordis.yml');
   const mcpRow = options.mcp
     ? [
@@ -138,6 +143,11 @@ export async function bootShufaKernel(options: ShufaKernelOptions): Promise<Shuf
       '    includeShippedRoot: false\n',
       '- id: workspace\n',
       "  name: '@deepseek-ai/dsh-workspace'\n",
+      '- id: skill-filesystem\n',
+      "  name: '@deepseek-ai/dsh-skill-filesystem'\n",
+      '  config:\n',
+      '    includeDefaultRoots: false\n',
+      `    customSkillDirs:\n      - ${options.skillsDir}\n`,
       mcpRow,
     ].join(''),
     'utf8',

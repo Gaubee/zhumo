@@ -702,10 +702,10 @@ const adminKbList = requireAdmin.handler(({ context }) => {
   return { groups: requireKb(context).listAll() };
 });
 
-/** 前台知识库清单（2026-09-25 $ 面板）：登录用户可读分组/条目名（不含内容与
- * 修订）；KB 未装配（未初始化）时返回空表——面板显示空态而非报错。 */
-const kbPublicList = requireActiveUser.handler(({ context }) => {
-  return { groups: context.kb?.listAll() ?? [] };
+/** 前台输入框目录（2026-09-25 二轮）：/ 面板=内核命令注册表、$ 面板=内核技能
+ * 注册表（DSH 官方一致性——非产品硬编码；内核未挂载/探针失败 = 空表空态）。 */
+const composerList = requireActiveUser.handler(async ({ context }) => {
+  return requireTaskService(context).composerCatalog();
 });
 
 const adminKbSaveGroup = requireAdmin
@@ -850,8 +850,8 @@ export const router = {
     followup: tasksFollowup,
   },
 
-  kb: {
-    list: kbPublicList,
+  composer: {
+    list: composerList,
   },
 
   res: {

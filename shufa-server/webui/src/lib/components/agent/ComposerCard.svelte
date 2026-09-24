@@ -7,9 +7,10 @@
     running 禁用（本轮结束后再切，服务端同款拒绝）。
   - ContextMeter：上下文占用环 + 用量面板 + 压缩（oncompact 经 onsend("/compact")
     走 daemon 内核命令分流）。
-  - 触发面板（TriggerMenu 移植）：`/` 命令（/compact 注册表）、`$` 知识库引用
-    （分组/条目，选中注入引用行——agent 经 MCP 工具查阅）、`@` 素材资源引用
-    （用户资源树钻取，选中注入 agent 可读路径行）。
+  - 触发面板（2026-09-25 二轮，DSH 官方一致）：`/` = 内核命令注册表
+    （composer.list，插件系统注册——非硬编码；选中即发送）、`$` = 内核技能
+    注册表（user-invocable；选中留 $name token，daemon 展开为官方
+    skill-invocation 双消息注入）、`@` = 素材资源引用（资源树钻取，注入路径行）。
 -->
 <script lang="ts">
   import IconFile from "@lucide/svelte/icons/file";
@@ -26,12 +27,6 @@
   import type { Attachment, AvailableModel } from "$lib/types";
   import TriggerMenu, { type MenuEntry } from "./TriggerMenu.svelte";
   import ContextMeter from "./ContextMeter.svelte";
-  import { fuzzyMatch } from "./composer-trigger";
-
-  /** 斜杠命令注册表（结构开放：后续命令在此追加即可）。 */
-  const SLASH_COMMANDS: Array<{ command: string; description: string }> = [
-    { command: "/compact", description: "压缩对话历史以释放上下文" },
-  ];
 
   let {
     onsend,
@@ -172,33 +167,34 @@
   let kbMenu = $state<{ handleKeydown: (event: KeyboardEvent) => boolean } | null>(null);
   let resMenu = $state<{ handleKeydown: (event: KeyboardEvent) => boolean } | null>(null);
 
-  /** 知识库条目（首次 `$` 触发时惰性拉取缓存）。 */
-  let kbEntries = $state<MenuEntry[]>([]);
-  let kbLoaded = $state(false);
-  let kbFailed = $state(false);
+  /** 内核目录（命令+技能；首次触发 `/` 或 `$` 时惰性拉取缓存一次）。 */
+  let composerCommands = $state<MenuEntry[]>([]);
+  let skillEntries = $state<MenuEntry[]>([]);
+  let composerLoaded = $state(false);
+  let composerFailed = $state(false);
 
   $effect(() => {
-    if (!text.startsWith("$") || kbLoaded || kbFailed) return;
-    kbLoaded = true;
+    if ((!text.startsWith("/") && !text.startsWith("$")) || composerLoaded || composerFailed) return;
+    composerLoaded = true;
     void api
-      .kbList()
+      .composerList()
       .then((out) => {
-        const entries: MenuEntry[] = [];
-        for (const group of out.groups) {
-          for (const key of group.keys) {
-            entries.push({
-              value: `$${group.name}/${key}`,
-              description: group.note.length > 0 ? group.note : undefined,
-              group: group.name,
-              key: `${group.name}/${key}`,
-            });
-          }
-        }
-        kbEntries = entries;
+        composerCommands = out.commands.map((command) => ({
+          value: `/${command.name}`,
+          description: command.description,
+          group: "命令",
+          key: `command:${command.name}`,
+        }));
+        skillEntries = out.skills.map((skill) => ({
+          value: `$${skill.name}`,
+          description: skill.description,
+          group: "技能",
+          key: `skill:${skill.name}`,
+        }));
       })
       .catch(() => {
         // 拉取失败一次即停（空态提示；下次重新进入组件再试）。
-        kbFailed = true;
+        composerFailed = true;
       });
   });
 
@@ -250,14 +246,17 @@
   }
 
   function onSlashSelect(value: string): void {
-    // 命令选中即执行发送（daemon 内核分流，不进 LLM）。
+    // 命令选中即执行发送（daemon 经内核 commands 分流，不进 LLM）。
     text = "";
     onsend(value);
   }
 
-  function onKbSelect(value: string, entry?: MenuEntry): void {
-    const token = entry?.key ?? value.slice(1);
-    insertReferenceLine(`[知识库 ${token}]（请先用知识库工具查阅该条目再继续）`);
+  function onSkillSelect(value: string): void {
+    // 技能选中留 `$name ` token（官方语义：用户原话随行，daemon 展开注入）。
+    const lines = text.split("\n");
+    lines[0] = `${value} `;
+    text = lines.join("\n");
+    requestCaretEnd();
   }
 
   async function onResSelect(value: string, entry?: MenuEntry): Promise<void> {
@@ -277,10 +276,6 @@
     const filePath = entry.description ?? "";
     insertReferenceLine(`[素材 ${value.slice(1)}]：${filePath}`);
   }
-
-  /** `$` 面板模糊匹配（query 含前缀；entry.value 含前缀——双双剥离后打分）。 */
-  const kbMatcher = (query: string, entry: MenuEntry): boolean =>
-    fuzzyMatch(query.slice(1), entry.value.slice(1), entry.description ?? "") !== null;
 
   /** @ 面板置顶行：非根级显示 `..` 返回上级。 */
   const resPinned = $derived(
@@ -345,26 +340,26 @@
   <!-- 触发面板（锚定卡片上方；键盘留 textarea，见 onkeydown 先占序）。 -->
   <TriggerMenu
     trigger="/"
-    entries={SLASH_COMMANDS.map((c) => ({ value: c.command, description: c.description, group: "命令" }))}
+    entries={composerCommands}
     {text}
     {caretOnFirstLine}
-    menuLabel="斜杠命令"
+    menuLabel="命令"
     dataSlot="slash-menu"
-    emptyMessage="无匹配命令"
+    emptyMessage={composerFailed ? "命令目录不可用" : composerLoaded ? "无匹配命令" : "加载命令…"}
+    sourceLabel="内核命令注册表"
     onSelect={(value) => onSlashSelect(value)}
     bind:this={slashMenu}
   />
   <TriggerMenu
     trigger="$"
-    entries={kbEntries}
+    entries={skillEntries}
     {text}
     {caretOnFirstLine}
-    menuLabel="知识库引用"
-    dataSlot="kb-menu"
-    emptyMessage={kbFailed ? "知识库不可用" : kbLoaded ? "没有匹配的知识库条目" : "加载知识库…"}
-    sourceLabel={kbFailed ? "知识库不可用" : "知识库（选中后 agent 经工具查阅）"}
-    matcher={kbMatcher}
-    onSelect={(value, entry) => onKbSelect(value, entry)}
+    menuLabel="技能"
+    dataSlot="skill-menu"
+    emptyMessage={composerFailed ? "技能目录不可用" : composerLoaded ? "无匹配技能" : "加载技能…"}
+    sourceLabel="内核技能注册表（user-invocable）"
+    onSelect={(value) => onSkillSelect(value)}
     bind:this={kbMenu}
   />
   <TriggerMenu

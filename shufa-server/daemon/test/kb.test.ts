@@ -161,15 +161,6 @@ test('rpc：admin.kb.* CRUD 与权限（user 403 / admin 200）', async () => {
     const alice = await bootstrap.auth.login({ username: 'alice', password: 'alice-pass' });
     const aliceClient = clientFor(s.context({ kb, token: alice.token }));
     await expect(aliceClient.admin.kb.list()).rejects.toThrow();
-    // 2026-09-25 前台清单（$ 面板）：登录用户可读（仅名与键，无内容）；
-    // 未认证拒绝；普通用户 admin 面 403 但前台 kb.list 200。
-    await expect(bootstrap.kb.list()).rejects.toThrow();
-    const publicOut = await aliceClient.kb.list();
-    expect(publicOut.groups.length).toBeGreaterThan(0);
-    expect(publicOut.groups.every((g) => Array.isArray(g.keys) && g.keys.length >= 0)).toBe(true);
-    // KB 未装配（context.kb 缺省）→ 空表（面板空态而非报错）。
-    const noKb = clientFor(s.context({ token: admin.token }));
-    expect((await noKb.kb.list()).groups).toEqual([]);
 
   } finally {
     s.dispose();

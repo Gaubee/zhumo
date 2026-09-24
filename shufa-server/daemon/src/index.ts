@@ -147,6 +147,7 @@ async function main(): Promise<void> {
       mcp: { url: mcpUrl, token: mcpToken },
       modelRoutes,
       skillDocPath: defaultSkillDocPath(path.dirname(config.envFile)),
+      skillsDir: path.dirname(path.dirname(defaultSkillDocPath(path.dirname(config.envFile)))),
     });
     if (mounted.kernel) {
       kernel = mounted.kernel;

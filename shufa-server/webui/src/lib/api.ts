@@ -75,7 +75,7 @@ import type {
   AvailableModel,
   ModelsTestResult,
   Attachment,
-  KbGroupRef,
+  ComposerCatalog,
   KbGroupView,
   KbRevisionDetailView,
   KbRevisionView,
@@ -158,9 +158,9 @@ interface ShufaRpc {
       restore(input: { id: string }): Promise<{ ok: boolean }>;
     };
   };
-  /** 前台知识库清单（$ 触发面板；2026-09-25）。 */
-  kb: {
-    list(): Promise<{ groups: KbGroupRef[] }>;
+  /** 前台输入框目录（2026-09-25 二轮）。 */
+  composer: {
+    list(): Promise<ComposerCatalog>;
   };
   tasks: {
     list(): Promise<{ tasks: TaskItem[] }>;
@@ -236,8 +236,8 @@ export interface ShufaApi {
   uploadAttachment(file: { name: string; dataBase64: string }): Promise<Attachment>;
   /** 聊天中切换任务模型（走查 R6）：更新覆盖并热切会话（idle 态）。 */
   setTaskModel(taskId: string, provider: string, model: string, effort?: string | null): Promise<Task>;
-  /** 前台知识库清单（$ 面板：分组/条目名，不含内容）。 */
-  kbList(): Promise<{ groups: KbGroupRef[] }>;
+  /** 前台输入框目录（/ 命令注册表 + $ 技能注册表；内核未挂载 = 空表）。 */
+  composerList(): Promise<ComposerCatalog>;
   /** 任务的导出结果列表（新→旧；右侧标签页数据源）。 */
   getTaskResults(taskId: string): Promise<TaskResultRefView[]>;
   getResult(publicId: string): Promise<ResultInfo>;
@@ -628,13 +628,19 @@ class MockApi implements ShufaApi {
     return { ...task };
   }
 
-  async kbList(): Promise<{ groups: KbGroupRef[] }> {
+  async composerList(): Promise<ComposerCatalog> {
     return {
-      groups: mockDb.kbGroups.map((g) => ({
-        name: g.name,
-        note: g.note,
-        keys: g.entries.map((entry) => entry.key),
-      })),
+      commands: [
+        { name: "compact", description: "压缩对话历史以释放上下文" },
+        { name: "feedback", description: "提交反馈" },
+      ],
+      skills: [
+        {
+          name: "shufa",
+          description: "书法/作业讲评视频分析管线手册",
+          when_to_use: "分析书法讲评视频时",
+        },
+      ],
     };
   }
 
@@ -1067,8 +1073,8 @@ class RpcApi implements ShufaApi {
     return toTaskView(out.task);
   }
 
-  async kbList(): Promise<{ groups: KbGroupRef[] }> {
-    return rpc().kb.list();
+  async composerList(): Promise<ComposerCatalog> {
+    return rpc().composer.list();
   }
 
   /** 任务的导出结果列表（新→旧）。after_seq 取极大值 = 只取 results 不回放帧。 */

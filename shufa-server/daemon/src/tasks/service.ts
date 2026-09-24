@@ -315,6 +315,25 @@ export class TaskService {
     this.emitStatus(sessionId, row.id, 'failed', reason);
   }
 
+  /** 前台 / 与 $ 面板目录（2026-09-25 二轮：内核命令/技能注册表，DSH 官方一致）。 */
+  async composerCatalog(): Promise<{
+    commands: Array<{ name: string; description: string }>;
+    skills: Array<{ name: string; description: string; when_to_use?: string }>;
+  }> {
+    const [commands, skills] = await Promise.all([
+      this.deps.sessions.listCommands(),
+      this.deps.sessions.listUserSkills(),
+    ]);
+    return {
+      commands: [...commands],
+      skills: skills.map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+        ...(skill.whenToUse !== undefined ? { when_to_use: skill.whenToUse } : {}),
+      })),
+    };
+  }
+
   /**
    * 聊天中切换任务模型（走查 R6）：更新任务级覆盖列 + idle 会话热切
    * （dispose → resume 以新 agentOptions 重建，历史保留）。running 拒绝

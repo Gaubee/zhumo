@@ -28,6 +28,10 @@ function fakeSessions() {
   const emitted: Frame[] = [];
   const service = {
     attach: vi.fn(),
+    listCommands: vi.fn(async () => [{ name: 'compact', description: '压缩对话历史' }]),
+    listUserSkills: vi.fn(async () => [
+      { name: 'shufa', description: '书法讲评分析管线手册', whenToUse: '分析任务' },
+    ]),
     createTaskSession: vi.fn(async (taskId: string, input: { cwd: string; framesFile: string; prompt: string }) => {
       created.push({ taskId, ...input });
       return { sessionId: `task-${created.length}` };
@@ -308,6 +312,16 @@ describe('TaskService 创建链', () => {
     expect(sessions.raw.resumeTaskSession).toHaveBeenCalled();
     // 悬空模型拒绝。
     await expect(service.setModel(user, { taskId: item.id, provider: 'nope', model: 'm' })).rejects.toThrow('不在已配置路由中');
+  });
+
+  it('2026-09-25 二轮：composerCatalog 透传内核命令/技能注册表（whenToUse→when_to_use）', async () => {
+    const catalog = await service.composerCatalog();
+    expect(catalog.commands).toEqual([{ name: 'compact', description: '压缩对话历史' }]);
+    expect(catalog.skills).toEqual([
+      { name: 'shufa', description: '书法讲评分析管线手册', when_to_use: '分析任务' },
+    ]);
+    expect(sessions.raw.listCommands).toHaveBeenCalled();
+    expect(sessions.raw.listUserSkills).toHaveBeenCalled();
   });
 
   it('2026-09-25 effort：无档位目录的自由档可存可清；有目录时档外值拒绝', async () => {

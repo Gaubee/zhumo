@@ -16,6 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Context } from '@deepseek-ai/cordis';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
+import { isUserInvocable, renderSkillContent } from '@deepseek-ai/dsh-skill';
 import { z } from 'zod';
 import type { Frame } from '@zhumo/contracts';
 import type { ShufaKernelHandle } from './boot.js';
@@ -40,6 +41,56 @@ import type { TokenUsageSample } from './firehose-events.js';
 /** delta 合并窗口（ms）。 */
 const DELTA_FLUSH_MS = 120;
 const DEFAULT_RETENTION = 200;
+
+/** 内核命令描述（CommandDescriptor 最小投影：name 不含斜杠）。 */
+export interface KernelCommandInfo {
+  name: string;
+  description: string;
+}
+
+/** 内核技能摘要（SkillSummary 最小投影；仅 user-invocable）。 */
+export interface KernelSkillInfo {
+  name: string;
+  description: string;
+  whenToUse?: string;
+}
+
+/** 内核 ctx.services 侧面（commands/skills；dsh-base bundle 自带，缺省缺席）。 */
+interface KernelCommandServiceLike {
+  list(agent: unknown): readonly { name: string; description: string }[] | undefined;
+  execute(
+    agent: unknown,
+    line: string,
+    attachments: readonly unknown[],
+    signal: AbortSignal,
+  ): Promise<unknown>;
+}
+
+interface KernelSkillServiceLike {
+  list(options?: unknown): Promise<
+    ReadonlyArray<{ name: string; description: string; whenToUse?: string; invocation: unknown }>
+  >;
+  get(name: string, options?: unknown): Promise<
+    | {
+        name: string;
+        description: string;
+        whenToUse?: string;
+        content: string;
+        invocation: unknown;
+        resourceBase?: unknown;
+        provider: string;
+      }
+    | undefined
+  >;
+}
+
+function kernelCommands(ctx: Context): KernelCommandServiceLike | undefined {
+  return (ctx as Context & { commands?: KernelCommandServiceLike }).commands;
+}
+
+function kernelSkills(ctx: Context): KernelSkillServiceLike | undefined {
+  return (ctx as Context & { skills?: KernelSkillServiceLike }).skills;
+}
 
 export interface TaskSessionDeps {
   kernel: () => ShufaKernelHandle | null;
@@ -133,6 +184,40 @@ export function createTaskSessions(deps: TaskSessionDeps) {
   const retention = deps.retention ?? DEFAULT_RETENTION;
   const live = new Map<string, LiveTaskSession>();
   let firehoseBound = false;
+
+  /** `$name` 交付：命中 user-invocable 技能 → 官方双消息注入；否则原样回落。 */
+  async function deliverSkillInvocation(
+    entry: LiveTaskSession,
+    name: string,
+    userWords: string,
+    originalText: string,
+  ): Promise<void> {
+    const sendPlain = (text: string): void => {
+      entry.agent.followup(
+        createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] }) as never,
+      );
+    };
+    try {
+      const kernel = requireKernel();
+      const skills = kernelSkills(kernel.ctx);
+      const definition = skills === undefined ? undefined : await skills.get(name);
+      if (definition === undefined || !isUserInvocable(definition as never)) {
+        sendPlain(originalText);
+        return;
+      }
+      // 官方语义（dsh-skill SkillInvocationSource）：用户原话普通消息在前，
+      // 技能体以 instructions 形、skill-invocation 源注入在后。
+      if (userWords.length > 0) sendPlain(userWords);
+      entry.agent.followup(
+        createUserMessage({
+          source: { kind: 'skill-invocation', name, form: 'instructions' },
+          content: [{ type: 'text', text: renderSkillContent(definition as never) }],
+        }) as never,
+      );
+    } catch {
+      sendPlain(originalText);
+    }
+  }
 
   function requireKernel(): ShufaKernelHandle {
     const kernel = deps.kernel();
@@ -544,11 +629,58 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     return entry;
   }
 
+  /** 命令目录缓存（内核命令注册表静态——插件装载后不变；boot 探针一次）。 */
+  let commandCatalog: readonly KernelCommandInfo[] | null = null;
+
+  /** 内核命令注册表（/ 面板数据源）：探针 agent 取 global 层后立即释放。 */
+  async function listCommands(): Promise<readonly KernelCommandInfo[]> {
+    if (commandCatalog !== null) return commandCatalog;
+    const kernel = requireKernel();
+    const commands = kernelCommands(kernel.ctx);
+    if (commands === undefined) {
+      commandCatalog = [];
+      return commandCatalog;
+    }
+    const agents = agentsService(kernel.ctx);
+    const handle = await agents.create({
+      sessionId: `probe-${randomUUID()}`,
+      meta: { cwd: process.cwd() },
+    });
+    try {
+      const list = commands.list(handle.agent) ?? [];
+      commandCatalog = [...list]
+        .map((command) => ({ name: command.name, description: command.description }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    } finally {
+      await handle.dispose().catch(() => undefined);
+    }
+    return commandCatalog;
+  }
+
+  /** 内核技能注册表的 user-invocable 投影（$ 面板数据源）。 */
+  async function listUserSkills(): Promise<readonly KernelSkillInfo[]> {
+    const kernel = requireKernel();
+    const skills = kernelSkills(kernel.ctx);
+    if (skills === undefined) return [];
+    const all = await skills.list().catch(() => []);
+    return all
+      .filter((skill) => isUserInvocable(skill as never))
+      .map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+        ...(skill.whenToUse !== undefined ? { whenToUse: skill.whenToUse } : {}),
+      }));
+  }
+
   return {
     /** 内核挂载后首个会话操作前调用（幂等）。 */
     attach(kernel: ShufaKernelHandle): void {
       bindFirehose(kernel);
     },
+
+    /** / 与 $ 面板目录（DSH 官方一致性：命令/技能注册表出自内核，非产品硬编码）。 */
+    listCommands,
+    listUserSkills,
 
     /**
      * 创建任务会话：cwd=用户根目录（架构调整 2026-09-23：shell 工作目录/相对
@@ -666,6 +798,16 @@ export function createTaskSessions(deps: TaskSessionDeps) {
               createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] }) as never,
             );
           });
+        return;
+      }
+    }
+    // `$skill` 显式调用（2026-09-25 前台对齐·二轮，DSH 官方语义）：用户原话普通
+    // 消息在前 + 技能体以 skill-invocation 源注入在后（renderSkillContent 的
+    // <skill_content> 与模型侧 skill 工具同形）。未命中/不可用户调用 → 原样普通消息。
+    if (text.startsWith('$')) {
+      const matched = /^(\$\S+)(?:\s+([\s\S]*))?$/.exec(text);
+      if (matched !== null) {
+        void deliverSkillInvocation(entry, matched[1]!.slice(1), (matched[2] ?? '').trim(), text);
         return;
       }
     }

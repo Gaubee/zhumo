@@ -179,6 +179,12 @@ export interface ModelsCatalogPreset {
   }>;
 }
 
+/** 前台输入框目录（2026-09-25 二轮：/ 面板=内核命令注册表、$ 面板=内核技能注册表）。 */
+export interface ComposerCatalog {
+  commands: Array<{ name: string; description: string }>;
+  skills: Array<{ name: string; description: string; when_to_use?: string }>;
+}
+
 /** admin.models.catalog / catalogRefresh 出参；fetched_at=null 表示从未拉取过 models.dev。 */
 export interface ModelsCatalog {
   presets: ModelsCatalogPreset[];
@@ -330,13 +336,6 @@ export interface Frame {
 export interface KbEntryItem {
   key: string;
   value: string;
-}
-
-/** 前台知识库清单条目（$ 面板：分组/条目名，不含内容）。 */
-export interface KbGroupRef {
-  name: string;
-  note: string;
-  keys: string[];
 }
 
 export interface KbGroupView {
