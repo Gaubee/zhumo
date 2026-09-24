@@ -41,9 +41,16 @@ export async function selectTask(taskId: string): Promise<void> {
   unsubscribe?.();
   unsubscribe = null;
   tasks.selectedId = taskId;
-  tasks.frames = await api.getTaskFrames(taskId);
-  tasks.results = await api.getTaskResults(taskId);
-  unsubscribe = api.subscribeTaskFrames(taskId, (frame) => {
+  // 先清结果/帧：切换瞬间不残留上一任务的标签与转录（走查 2026-09-25：
+  // 用户实测「导出结果不跟着任务走」——慢网下旧任务响应晚到覆盖新任务）。
+  tasks.results = [];
+  const frames = await api.getTaskFrames(taskId);
+  if (tasks.selectedId !== taskId) return; // 已切走：过期响应丢弃
+  tasks.frames = frames;
+  const results = await api.getTaskResults(taskId);
+  if (tasks.selectedId !== taskId) return;
+  tasks.results = results;
+  const subscribe = api.subscribeTaskFrames(taskId, (frame) => {
     // 真实 user-text 帧到达 → 移除同文本的乐观帧（走查 R7：乐观显示去重）。
     if (frame.kind === "user-text") dropOptimistic(frame.text ?? "");
     if (tasks.selectedId === taskId) tasks.frames = [...tasks.frames, frame];
@@ -61,6 +68,11 @@ export async function selectTask(taskId: string): Promise<void> {
       );
     }
   });
+  if (tasks.selectedId !== taskId) {
+    subscribe(); // 等待期间已切走：立即退订，不留悬挂订阅
+    return;
+  }
+  unsubscribe = subscribe;
   // 帧流可能推动任务状态变化；轻量刷新行（mock 下 replayAgentTurn 改内存对象）。
   void loadTaskRow(taskId);
 }

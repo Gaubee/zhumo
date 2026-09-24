@@ -85,6 +85,7 @@
   function openComposer(): void {
     tasks.selectedId = null;
     tasks.frames = [];
+    tasks.results = [];
   }
 </script>
 
