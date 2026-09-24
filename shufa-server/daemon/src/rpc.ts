@@ -26,6 +26,7 @@ import {
   ResMkdirInputSchema,
   ResMoveInputSchema,
   ResRenameInputSchema,
+  AttachmentUploadInputSchema,
   ResTreeInputSchema,
   ResUploadInputSchema,
   SettingGetInputSchema,
@@ -635,6 +636,15 @@ const tasksFollowup = requireActiveUser
 
 // ---------------------------------------------------------------- res（资源管理器，§4「认证（仅本人文件夹）」）
 
+/** 附件上传（走查 R7）：登录用户；blob + 资源树登记，返回 agent 可读路径。 */
+const resAttachmentUpload = requireAuth
+  .input(AttachmentUploadInputSchema)
+  .handler(({ context, input }) => {
+    const service = context.resources;
+    if (!service) throw new ORPCError('NOT_IMPLEMENTED', { message: '资源管理器未装配' });
+    return service.attachmentUpload(context.user as UserRow, input);
+  });
+
 const resTree = requireAuth.input(ResTreeInputSchema).handler(({ context, input }) => {
   return requireResourceService(context).tree(context.user as UserRow, input);
 });
@@ -725,6 +735,7 @@ export const router = {
 
   res: {
     tree: resTree,
+    attachmentUpload: resAttachmentUpload,
     mkdir: resMkdir,
     rename: resRename,
     move: resMove,

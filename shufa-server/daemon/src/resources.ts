@@ -44,6 +44,16 @@ export interface ResourceServiceDeps {
   maxUploadBytes?: number;
 }
 
+/** 附件图片扩展名 → MIME（/raw 预览与 sharp 判型；仅附件场景消费的小表）。 */
+const MIME_OF_EXT: Readonly<Record<string, string>> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.avif': 'image/avif',
+};
+
 export class ResourceService {
   private readonly maxUploadBytes: number;
 
@@ -87,6 +97,42 @@ export class ResourceService {
   }
 
   // ---------------------------------------------------------------- [2] 读面
+
+  /**
+   * 附件上传（走查 R7：聊天中附加图片）：内容寻址 blob + 用户资源树根级登记
+   * （meta.mime 供 /raw 预览判型）。返回 blob 绝对路径（注入提示词，agent 经
+   * 工具读取）+ resource_id（/api/res/{id}/raw?w=N sharp 预览）。
+   */
+  attachmentUpload(actor: UserRow, input: { filename: string; data_base64: string }): {
+    resource_id: string;
+    name: string;
+    path: string;
+    size: number;
+  } {
+    const bytes = Buffer.from(input.data_base64, 'base64');
+    if (bytes.byteLength === 0) throw new ORPCError('BAD_REQUEST', { message: '附件内容为空' });
+    if (bytes.byteLength > Math.min(this.maxUploadBytes, 16 * 1024 * 1024)) {
+      throw new ORPCError('BAD_REQUEST', { message: '附件超过 16MB 上限' });
+    }
+    const safeName = path.basename(input.filename) || 'attachment';
+    const put = this.deps.blobs.put(bytes);
+    const root = this.rootOf(actor.id);
+    const row = createResource(this.deps.db, {
+      ownerId: actor.id,
+      parentId: this.logicalParentId(root, root.id) ?? root.id,
+      name: safeName,
+      isDir: false,
+      contentHash: put.hash,
+      size: bytes.byteLength,
+      meta: { attachment: true, mime: MIME_OF_EXT[path.extname(safeName).toLowerCase()] ?? 'application/octet-stream' },
+    });
+    return {
+      resource_id: row.id,
+      name: safeName,
+      path: this.deps.blobs.pathFor(put.hash),
+      size: bytes.byteLength,
+    };
+  }
 
   tree(actor: UserRow, input: { owner?: string; parent?: string }): ResTreeOutput {
     const owner = this.resolveOwner(actor, input.owner);

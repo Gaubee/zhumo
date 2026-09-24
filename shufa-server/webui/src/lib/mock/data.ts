@@ -180,48 +180,48 @@ export const mockDb = {
     [
       "t-1",
       [
-        { at: now(), seq: 1, kind: "user-text", text: "分析示范视频里的起笔角度与收笔" },
-        { at: now(), seq: 2, kind: "status", text: "任务开始 · 已接收素材 行书示范-起笔.mp4" },
+        { at: Date.now(), seq: 1, kind: "user-text", text: "分析示范视频里的起笔角度与收笔" },
+        { at: Date.now(), seq: 2, kind: "status", text: "任务开始 · 已接收素材 行书示范-起笔.mp4" },
         {
-          at: now(),
+          at: Date.now(),
           seq: 3,
           kind: "tool-call",
           toolName: "probe",
           text: '{"video":"行书示范-起笔.mp4"}',
         },
         {
-          at: now(),
+          at: Date.now(),
           seq: 4,
           kind: "tool-result",
           toolName: "probe",
           text: "1920x1080 · 30fps · 42s · 竖幅书写",
         },
         {
-          at: now(),
+          at: Date.now(),
           seq: 5,
           kind: "tool-call",
           toolName: "sample",
           text: '{"fps":2}',
         },
-        { at: now(), seq: 6, kind: "tool-result", toolName: "sample", text: "已抽取 84 关键帧" },
+        { at: Date.now(), seq: 6, kind: "tool-result", toolName: "sample", text: "已抽取 84 关键帧" },
         {
-          at: now(),
+          at: Date.now(),
           seq: 7,
           kind: "assistant-text",
           text: "从关键帧看，起笔以侧锋切入为主，角度约 45°，收笔多回锋收束。建议练习时注意切笔后立刻调锋，避免侧锋拖行过长。",
         },
-        { at: now(), seq: 8, kind: "turn-end", text: "ok" },
+        { at: Date.now(), seq: 8, kind: "turn-end", text: "ok" },
       ],
     ],
     [
       "t-2",
       [
-        { at: now(), seq: 1, kind: "user-text", text: "点评这页楷书的间架结构" },
-        { at: now(), seq: 2, kind: "assistant-text", text: "整体结构平稳，「横」画起笔藏锋明显；「竖」画有轻微右倾，建议对帖校正。 turning…" },
-        { at: now(), seq: 3, kind: "turn-end", text: "ok" },
+        { at: Date.now(), seq: 1, kind: "user-text", text: "点评这页楷书的间架结构" },
+        { at: Date.now(), seq: 2, kind: "assistant-text", text: "整体结构平稳，「横」画起笔藏锋明显；「竖」画有轻微右倾，建议对帖校正。 turning…" },
+        { at: Date.now(), seq: 3, kind: "turn-end", text: "ok" },
       ],
     ],
-    ["t-3", [{ at: now(), seq: 1, kind: "status", text: "排队中 → 运行中" }]],
+    ["t-3", [{ at: Date.now(), seq: 1, kind: "status", text: "排队中 → 运行中" }]],
   ]) as Map<string, Frame[]>,
   wizardSteps: [
     {
@@ -307,7 +307,7 @@ function emitTask(taskId: string, frame: Frame): void {
   frames.push(frame);
   mockDb.frames.set(taskId, frames);
   const task = mockDb.tasks.find((t) => t.id === taskId);
-  if (task) task.updatedAt = frame.at;
+  if (task) task.updatedAt = new Date(frame.at).toISOString();
   for (const listener of taskListeners.get(taskId) ?? []) listener(frame);
 }
 
@@ -324,12 +324,12 @@ export async function replayAgentTurn(taskId: string, prompt: string): Promise<v
   const task = mockDb.tasks.find((t) => t.id === taskId);
   if (!task) return;
   task.status = "running";
-  emitTask(taskId, { at: now(), seq: nextSeq(), kind: "user-text", text: prompt });
+  emitTask(taskId, { at: Date.now(), seq: nextSeq(), kind: "user-text", text: prompt });
   await sleep(400);
-  emitTask(taskId, { at: now(), seq: nextSeq(), kind: "status", text: "已接收素材，开始分析" });
+  emitTask(taskId, { at: Date.now(), seq: nextSeq(), kind: "status", text: "已接收素材，开始分析" });
   await sleep(600);
   emitTask(taskId, {
-    at: now(),
+    at: Date.now(),
     seq: nextSeq(),
     kind: "tool-call",
     toolName: "sample",
@@ -337,7 +337,7 @@ export async function replayAgentTurn(taskId: string, prompt: string): Promise<v
   });
   await sleep(900);
   emitTask(taskId, {
-    at: now(),
+    at: Date.now(),
     seq: nextSeq(),
     kind: "tool-result",
     toolName: "sample",
@@ -345,14 +345,14 @@ export async function replayAgentTurn(taskId: string, prompt: string): Promise<v
   });
   await sleep(600);
   emitTask(taskId, {
-    at: now(),
+    at: Date.now(),
     seq: nextSeq(),
     kind: "assistant-text",
     text: `已收到指令「${prompt}」。关键帧显示运笔节奏中段偏快，收尾两字明显减速——这是章法上的呼吸感，后续波次将接真实分析管线给出逐项点评。`,
   });
   await sleep(300);
   task.status = "done";
-  emitTask(taskId, { at: now(), seq: nextSeq(), kind: "turn-end", text: "ok" });
+  emitTask(taskId, { at: Date.now(), seq: nextSeq(), kind: "turn-end", text: "ok" });
 }
 
 /**
@@ -380,7 +380,7 @@ export async function runWizardStepMock(
   // 三轮：下载启动即消费/覆盖 .download 残差（与 daemon rmSync/续传语义对齐）。
   step.resumable = false;
   step.updatedAt = now();
-  for (const listener of stepListeners) listener({ at: now(), seq: 0, kind: "status" });
+  for (const listener of stepListeners) listener({ at: Date.now(), seq: 0, kind: "status" });
   let selectedLine = "";
   if (step.kind === "command") {
     const script =
@@ -395,12 +395,12 @@ export async function runWizardStepMock(
         step.status = "pending";
         step.lastLog += "\n[中断] 用户取消";
         step.updatedAt = now();
-        for (const listener of stepListeners) listener({ at: now(), seq: 0, kind: "status" });
+        for (const listener of stepListeners) listener({ at: Date.now(), seq: 0, kind: "status" });
         return;
       }
       step.lastLog = (step.lastLog.length > 0 ? step.lastLog + "\n" : "") + line;
       step.updatedAt = now();
-      for (const listener of stepListeners) listener({ at: now(), seq: 0, kind: "status" });
+      for (const listener of stepListeners) listener({ at: Date.now(), seq: 0, kind: "status" });
     }
     step.status = "done";
     step.detected = true;
@@ -424,18 +424,18 @@ export async function runWizardStepMock(
         step.resumable = true;
         step.lastLog += "\n[中断] 用户取消（已下载部分保留，可续传）";
         step.updatedAt = now();
-        for (const listener of stepListeners) listener({ at: now(), seq: 0, kind: "status" });
+        for (const listener of stepListeners) listener({ at: Date.now(), seq: 0, kind: "status" });
         return;
       }
       step.progress = progress;
       step.lastLog = `${prefix}已下载 ${((sizeMb * progress) / 100).toFixed(1)}MB / ${sizeMb.toFixed(1)}MB（${progress}%）`;
       step.updatedAt = now();
-      for (const listener of stepListeners) listener({ at: now(), seq: 0, kind: "status" });
+      for (const listener of stepListeners) listener({ at: Date.now(), seq: 0, kind: "status" });
     }
     step.status = "done";
     step.detected = true;
   }
   void force;
   step.updatedAt = now();
-  for (const listener of stepListeners) listener({ at: now(), seq: 0, kind: "status" });
+  for (const listener of stepListeners) listener({ at: Date.now(), seq: 0, kind: "status" });
 }

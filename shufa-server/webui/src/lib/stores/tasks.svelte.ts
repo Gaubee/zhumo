@@ -41,6 +41,8 @@ export async function selectTask(taskId: string): Promise<void> {
   tasks.selectedId = taskId;
   tasks.frames = await api.getTaskFrames(taskId);
   unsubscribe = api.subscribeTaskFrames(taskId, (frame) => {
+    // 真实 user-text 帧到达 → 移除同文本的乐观帧（走查 R7：乐观显示去重）。
+    if (frame.kind === "user-text") dropOptimistic(frame.text ?? "");
     if (tasks.selectedId === taskId) tasks.frames = [...tasks.frames, frame];
     // 状态帧 payload.status → 行状态同步（W7 + 走查 R3：failed 帧携带的 error
     // 详情一并写行——详情头「失败原因」即时呈现，不等列表重拉）。
@@ -88,18 +90,38 @@ async function loadTaskRow(taskId: string): Promise<void> {
   }
 }
 
+/** 移除未落实的乐观 user 帧（真帧到达/发送失败时）。 */
+function dropOptimistic(text: string): void {
+  const idx = [...tasks.frames]
+    .map((f, i) => ({ f, i }))
+    .filter(({ f }) => f.kind === "user-text" && (f.payload as { optimistic?: boolean } | undefined)?.optimistic === true && (f.text ?? "") === text)
+    .pop()?.i;
+  if (idx !== undefined) tasks.frames = tasks.frames.filter((_, i) => i !== idx);
+}
+
 export async function sendPrompt(prompt: string): Promise<void> {
   const taskId = tasks.selectedId;
-  if (taskId === null || tasks.sending || prompt.trim().length === 0) return;
+  const trimmed = prompt.trim();
+  if (taskId === null || tasks.sending || trimmed.length === 0) return;
   tasks.sending = true;
   tasks.error = null;
+  // 乐观插入（走查 R7：发送即显示——不等 WS 帧回放；真帧到达后 dropOptimistic 去重）。
+  const optimistic: Frame = {
+    at: Date.now(),
+    seq: -(Date.now()),
+    kind: "user-text",
+    text: trimmed,
+    payload: { optimistic: true },
+  };
+  tasks.frames = [...tasks.frames, optimistic];
   try {
-    await api.sendTaskPrompt(taskId, prompt.trim());
+    await api.sendTaskPrompt(taskId, trimmed);
     // followup 触发 resume（done/failed 续聊）时任务即时回 running；状态帧到达前先行联动。
     tasks.list = tasks.list.map((t) =>
       t.id === taskId && t.status !== "running" ? { ...t, status: "running" as const } : t,
     );
   } catch (error) {
+    dropOptimistic(trimmed);
     tasks.error = error instanceof Error ? error.message : String(error);
   } finally {
     tasks.sending = false;
@@ -125,26 +147,68 @@ export async function createTask(
 
 export type TranscriptItem =
   | { kind: "user"; seq: number; text: string }
-  | { kind: "assistant"; seq: number; text: string }
+  | { kind: "assistant"; seq: number; text: string; streaming: boolean }
+  | { kind: "reasoning"; seq: number; text: string; streaming: boolean }
   | { kind: "tool"; seq: number; toolName: string; argsText: string; result: string | null }
   | { kind: "status"; seq: number; text: string }
-  /** 失败明文卡片（走查 R3：turn-end error / failed status 帧的详情）。 */
   | { kind: "error"; seq: number; text: string }
-  | { kind: "turn-end"; seq: number };
+  | { kind: "turn-end"; seq: number; elapsedMs?: number };
 
-/** 帧 → 转录条目（tool-result 并回前序 tool-call 行；error 双源投影——走查 R3：
- * turn-end 的 error payload 与 failed status 的详情此前被丢弃，用户「任务失败
- * 看不到任何异常」，现在都渲染为 error 条目）。 */
+/**
+ * 帧 → 转录条目（走查 R7 对齐 skill-creator-v2 投影语义）：
+ * - assistant-delta/reasoning-delta 流式增量：并轨合并为 streaming 条目（终帧
+ *   assistant-text/reasoning 落定替换）；
+ * - assistant-reasoning → thinking 折叠行（流式自动展开、定稿收起）；
+ * - turn-start 记时间，turn-end 投影 elapsed 药丸；
+ * - error 双源（turn-end error / failed status 详情）相邻去重。
+ */
 export function projectFrames(frames: Frame[]): TranscriptItem[] {
   const items: TranscriptItem[] = [];
+  let turnStartAt: number | null = null;
   for (const frame of frames) {
     switch (frame.kind) {
       case "user-text":
+        if ((frame.payload as { optimistic?: boolean } | undefined)?.optimistic === true) break;
         items.push({ kind: "user", seq: frame.seq, text: frame.text ?? "" });
         break;
-      case "assistant-text":
-        items.push({ kind: "assistant", seq: frame.seq, text: frame.text ?? "" });
+      case "assistant-delta": {
+        // 并轨：上一条 streaming assistant 延续；否则新开。
+        const last = items[items.length - 1];
+        if (last !== undefined && last.kind === "assistant" && last.streaming) {
+          items[items.length - 1] = { ...last, text: last.text + (frame.text ?? "") };
+        } else {
+          items.push({ kind: "assistant", seq: frame.seq, text: frame.text ?? "", streaming: true });
+        }
         break;
+      }
+      case "assistant-text": {
+        // 终帧替换本轮流式草稿（内容以终帧为准）。
+        const last = items[items.length - 1];
+        if (last !== undefined && last.kind === "assistant" && last.streaming) {
+          items[items.length - 1] = { kind: "assistant", seq: frame.seq, text: frame.text ?? "", streaming: false };
+        } else {
+          items.push({ kind: "assistant", seq: frame.seq, text: frame.text ?? "", streaming: false });
+        }
+        break;
+      }
+      case "assistant-reasoning-delta": {
+        const last = items[items.length - 1];
+        if (last !== undefined && last.kind === "reasoning" && last.streaming) {
+          items[items.length - 1] = { ...last, text: last.text + (frame.text ?? "") };
+        } else {
+          items.push({ kind: "reasoning", seq: frame.seq, text: frame.text ?? "", streaming: true });
+        }
+        break;
+      }
+      case "assistant-reasoning": {
+        const last = items[items.length - 1];
+        if (last !== undefined && last.kind === "reasoning" && last.streaming) {
+          items[items.length - 1] = { kind: "reasoning", seq: frame.seq, text: frame.text ?? "", streaming: false };
+        } else {
+          items.push({ kind: "reasoning", seq: frame.seq, text: frame.text ?? "", streaming: false });
+        }
+        break;
+      }
       case "tool-call":
         items.push({
           kind: "tool",
@@ -161,6 +225,9 @@ export function projectFrames(frames: Frame[]): TranscriptItem[] {
         if (call && call.kind === "tool" && call.result === null) call.result = frame.text ?? "";
         break;
       }
+      case "turn-start":
+        turnStartAt = frame.at;
+        break;
       case "status":
       case "step": {
         const payload = frame.payload as { status?: string; error?: string } | string | undefined;
@@ -168,7 +235,6 @@ export function projectFrames(frames: Frame[]): TranscriptItem[] {
           typeof payload === "object" && payload !== null && typeof payload.status === "string"
             ? `任务状态 → ${payload.status}`
             : null;
-        // failed 且带详情 → 错误条目（错误卡自含状态语义，不再重复 status 行）。
         if (
           typeof payload === "object" &&
           payload !== null &&
@@ -183,7 +249,6 @@ export function projectFrames(frames: Frame[]): TranscriptItem[] {
         break;
       }
       case "turn-end": {
-        // turn 以 error 终止（内核帧 payload.reason.kind === "error"）→ 错误卡片明文。
         const reason = (
           frame.payload as {
             reason?: { kind?: string; error?: { message?: string; code?: string } };
@@ -193,14 +258,15 @@ export function projectFrames(frames: Frame[]): TranscriptItem[] {
           const message = reason.error?.message ?? "未知错误";
           const code = reason.error?.code;
           const text = code !== undefined ? `${message}（${code}）` : message;
-          // 去重：紧邻的 status failed 帧已产错误卡（daemon 双发），turn-end 版本
-          // 携带 code 更全——原位替换而不是再叠一张。
           const last = items[items.length - 1];
           if (last !== undefined && last.kind === "error") items[items.length - 1] = { kind: "error", seq: frame.seq, text };
           else items.push({ kind: "error", seq: frame.seq, text });
+          turnStartAt = null;
           break;
         }
-        items.push({ kind: "turn-end", seq: frame.seq });
+        const elapsedMs = turnStartAt !== null ? Math.max(0, frame.at - turnStartAt) : undefined;
+        items.push({ kind: "turn-end", seq: frame.seq, ...(elapsedMs !== undefined ? { elapsedMs } : {}) });
+        turnStartAt = null;
         break;
       }
     }

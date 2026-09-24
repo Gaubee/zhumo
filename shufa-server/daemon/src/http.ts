@@ -33,6 +33,28 @@ import type { TaskService } from './tasks/service.js';
 import type { ResourceService } from './resources.js';
 import { BlobStore } from './db/blobs.js';
 import { getResourceById } from './db/tasks.js';
+import { parseResourceMeta } from './db/tasks.js';
+
+/** sharp 缩略图内存缓存（hash:w → webp 字节；上限 32 条 FIFO）。 */
+const thumbCache = new Map<string, Buffer>();
+
+async function renderThumbnail(file: string, width: number): Promise<Buffer | null> {
+  const key = `${file}:${width}`;
+  const cached = thumbCache.get(key);
+  if (cached !== undefined) return cached;
+  try {
+    const sharp = (await import('sharp')).default;
+    const out = await sharp(file).rotate().resize({ width, withoutEnlargement: true }).webp({ quality: 82 }).toBuffer();
+    if (thumbCache.size >= 32) {
+      const first = thumbCache.keys().next().value;
+      if (first !== undefined) thumbCache.delete(first);
+    }
+    thumbCache.set(key, out);
+    return out;
+  } catch {
+    return null;
+  }
+}
 
 const MIME: Readonly<Record<string, string>> = {
   '.html': 'text/html; charset=utf-8',
@@ -395,6 +417,24 @@ export class DaemonHttp {
       return;
     }
     const type = MIME[path.extname(row.name).toLowerCase()] ?? 'application/octet-stream';
+    // 走查 R7：?w=N 图片缩略（附件预览——sharp 动态缩放，webp 输出；非图片/失败降级原图）。
+    const widthParam = Number.parseInt(url.searchParams.get('w') ?? '', 10);
+    if (Number.isInteger(widthParam) && widthParam >= 16 && widthParam <= 2048 && type.startsWith('image/')) {
+      const metaType = parseResourceMeta(row)?.mime;
+      const effective = typeof metaType === 'string' ? metaType : type;
+      if (effective.startsWith('image/')) {
+        const thumb = await renderThumbnail(file, widthParam);
+        if (thumb !== null) {
+          response.writeHead(200, {
+            'content-type': 'image/webp',
+            'content-length': thumb.byteLength,
+            'cache-control': 'private, max-age=86400',
+          });
+          response.end(thumb);
+          return;
+        }
+      }
+    }
     await this.sendFile(request, response, file, 'private, no-cache', type);
   }
 

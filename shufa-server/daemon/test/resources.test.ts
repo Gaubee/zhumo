@@ -11,6 +11,7 @@
  *   [5] rpc/HTTP 面（401/501/403/404/raw Range）。
  */
 import { existsSync } from 'node:fs';
+import { getResourceById, parseResourceMeta } from '../src/db/tasks.js';
 import path from 'node:path';
 import { RPCHandler } from '@orpc/server/ws';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -237,6 +238,42 @@ describe('ResourceService 树与变更', () => {
     expectCode(() => tiny.upload(alice, { parent: root.id, filename: 'big.png', b64 }), 'BAD_REQUEST');
     expectCode(() => service.upload(alice, { parent: root.id, filename: 'empty.png', b64: '' }), 'BAD_REQUEST');
     expect(RESOURCE_UPLOAD_MAX_BYTES).toBe(256 * 1024 * 1024);
+  });
+});
+
+describe('走查 R7 附件上传', () => {
+  let env: TestServices;
+  let service: ResourceService;
+
+  beforeEach(() => {
+    env = createServices();
+    const user = createUser(env.db, { username: 'alice', passwordHash: 'x', role: 'user' });
+    (env as unknown as { __user?: unknown }).__user = user;
+    service = new ResourceService({ config: env.config, db: env.db, blobs: new BlobStore(env.config.dataRoot, env.db) });
+  });
+
+  afterEach(() => env.dispose());
+
+  it('attachmentUpload：blob 落盘 + 资源树登记（meta.mime）+ path 可读；空内容/超限拒绝', async () => {
+    const user = (env as unknown as { __user: ReturnType<typeof createUser> }).__user;
+    // 1x1 PNG
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const out = service.attachmentUpload(user, { filename: 'demo.png', data_base64: png.toString('base64') });
+    expect(out.name).toBe('demo.png');
+    expect(out.size).toBe(png.byteLength);
+    expect(existsSync(out.path)).toBe(true);
+    const row = getResourceById(env.db, out.resource_id);
+    expect(row?.content_hash).toBeTruthy();
+    expect(parseResourceMeta(row ?? ({ meta: '' } as never))?.mime).toBe('image/png');
+    // 空内容拒绝
+    expect(() => service.attachmentUpload(user, { filename: 'x.png', data_base64: '' })).toThrow();
+    // sharp 缩略 smoke（webp 输出非空）——附件预览管线核心依赖。
+    const sharp = (await import('sharp')).default;
+    const thumb = await sharp(out.path).resize({ width: 96 }).webp().toBuffer();
+    expect(thumb.byteLength).toBeGreaterThan(0);
   });
 });
 

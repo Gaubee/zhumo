@@ -217,6 +217,9 @@ importers:
       jose:
         specifier: ^6.2.12
         version: 6.2.12
+      sharp:
+        specifier: ^0.35.4
+        version: 0.35.4(@types/node@24.13.6)
       ws:
         specifier: ^8.21.3
         version: 8.21.3

@@ -259,23 +259,44 @@ export interface ResultInfo {
   createdAt: string;
 }
 
+/** 聊天附件（走查 R7：上传返回——rawUrl 供 <img> 预览，path 注入提示词）。 */
+export interface Attachment {
+  resourceId: string;
+  name: string;
+  path: string;
+  size: number;
+  rawUrl: (width?: number) => string;
+}
+
 // ---- [5] 统一帧（PRODUCT_DESIGN §7） ----
 
+/** 帧 kind 值域（走查 R7 对齐 contracts FrameKindSchema 全集——流式 delta/
+ *  reasoning/turn-start 等原缺席 kind 是聊天流式感的缺失根源）。 */
 export type FrameKind =
   | "user-text"
+  | "assistant-delta"
   | "assistant-text"
+  | "assistant-reasoning"
+  | "assistant-reasoning-delta"
   | "tool-call"
+  | "tool-args-delta"
   | "tool-result"
+  | "todo-snapshot"
   | "status"
   | "step"
-  | "turn-end";
+  | "turn-start"
+  | "turn-end"
+  | "session-title"
+  | "approval-request"
+  | "approval-resolved"
+  | "result";
 
-/** 统一帧：WS 推送 + afterSeq 游标重放的基本单位。 */
+/** 统一帧：WS 推送 + afterSeq 游标重放的基本单位（at 为 epoch 毫秒）。 */
 export interface Frame {
-  at: string;
+  at: number;
   seq: number;
   kind: FrameKind;
   text?: string;
   toolName?: string;
-  payload?: string;
+  payload?: unknown;
 }

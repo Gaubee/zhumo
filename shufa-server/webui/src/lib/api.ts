@@ -74,6 +74,7 @@ import type {
   WizardStep,
   AvailableModel,
   ModelsTestResult,
+  Attachment,
 } from "$lib/types";
 
 /** mock 逃生口：默认走真 RPC；?mock=1 才启用 mock（联调期测试/离线演示用）。 */
@@ -149,8 +150,15 @@ interface ShufaRpc {
     followup(input: TaskFollowupInput): Promise<TaskFollowupOutput>;
     setModel(input: { task_id: string; provider: string; model: string }): Promise<{ task: TaskItem }>;
   };
+
   res: {
     tree(input: ResTreeInput): Promise<ContractResTreeOutput>;
+    attachmentUpload(input: { filename: string; data_base64: string }): Promise<{
+      resource_id: string;
+      name: string;
+      path: string;
+      size: number;
+    }>;
     mkdir(input: ResMkdirInput): Promise<ResItemOutputView>;
     rename(input: ResRenameInput): Promise<ResItemOutputView>;
     move(input: ResMoveInput): Promise<ResItemOutputView>;
@@ -200,6 +208,8 @@ export interface ShufaApi {
   sendTaskPrompt(taskId: string, prompt: string): Promise<void>;
   createTask(prompt: string, video: File | null, model?: { provider: string; model: string }): Promise<Task>;
   cancelTask(taskId: string): Promise<void>;
+  /** 附件上传（走查 R7）：blob + 资源树登记；rawUrl 供预览。 */
+  uploadAttachment(file: { name: string; dataBase64: string }): Promise<Attachment>;
   /** 聊天中切换任务模型（走查 R6）：更新覆盖并热切会话（idle 态）。 */
   setTaskModel(taskId: string, provider: string, model: string): Promise<Task>;
   getResult(publicId: string): Promise<ResultInfo>;
@@ -486,6 +496,16 @@ class MockApi implements ShufaApi {
   async cancelTask(taskId: string): Promise<void> {
     const task = mockDb.tasks.find((t) => t.id === taskId);
     if (task) task.status = "cancelled";
+  }
+
+  async uploadAttachment(file: { name: string; dataBase64: string }): Promise<Attachment> {
+    return {
+      resourceId: `res-mock-${Date.now() % 1000}`,
+      name: file.name,
+      path: `/tmp/zhumo-mock/${file.name}`,
+      size: Math.round(file.dataBase64.length * 0.75),
+      rawUrl: (width?: number) => `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${width ?? 96}' height='${width ?? 96}'%3E%3Crect fill='%23ddd' width='100%25' height='100%25'/%3E%3C/svg%3E`,
+    };
   }
 
   async setTaskModel(taskId: string, provider: string, model: string): Promise<Task> {
@@ -885,6 +905,24 @@ class RpcApi implements ShufaApi {
 
   async cancelTask(taskId: string): Promise<void> {
     await rpc().tasks.cancel({ id: taskId });
+  }
+
+  async uploadAttachment(file: { name: string; dataBase64: string }): Promise<Attachment> {
+    const out = await rpc().res.attachmentUpload({
+      filename: file.name,
+      data_base64: file.dataBase64,
+    });
+    return {
+      resourceId: out.resource_id,
+      name: out.name,
+      path: out.path,
+      size: out.size,
+      rawUrl: (width?: number) => {
+        const token = encodeURIComponent(getToken() ?? "");
+        const w = width !== undefined ? `&w=${width}` : "";
+        return `/api/res/${out.resource_id}/raw?token=${token}${w}`;
+      },
+    };
   }
 
   async setTaskModel(taskId: string, provider: string, model: string): Promise<Task> {

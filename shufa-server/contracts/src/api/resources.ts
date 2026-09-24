@@ -48,6 +48,22 @@ export const ResTreeOutputSchema = z.object({
 });
 export type ResTreeOutput = z.infer<typeof ResTreeOutputSchema>;
 
+/** 附件上传（走查 R7：聊天中附加图片——服务端存储 + 预览接口）。 */
+export const AttachmentUploadInputSchema = z.object({
+  filename: z.string().min(1),
+  data_base64: z.string().min(1),
+});
+export type AttachmentUploadInput = z.infer<typeof AttachmentUploadInputSchema>;
+
+export const AttachmentUploadOutputSchema = z.object({
+  resource_id: z.string(),
+  name: z.string(),
+  /** blob 绝对存储路径（注入提示词，agent 经工具读取）。 */
+  path: z.string(),
+  size: z.number(),
+});
+export type AttachmentUploadOutput = z.infer<typeof AttachmentUploadOutputSchema>;
+
 // ---------------------------------------------------------------- 变更端点
 
 export const ResMkdirInputSchema = z.object({ parent: IdSchema, name: ResourceNameSchema });

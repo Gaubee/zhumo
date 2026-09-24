@@ -15,9 +15,13 @@
   import IconChevronDown from "@lucide/svelte/icons/chevron-down";
   import IconCheck from "@lucide/svelte/icons/check";
   import IconImage from "@lucide/svelte/icons/image";
+  import IconX from "@lucide/svelte/icons/x";
+  import IconLoader from "@lucide/svelte/icons/loader-circle";
   import { Button } from "$lib/components/ui/button";
   import * as Popover from "$lib/components/ui/popover";
   import { routeAvatarColor, routeLetter } from "$lib/components/models/route-meta";
+  import { api } from "$lib/api";
+  import type { Attachment } from "$lib/types";
   import { formatTokenCount } from "$lib/components/models/route-meta";
   import type { AvailableModel } from "$lib/types";
 
@@ -50,6 +54,48 @@
 
   let text = $state("");
   let menuOpen = $state(false);
+  /** 附件（走查 R7：图片 ≤4MiB/张；上传后 chip 缩略预览，发送时注入路径）。 */
+  let attachments = $state<Attachment[]>([]);
+  let uploading = $state(false);
+  let fileInput = $state<HTMLInputElement | null>(null);
+
+  const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
+
+  async function onFilesPicked(files: FileList | null): Promise<void> {
+    if (files === null) return;
+    uploading = true;
+    try {
+      for (const file of [...files]) {
+        if (file.size > MAX_ATTACHMENT_BYTES) continue;
+        if (attachments.some((a) => a.name === file.name && a.size === file.size)) continue;
+        const dataBase64 = await fileToBase64(file);
+        const uploaded = await api.uploadAttachment({ name: file.name, dataBase64 });
+        attachments = [...attachments, uploaded];
+      }
+    } catch (e) {
+      (window as unknown as { __attachError?: string }).__attachError =
+        e instanceof Error ? e.message : String(e);
+    } finally {
+      uploading = false;
+      if (fileInput !== null) fileInput.value = "";
+    }
+  }
+
+  function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = String(reader.result ?? "");
+        resolve(result.slice(result.indexOf(",") + 1));
+      };
+      reader.onerror = () => reject(new Error(`读取文件失败：${file.name}`));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function removeAttachment(name: string): void {
+    attachments = attachments.filter((a) => a.name !== name);
+  }
 
   interface ModelGroup {
     provider: string;
@@ -92,8 +138,13 @@
   function submit(): void {
     const trimmed = text.trim();
     if (trimmed.length === 0 || sending || disabled) return;
-    onsend(trimmed);
+    // 附件路径注入（走查 R7：agent 经工具按路径读取图片）。
+    const attachLines = attachments
+      .map((a) => `[图片附件 ${a.name}]：${a.path}`)
+      .join("\n");
+    onsend(attachLines.length > 0 ? `${trimmed}\n${attachLines}` : trimmed);
     text = "";
+    attachments = [];
   }
 
   function onkeydown(event: KeyboardEvent): void {
@@ -125,6 +176,38 @@
       </span>
     </div>
   {/if}
+  {#if attachments.length > 0 || uploading}
+    <div class="mb-1.5 flex flex-wrap gap-1">
+      {#each attachments as att (att.resourceId)}
+        <span class="group/att relative flex items-center gap-1.5 rounded-md border border-border bg-muted/40 py-0.5 pl-0.5 pr-1.5">
+          <img src={att.rawUrl(96)} alt={att.name} class="h-8 w-8 rounded object-cover" />
+          <span class="max-w-28 truncate text-[10px]">{att.name}</span>
+          <button
+            type="button"
+            class="flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+            aria-label="移除附件 {att.name}"
+            onclick={() => removeAttachment(att.name)}
+          >
+            <IconX class="h-2.5 w-2.5" />
+          </button>
+        </span>
+      {/each}
+      {#if uploading}
+        <span class="flex items-center gap-1 rounded-md border border-border px-1.5 py-1 text-[10px] text-muted-foreground">
+          <IconLoader class="h-3 w-3 animate-spin" aria-hidden="true" />
+          上传中…
+        </span>
+      {/if}
+    </div>
+  {/if}
+  <input
+    bind:this={fileInput}
+    type="file"
+    accept="image/*"
+    multiple
+    class="hidden"
+    onchange={(event) => void onFilesPicked(event.currentTarget.files)}
+  />
   <textarea
     bind:this={textareaEl}
     bind:value={text}
@@ -135,6 +218,16 @@
   ></textarea>
   <div class="mt-1 flex items-center gap-2 px-1">
     <div class="flex-1"></div>
+    <button
+      type="button"
+      class="flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+      title="附加图片（≤4MiB/张）"
+      aria-label="附加图片"
+      disabled={uploading || disabled || sending}
+      onclick={() => fileInput?.click()}
+    >
+      <IconImage class="h-3.5 w-3.5" aria-hidden="true" />
+    </button>
     {#if groups.length > 0}
       <Popover.Root open={menuOpen} onOpenChange={(open) => (menuOpen = open)}>
         <Popover.Trigger>
