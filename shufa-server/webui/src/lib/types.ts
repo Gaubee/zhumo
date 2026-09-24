@@ -185,6 +185,12 @@ export interface ComposerCatalog {
   skills: Array<{ name: string; description: string; when_to_use?: string }>;
 }
 
+/** @ 面板目录浏览（DSH ctx.fs 标准：dir 为 canonical 绝对路径）。 */
+export interface ComposerFilesView {
+  dir: string;
+  entries: Array<{ name: string; kind: "dir" | "file" | "other"; size?: number }>;
+}
+
 /** admin.models.catalog / catalogRefresh 出参；fetched_at=null 表示从未拉取过 models.dev。 */
 export interface ModelsCatalog {
   presets: ModelsCatalogPreset[];

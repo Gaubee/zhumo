@@ -27,3 +27,33 @@ export const ComposerListOutputSchema = z.object({
   skills: z.array(ComposerSkillSchema),
 });
 export type ComposerListOutput = z.infer<typeof ComposerListOutputSchema>;
+
+// ---------------------------------------------------------------- composer.files（@ 面板，DSH ctx.fs 标准）
+
+/** 目录浏览入参：dir 相对用户根的路径段（'.' 段与空串 = 用户根）。 */
+export const ComposerFilesInputSchema = z.object({
+  dir: z
+    .string()
+    .trim()
+    .max(512)
+    .optional()
+    .refine((value) => value === undefined || !value.startsWith('/') && !value.includes('..'), {
+      message: 'dir 必须是相对用户根的安全路径段',
+    }),
+});
+export type ComposerFilesInput = z.infer<typeof ComposerFilesInputSchema>;
+
+/** 目录条目（dsh-fs FsDirEntry 投影：kind 三值语义保留）。 */
+export const ComposerFileEntrySchema = z.object({
+  name: z.string().min(1),
+  kind: z.enum(['dir', 'file', 'other']),
+  size: z.number().int().nonnegative().optional(),
+});
+export type ComposerFileEntry = z.infer<typeof ComposerFileEntrySchema>;
+
+export const ComposerFilesOutputSchema = z.object({
+  /** canonical 绝对路径（agent 可读；capability 钉在用户根内）。 */
+  dir: z.string().min(1),
+  entries: z.array(ComposerFileEntrySchema),
+});
+export type ComposerFilesOutput = z.infer<typeof ComposerFilesOutputSchema>;

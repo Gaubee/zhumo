@@ -10,3 +10,4 @@ export * from './models.js';
 export * from './tasks.js';
 export * from './resources.js';
 export * from './kb.js';
+export * from './composer.js';

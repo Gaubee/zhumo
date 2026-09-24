@@ -315,6 +315,16 @@ export class TaskService {
     this.emitStatus(sessionId, row.id, 'failed', reason);
   }
 
+  /** @ 面板目录浏览（DSH ctx.fs 标准；dir 相对该用户根）。 */
+  async userFiles(
+    user: UserRow,
+    input: { dir?: string },
+  ): Promise<{ dir: string; entries: Array<{ name: string; kind: 'dir' | 'file' | 'other'; size?: number }> }> {
+    const userRoot = path.join(this.deps.config.dataRoot, 'users', user.username);
+    const out = await this.deps.sessions.listUserFiles(userRoot, input.dir ?? '');
+    return { dir: out.dir, entries: [...out.entries] };
+  }
+
   /** 前台 / 与 $ 面板目录（2026-09-25 二轮：内核命令/技能注册表，DSH 官方一致）。 */
   async composerCatalog(): Promise<{
     commands: Array<{ name: string; description: string }>;
