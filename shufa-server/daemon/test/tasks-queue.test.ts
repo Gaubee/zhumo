@@ -161,6 +161,33 @@ describe('sessions 队列面板（W10b，内核 inbox）', () => {
     expect(() => sessions.queueSendNow(sessionId, ids[2]!)).toThrow('队列中没有该排队条目');
   });
 
+  it('W10f：turn/end completed 且队列空 → onSessionIdle；队列非空 → 不回调', async () => {
+    const idles: string[] = [];
+    const sessions2 = createTaskSessions({
+      kernel: () => asKernelHandle(kernel),
+      modelSelection: async () => ({ provider: 'zhipu', model: 'glm-5.3-flash' }),
+      retention: 50,
+      onSessionIdle: (sessionId) => idles.push(sessionId),
+    });
+    const created = await sessions2.createTaskSession('task-idle', {
+      cwd: root,
+      framesFile: path.join(root, 'frames-idle.jsonl'),
+      prompt: '首条',
+    });
+    const sessionId = created.sessionId;
+    const agent = kernel.created.at(-1)!;
+    // 清掉建会话首条 prompt（模拟已消费完的空闲态）。
+    agent.inbox.splice('next-turn', 0, agent.inbox.nextTurn.length, []);
+    // 队列空：completed → 回调。
+    kernel.emitSessionEvent(sessionId, { seq: 1, type: 'turn/end', data: { reason: { kind: 'completed' } } });
+    expect(idles).toEqual([sessionId]);
+    // 队列非空（排队续跑中）：completed → 不回调。
+    agent.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '排队中' }] }));
+    kernel.emitSessionEvent(sessionId, { seq: 2, type: 'turn/end', data: { reason: { kind: 'completed' } } });
+    expect(idles).toEqual([sessionId]);
+    void sessions;
+  });
+
   it('不在册：队列操作抛错（调用方引导重开对话）', async () => {
     expect(() => sessions.queueView('nope')).toThrow('not found');
     expect(() => sessions.queueFreeze('nope', 'x')).toThrow('not found');

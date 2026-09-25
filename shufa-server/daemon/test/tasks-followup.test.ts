@@ -14,7 +14,7 @@ import { createServices, TEST_SECRET, type TestServices } from './helpers.js';
 import { clientFor } from './helpers.js';
 import { TaskService } from '../src/tasks/service.js';
 import type { TaskSessions } from '../src/kernel/sessions.js';
-import { createResource, createTask, updateTask, type TaskRow } from '../src/db/tasks.js';
+import { createResource, createTask, getTaskById, updateTask, type TaskRow } from '../src/db/tasks.js';
 import { BlobStore } from '../src/db/blobs.js';
 import { KbStore } from '../src/kb/store.js';
 import { createUser } from '../src/db/store.js';
@@ -191,6 +191,20 @@ describe('TaskService.followup', () => {
     // 终态取消的任务不可 stop。
     // stop 是同步方法：作为 expect 参数求值时同步抛出，用 toThrow 断言。
     expect(() => service.stop(bob, mk(bob.id, 'sess-c', 'cancelled'))).toThrow('已取消的任务不可操作');
+  });
+
+  it('W10f markSessionIdle：running → done + status 帧；done 幂等不覆盖', async () => {
+    const video = createResource(env.db, { ownerId: alice.id, parentId: null, name: 'v.mp4', isDir: false });
+    const task = createTask(env.db, { ownerId: alice.id, resourceId: null, videoResourceId: video.id, prompt: 'p' });
+    updateTask(env.db, task.id, { agentSessionId: 'sess-idle', status: 'running' });
+    sessions.raw.emit.mockClear?.();
+    service.markSessionIdle('sess-idle');
+    const row = getTaskById(env.db, task.id)!;
+    expect(row?.status).toBe('done');
+    // 幂等：已 done 不再 emit。
+    const emitCount = sessions.raw.emit.mock.calls.length;
+    service.markSessionIdle('sess-idle');
+    expect(sessions.raw.emit.mock.calls.length).toBe(emitCount);
   });
 
   it('W10 followup mode=steer：改走 sessions.steer 通道', async () => {

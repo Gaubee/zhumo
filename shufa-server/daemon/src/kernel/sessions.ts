@@ -103,6 +103,10 @@ export interface TaskSessionDeps {
   retention?: number;
   /** agent turn 以 error 终止时的失败回调（W7 联调：任务失败路径不悬挂）。 */
   onSessionFailure?: (sessionId: string, reason: string) => void;
+  /** agent turn 以 completed 终止且队列无待投消息（W10f：agent 已空闲等待
+   * 输入——任务行回 done，「分析中」指示器不再在轮间空转）。队列非空时内核
+   * 自动续跑下一轮，不回调。 */
+  onSessionIdle?: (sessionId: string) => void;
   /** 内核 session/title 帧回调（2026-09-25 三轮：标题落任务行）。 */
   onSessionTitle?: (sessionId: string, title: string) => void;
 }
@@ -216,6 +220,8 @@ class DemoAgent implements AgentLike {
   };
   /** 帧产出回调（makeEntry 后接 commitFrames）。 */
   onFrames: ((frames: Frame[]) => void) | null = null;
+  /** 队列消费至空（W10f：任务回 done 的 demo 侧同语义）。 */
+  onIdle: (() => void) | null = null;
   /** makeEntry 的 registerPanelAnswerer 会挂审批监听——demo 无审批，no-op 订阅。 */
   ctx = { on: (): (() => void) => () => {} };
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -268,6 +274,7 @@ class DemoAgent implements AgentLike {
     const head = this.inbox.nextTurn.shift();
     if (head === undefined) {
       this.status = 'idle';
+      this.onIdle?.();
       return;
     }
     const text = inboxMessageText(head);
@@ -282,7 +289,8 @@ class DemoAgent implements AgentLike {
       { at: Date.now(), seq: 0, kind: 'turn-end', text: 'completed' },
     ];
     this.onFrames?.(frames);
-    this.schedule();
+    if (this.inbox.nextTurn.length === 0 && this.inbox.nextStep.length === 0) this.onIdle?.();
+    else this.schedule();
   }
 
   disposeOf(): void {
@@ -360,6 +368,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       entry.frameSeq += dated.length;
       commitFrames(entry, dated);
     };
+    agent.onIdle = () => deps.onSessionIdle?.(sessionId);
   }
 
   /** `$name` 交付：命中 user-invocable 技能 → 官方双消息注入；否则原样回落。 */
@@ -433,6 +442,18 @@ export function createTaskSessions(deps: TaskSessionDeps) {
                 : error.message
               : checked.data.reason.kind;
           deps.onSessionFailure?.(session.id, detail);
+        } else if (checked.data?.reason?.kind === 'completed') {
+          // W10f：轮完成且无待投消息（inbox 双桶皆空）= agent 空闲等待输入。
+          // 任务行回 done——「分析中」指示器不在轮间空闲期空转；排队消息存在
+          // 时内核自动续跑下一轮，保持 running。
+          const entry = live.get(session.id);
+          if (
+            entry !== undefined &&
+            entry.agent.inbox.nextTurn.length === 0 &&
+            entry.agent.inbox.nextStep.length === 0
+          ) {
+            deps.onSessionIdle?.(session.id);
+          }
         }
       }
       if (event.type === 'assistant/chunk') {

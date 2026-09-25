@@ -326,6 +326,20 @@ export class TaskService {
     this.emitStatus(sessionId, row.id, 'failed', reason);
   }
 
+  /**
+   * agent 轮完成且队列无待投消息（W10f）：任务行回 done——agent 已空闲等待
+   * 输入，「分析中」指示器不在轮间空闲期空转。done 任务可续聊（followup
+   * resume 路径已有）。仅 running/queued 收敛（终态不覆盖）；幂等。
+   */
+  markSessionIdle(sessionId: string): void {
+    const row = this.deps.db
+      .prepare('SELECT * FROM tasks WHERE agent_session_id = ?')
+      .get(sessionId) as TaskRow | undefined;
+    if (!row || (row.status !== 'running' && row.status !== 'queued')) return;
+    updateTask(this.deps.db, row.id, { status: 'done', error: null });
+    this.emitStatus(sessionId, row.id, 'done');
+  }
+
   /** 会话标题回写（内核 session/title 帧到达；无匹配行静默幂等）。 */
   applySessionTitle(sessionId: string, title: string): void {
     updateTaskTitleBySession(this.deps.db, sessionId, title);
