@@ -119,6 +119,15 @@
   line-height: 19px;
 }
 
+/* markstream 组件根自带 font: 400 16px/1.72（简写声明，元素自身规则压过
+   父容器继承——.msg-body 的 12px 因此从未生效，Owner 实测「正文过大」根因）。
+   特异性 .msg-body .markstream-svelte 覆盖之，字体族继承产品全局。 */
+.msg-body .markstream-svelte {
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 19px;
+}
+
 /* markstream 的 h1-h4 按 rem 放大（18-25px）在对话流里突兀——压回正文
    体系（h1 14 / h2 13 / h3 12.5 / h4 12；代码块 11px mono）。 */
 .msg-body :is(h1, h2, h3, h4) {
