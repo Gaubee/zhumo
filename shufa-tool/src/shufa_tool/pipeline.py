@@ -18,7 +18,7 @@ PNG（掩码/裁剪图）或可精确重建的确定性重算（帧读取/对齐
               最终 page_bg.png）
   ink         动态墨迹/旁注簇与时间线 + 焦点格（crops/anno_mask_*.png）
   clip        格字/旁注/焦点裁剪 + 回放剪辑（crops/*.png、focus_clip.mp4）
-  transcribe  音轨转录（audio.wav，mlx-whisper 可选）
+  transcribe  音轨转录（audio.wav，平台最优引擎可选：mac=mlx / win,linux=faster）
   export      汇总导出分析包（bundle/data.json + assets/）
 """
 

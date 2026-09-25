@@ -21,7 +21,12 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { WizardKind, WizardStep } from '@zhumo/contracts';
-import { WHISPER_MODEL_CATALOG, WHISPER_MIRRORS } from '@zhumo/contracts';
+import {
+  WHISPER_MIRRORS,
+  WHISPER_MODEL_CATALOG,
+  whisperModelIdFromRepo,
+  whisperRepoFor,
+} from '@zhumo/contracts';
 import { saveEnvValues } from './config.js';
 import type { SqliteDb } from './db/database.js';
 import {
@@ -130,13 +135,24 @@ export const WHISPER_STEP_ID = 'whisper-model';
 
 /**
  * 首发步骤清单（§1；走查修订 2026-09-22；2026-09-23 dsh 步骤退役；走查四轮
- * 2026-09-25：whisper 步骤改为预热管线真消费的 mlx-community 模型，且仅
- * darwin/arm64 出现——mlx-whisper 无 Intel/Windows/Linux 构建，其他平台管线
- * 本就降级跳过转录，展示一个永远跑不了的步骤是误导）；Owner 需求 2026-09-25
- * （git 检测步骤：知识库修订历史的依赖）。安装类命令为常见环境
- * 默认值，存量库可经种子迁移获得修订（不在册行删除）。三平台差异只在命令层：
- * darwin=brew、win32=winget、linux=apt-get；probe 均为跨平台命令。
+ * 2026-09-25：whisper 步骤改为预热管线真消费的模型；W9 2026-09-27 平台最优
+ * 引擎——darwin/arm64 = mlx-whisper、win32/linux = faster-whisper
+ * （CTranslate2），whisper 步骤恢复全平台（Intel mac 除外：mlx 无 x64 构建、
+ * Owner 裁决 macOS 保留现行为即无转录）。Owner 需求 2026-09-25（git 检测
+ * 步骤：知识库修订历史的依赖）。安装类命令为常见环境默认值，存量库可经种子
+ * 迁移获得修订（不在册行删除）。三平台差异只在命令层：darwin=brew、
+ * win32=winget、linux=apt-get；probe 均为跨平台命令。
  */
+
+/** 平台最优转录引擎（W9）：darwin/arm64=mlx；win32/linux=faster；Intel mac 无。 */
+export function whisperEngineFor(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): 'mlx' | 'faster' | null {
+  if (platform === 'darwin') return arch === 'arm64' ? 'mlx' : null;
+  return 'faster';
+}
+
 export function defaultWizardSeeds(
   ctx: WizardContext,
   platform: NodeJS.Platform = process.platform,
@@ -151,11 +167,15 @@ export function defaultWizardSeeds(
   // python-env 探测（四轮实证修正）：`uv --version` 只证明 uv 在，不证明 venv
   // 就绪——全新克隆上 sniff 误报「已安装」，whisper 预热直接炸「huggingface_hub
   // 未安装」。改验 venv 真实内容（--no-sync 不触发隐式安装，缺则快速失败）；
-  // transcribe 相关 import 只在 mlx 平台要求（extra 在其他平台是空集）。
+  // transcribe import 按引擎族（W9）：mlx 平台验 mlx_whisper、faster 平台验
+  // faster_whisper；Intel mac 引擎缺失，只验基础管线依赖。
+  const whisperEngine = whisperEngineFor(platform, arch);
   const pyProbeImports =
-    platform === 'darwin' && arch === 'arm64'
+    whisperEngine === 'mlx'
       ? 'import cv2, numpy, huggingface_hub, mlx_whisper'
-      : 'import cv2, numpy';
+      : whisperEngine === 'faster'
+        ? 'import cv2, numpy, huggingface_hub, faster_whisper'
+        : 'import cv2, numpy';
   // git 检测步骤（Owner 需求 2026-09-25）：知识库（<DATA_ROOT>/knowledge）以 git
   // 做修订历史，缺失不阻塞——读写照常、历史面降级（admin.kb.revisions
   // available:false）。与 ffmpeg 不同，这里不代跑安装命令：git 无固定二进制路径
@@ -205,15 +225,16 @@ export function defaultWizardSeeds(
       targetDir: '系统 PATH',
     },
   ];
-  // whisper 预热步骤（四轮）：默认官方源 + large-v3-turbo（与 audio.py 缺省一致）。
+  // whisper 预热步骤（四轮；W9 全平台恢复）：默认官方源 + large-v3-turbo
+  // （与 audio.py 缺省一致），repo 按引擎族（mlx-community / Systran）。
   const defaultModel = WHISPER_MODEL_CATALOG.find((m) => m.id === 'whisper-large-v3-turbo');
-  if (defaultModel && platform === 'darwin' && arch === 'arm64') {
+  if (defaultModel && whisperEngine) {
     steps.push({
       id: WHISPER_STEP_ID,
       kind: 'download',
-      title: 'whisper 转写模型（mlx · 可选型号 + 镜像源）',
+      title: `whisper 转写模型（${whisperEngine === 'mlx' ? 'mlx' : 'faster-whisper'} · 可选型号 + 镜像源）`,
       command: null,
-      url: `${WHISPER_MIRRORS[0].base}/${defaultModel.repo}`,
+      url: `${WHISPER_MIRRORS[0].base}/${whisperRepoFor(defaultModel.id, whisperEngine)}`,
       targetDir: hfHubDir(),
     });
   }
@@ -756,11 +777,11 @@ export function downloadTargetPath(url: string, targetDir: string): string | nul
   }
 }
 
-/** 从行 url（模型页）反推 whisper 型号（识别不出回退 null）。 */
+/** 从行 url（模型页）反推 whisper 型号（mlx/faster 两族仓库都认；识别不出 null）。 */
 function whisperModelIdFromUrl(url: string | null): string | null {
   const repo = whisperRepoFromUrl(url);
   if (!repo) return null;
-  return WHISPER_MODEL_CATALOG.find((m) => m.repo === repo)?.id ?? null;
+  return whisperModelIdFromRepo(repo);
 }
 
 /** 从行 url 前缀反推镜像源（识别不出回退 null → 调用方取 official）。 */
@@ -770,40 +791,52 @@ function whisperMirrorIdFromUrl(url: string | null): 'official' | 'cn' | null {
   return mirror?.id ?? null;
 }
 
+/** 运行时引擎（单值）：darwin=mlx（含 Intel mac——只解析行上既有 url，不决定
+ * 能否转录）、其余 faster。seeds 展示用带 arch 的 whisperEngineFor，这里的
+ * 消费方全是已落库行的 url 解析，与 arch 无关。 */
+function runtimeWhisperEngine(): 'mlx' | 'faster' {
+  return process.platform === 'darwin' ? 'mlx' : 'faster';
+}
+
 /**
- * whisper 模型页 URL 组装（走查四轮）：`${mirror.base}/${repo}`——base 即
- * HF_ENDPOINT（official=https://huggingface.co，cn=https://hf-mirror.com）。
+ * whisper 模型页 URL 组装（走查四轮；W9 引擎族）：`${mirror.base}/${repo}`——
+ * base 即 HF_ENDPOINT（official=https://huggingface.co，cn=https://hf-mirror.com）。
  * params 只给一半时，另一半从行上既有 url 反推（换型号不动镜像、换镜像不动
  * 型号）；行上无痕迹回退 large-v3-turbo / official（与 audio.py 缺省一致）。
+ * repo 取 engine 族（mlx=mlx-community/*，faster=Systran/faster-whisper-*）。
  * 未知型号抛错（由 run() 的 failed 路径或调用方直接感知）。
  */
 export function resolveWhisperUrl(
   rowUrl: string | null,
   params: { model?: string; mirror?: 'official' | 'cn' },
+  engine: 'mlx' | 'faster' = runtimeWhisperEngine(),
 ): string {
   const modelId = params.model ?? whisperModelIdFromUrl(rowUrl) ?? 'whisper-large-v3-turbo';
-  const model = WHISPER_MODEL_CATALOG.find((m) => m.id === modelId);
-  if (!model) {
+  const repo = whisperRepoFor(modelId, engine);
+  if (!repo) {
     throw new Error(
       `未知的 whisper 模型型号：${modelId}（可选：${WHISPER_MODEL_CATALOG.map((m) => m.id).join('、')}）`,
     );
   }
   const mirrorId = params.mirror ?? whisperMirrorIdFromUrl(rowUrl) ?? 'official';
   const mirror = WHISPER_MIRRORS.find((m) => m.id === mirrorId) ?? WHISPER_MIRRORS[0];
-  return `${mirror.base}/${model.repo}`;
+  return `${mirror.base}/${repo}`;
 }
 
 /** 行 url → { repo, endpoint, mirrorId }（warm runner 的完整入参组）。 */
-export function whisperRunArgsFromUrl(rowUrl: string | null): {
+export function whisperRunArgsFromUrl(
+  rowUrl: string | null,
+  engine: 'mlx' | 'faster' = runtimeWhisperEngine(),
+): {
   repo: string;
   endpoint: string;
   mirrorId: 'official' | 'cn';
 } {
   const modelId = whisperModelIdFromUrl(rowUrl) ?? 'whisper-large-v3-turbo';
-  const model = WHISPER_MODEL_CATALOG.find((m) => m.id === modelId)!;
+  const repo = whisperRepoFor(modelId, engine)!;
   const mirrorId = whisperMirrorIdFromUrl(rowUrl) ?? 'official';
   const mirror = WHISPER_MIRRORS.find((m) => m.id === mirrorId) ?? WHISPER_MIRRORS[0];
-  return { repo: model.repo, endpoint: mirror.base, mirrorId };
+  return { repo, endpoint: mirror.base, mirrorId };
 }
 
 /** Content-Range 解析（`bytes N-M/total`）；非标准格式返回 null。 */

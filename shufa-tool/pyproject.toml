@@ -16,9 +16,14 @@ dependencies = [
     "numpy>=1.26",
 ]
 [project.optional-dependencies]
+# W9（2026-09-27）平台最优转录引擎：mac=mlx-whisper（arm64 构建）、
+# win/linux=faster-whisper（CTranslate2，自带 ctranslate2/huggingface_hub/
+# onnxruntime 轮子，无编译链）。httpx[socks] 供 warm_whisper 元数据请求在
+# SOCKS 代理网络可用，全平台随 extra 安装。
 transcribe = [
     "mlx-whisper>=0.4; sys_platform == 'darwin' and platform_machine == 'arm64'",
-    "httpx[socks]>=0.27; sys_platform == 'darwin'",  # huggingface_hub 下载经 SOCKS 代理时必需
+    "faster-whisper>=1.1; sys_platform == 'win32' or sys_platform == 'linux'",
+    "httpx[socks]>=0.27",
 ]
 [project.scripts]
 shufa-analyze = "shufa_tool.cli:main"

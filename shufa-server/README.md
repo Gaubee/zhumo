@@ -19,7 +19,7 @@
 ```bash
 # 1) 安装依赖
 pnpm install                       # daemon + webui
-cd ../shufa-tool && uv sync        # 分析管线（含转录 extra）
+cd ../shufa-tool && uv sync --extra transcribe   # 分析管线（转录引擎按平台：mac=mlx / win,linux=faster-whisper）
 
 # 2) 配置（可选：首次启动会进入安装向导，逐步引导）
 cp .env.example .env               # 按需修改；敏感信息不进 git
@@ -147,11 +147,16 @@ pnpm --filter @zhumo/daemon start   # 默认 http://127.0.0.1:8217
 - **防火墙弹窗**：首次启动若 Windows 防火墙弹「允许访问」，本产品默认只绑
   `127.0.0.1`，拒绝弹窗亦不影响本机使用；需要局域网访问时放行并把 `.env` 的
   `HOST` 改为 `0.0.0.0`（自行评估暴露面）。
-- **转录（whisper）不可用**：shufa-tool 的 transcribe extra 依赖 mlx-whisper，
-  仅 macOS/arm64 生效；Windows 上转录步骤按「无环境自动跳过」语义跳过，其余
-  九步分析照常（结果页字幕/逐字/旁注关联区将为空数据）。
-- **向导准备步骤的 Windows 命令分支**：种子命令目前是 brew/apt-get 口径，
-  winget 分支在适配中；Windows 下以手工安装 + 嗅探跳过为准。
+- **转录（whisper）跨平台（W9，2026-09-27）**：转录引擎按平台选最优——
+  macOS/arm64 = mlx-whisper、Windows/Linux = faster-whisper（CTranslate2；
+  纯 CPU 自动 int8，有 CUDA 自动 float16，`uv sync --extra transcribe` 即装，
+  全轮子无编译链）。安装向导的 whisper 步骤在这两类平台都会出现，模型按引擎族
+  预热（`mlx-community/whisper-*` / `Systran/faster-whisper-*`，镜像与断点
+  续传机制共用）。仅 Intel macOS 无转录（mlx 无 x64 构建，维持降级跳过语义，
+  其余九步分析照常）。
+- **向导准备步骤的 Windows 命令分支**：三平台种子命令已分支（brew/winget/
+  apt-get）；winget 安装后 daemon 嗅探前会重读注册表刷新 PATH 快照
+  （2026-09-25），新装依赖无需重启 daemon。
 - **信号退出**：Windows 无 SIGTERM，标准退出方式是终端 `Ctrl+C`（SIGINT），
   优雅停机（会话回收 + 内核 dispose + 关库）逻辑不变。
 - dsh 内核以 SDK 进程内嵌（非外部可执行文件），`DSH_HOME` 注入的是 Windows

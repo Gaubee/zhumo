@@ -18,6 +18,7 @@ import {
   resolveWhisperUrl,
   whisperCachePartial,
   whisperCacheReady,
+  whisperRunArgsFromUrl,
   WizardRunner,
 } from '../src/wizard.js';
 import { createServices } from './helpers.js';
@@ -456,25 +457,44 @@ describe('wizard 种子定义（走查 R3/R4/R5/R6）', () => {
     }
   });
 
-  test('四轮：whisper 仅 darwin/arm64；默认 = 官方源 large-v3-turbo 模型页；python-env 带 transcribe extra', () => {
+  test('W9：whisper 平台最优引擎——darwin/arm64=mlx、win32/linux=faster、Intel mac 不展示；默认 = 官方源 large-v3-turbo 模型页', () => {
     const seeds = defaultWizardSeeds(ctx, 'darwin', 'arm64');
     const whisper = seeds.find((s) => s.id === 'whisper-model')!;
     const model = WHISPER_MODEL_CATALOG.find((m) => m.id === 'whisper-large-v3-turbo')!;
     expect(whisper.url).toBe(`${WHISPER_MIRRORS[0].base}/${model.repo}`);
     expect(whisper.title).toBe('whisper 转写模型（mlx · 可选型号 + 镜像源）');
     expect(whisper.targetDir).toBe(hfHubDir());
-    // mlx-whisper 无 Intel/Windows/Linux 构建：其他平台不展示该步骤。
+    // W9：win/linux 恢复 whisper 步骤，repo 换 Systran/faster-whisper-* 族
+    //（CTranslate2 权重，与 mlx 档位一一对应）；title 标注 faster-whisper。
+    for (const platform of ['win32', 'linux'] as const) {
+      const w = defaultWizardSeeds(ctx, platform, 'x64').find((s) => s.id === 'whisper-model')!;
+      expect(w.url).toBe(`${WHISPER_MIRRORS[0].base}/Systran/faster-whisper-large-v3-turbo`);
+      expect(w.title).toBe('whisper 转写模型（faster-whisper · 可选型号 + 镜像源）');
+    }
+    expect(defaultWizardSeeds(ctx, 'linux', 'arm64').find((s) => s.id === 'whisper-model')?.url).toContain(
+      'Systran/faster-whisper-large-v3-turbo',
+    );
+    // Intel mac 维持 W9 前行为：mlx 无 x64 构建、Owner 裁决 macOS 保留现行为
+    //（无转录，不展示永远跑不了的步骤）。
     expect(defaultWizardSeeds(ctx, 'darwin', 'x64').find((s) => s.id === 'whisper-model')).toBeUndefined();
-    expect(defaultWizardSeeds(ctx, 'linux', 'arm64').find((s) => s.id === 'whisper-model')).toBeUndefined();
-    expect(defaultWizardSeeds(ctx, 'win32', 'arm64').find((s) => s.id === 'whisper-model')).toBeUndefined();
     // --extra transcribe：基础 sync 不含可选依赖（反而卸掉 mlx-whisper/torch）。
     expect(seeds.find((s) => s.id === 'python-env')?.command).toContain('--extra transcribe');
-    // 探测验 venv 内容而非 uv 存在性（--no-sync 快速失败），mlx 平台含 transcribe imports。
+    // 探测验 venv 内容而非 uv 存在性（--no-sync 快速失败），import 按引擎族。
     const probe = seeds.find((s) => s.id === 'python-env')?.probe ?? '';
     expect(probe).toContain('--no-sync');
     expect(probe).toContain('huggingface_hub');
     expect(probe).toContain('mlx_whisper');
-    expect(defaultWizardSeeds(ctx, 'linux', 'arm64').find((s) => s.id === 'python-env')?.probe ?? '').not.toContain('mlx_whisper');
+    const fasterProbe = defaultWizardSeeds(ctx, 'win32', 'x64').find((s) => s.id === 'python-env')?.probe ?? '';
+    expect(fasterProbe).toContain('--no-sync');
+    expect(fasterProbe).toContain('huggingface_hub');
+    expect(fasterProbe).toContain('faster_whisper');
+    expect(defaultWizardSeeds(ctx, 'linux', 'x64').find((s) => s.id === 'python-env')?.probe ?? '').toContain(
+      'faster_whisper',
+    );
+    // Intel mac 引擎缺失：只验基础管线依赖。
+    expect(defaultWizardSeeds(ctx, 'darwin', 'x64').find((s) => s.id === 'python-env')?.probe ?? '').not.toContain(
+      'whisper',
+    );
   });
 });
 
@@ -494,6 +514,36 @@ describe('wizard whisper 参数化（走查 R6）', () => {
     expect(resolveWhisperUrl(`${officialBase}/mlx-community/whisper-base`, { mirror: 'cn' })).toBe(
       `${cnBase}/mlx-community/whisper-base`,
     );
+  });
+
+  test('resolveWhisperUrl / whisperRunArgsFromUrl（W9）：engine=faster 映射 Systran 族；两族 repo 都能反推型号', () => {
+    // 缺省（无行痕迹）faster 引擎 → Systran/faster-whisper-large-v3-turbo。
+    expect(resolveWhisperUrl(null, {}, 'faster')).toBe(
+      `${officialBase}/Systran/faster-whisper-large-v3-turbo`,
+    );
+    // large-v3-2023 在 Systran 侧仓库名无年份后缀（初版 large-v3）。
+    expect(resolveWhisperUrl(null, { model: 'whisper-large-v3-2023' }, 'faster')).toBe(
+      `${officialBase}/Systran/faster-whisper-large-v3`,
+    );
+    expect(resolveWhisperUrl(null, { model: 'whisper-tiny', mirror: 'cn' }, 'faster')).toBe(
+      `${cnBase}/Systran/faster-whisper-tiny`,
+    );
+    // 行上 faster url 反推：换镜像不动型号（engine 内一致）、跨引擎换型号也成立。
+    expect(resolveWhisperUrl(`${cnBase}/Systran/faster-whisper-small`, { mirror: 'official' }, 'faster')).toBe(
+      `${officialBase}/Systran/faster-whisper-small`,
+    );
+    // warm runner 入参组：repo 是引擎族全名、endpoint=镜像 base。
+    expect(whisperRunArgsFromUrl(`${cnBase}/Systran/faster-whisper-base`, 'faster')).toEqual({
+      repo: 'Systran/faster-whisper-base',
+      endpoint: cnBase,
+      mirrorId: 'cn',
+    });
+    // mlx 引擎显式传参仍解析 mlx 族（回归）。
+    expect(whisperRunArgsFromUrl(`${cnBase}/Systran/faster-whisper-base`, 'mlx')).toEqual({
+      repo: 'mlx-community/whisper-base',
+      endpoint: cnBase,
+      mirrorId: 'cn',
+    });
   });
 
   test('run（四轮）：模型页持久化回行；嗅探按 HF 缓存；选型回写 .env SHUFA_WHISPER_REPO', async () => {

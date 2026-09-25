@@ -38,7 +38,7 @@
   import { Switch } from "$lib/components/ui/switch";
   import IconPlay from "@lucide/svelte/icons/play";
   import IconSquare from "@lucide/svelte/icons/square";
-  import { WHISPER_MIRRORS, WHISPER_MODEL_CATALOG } from "@zhumo/contracts";
+  import { WHISPER_MIRRORS, WHISPER_MODEL_CATALOG, whisperRepoFor } from "@zhumo/contracts";
   import type { WhisperMirrorId, WhisperModelOption, WizardRunParams, WizardStep } from "$lib/types";
 
   let {
@@ -91,15 +91,25 @@
   });
 
   /**
+   * 当前站点的 whisper 引擎族（W9：mac=mlx-community、win/linux=Systran）——
+   * 从行上种子 url 反推（url 由 daemon 按平台落库，是站点事实），不猜 UA。
+   */
+  const whisperEngine = $derived.by(() => {
+    const row = steps.find((s) => s.id === "whisper-model");
+    return row?.url?.includes("/Systran/") ? "faster" : "mlx";
+  });
+
+  /**
    * BUG3：whisper 选中模型/镜像组合的预测来源 URL（客户端合成，仅作显示，
-   * 选中立即更新；真正的持久化在点击下载时由后端写）。
+   * 选中立即更新；真正的持久化在点击下载时由后端写）。repo 按引擎族映射
+   * （whisperRepoFor，与 daemon resolveWhisperUrl 同一规则）。
    */
   const whisperPredictedUrl = $derived.by(() => {
     const mirror = WHISPER_MIRRORS.find((candidate) => candidate.id === whisperMirror);
-    const model = WHISPER_MODEL_CATALOG.find((candidate) => candidate.id === whisperModel);
-    if (mirror === undefined || model === undefined) return "";
+    const repo = whisperRepoFor(whisperModel, whisperEngine);
+    if (mirror === undefined || repo === undefined) return "";
     // 四轮：来源 = 模型页（${mirror.base}/${repo}）；下载走 HF_ENDPOINT + HF 标准缓存。
-    return `${mirror.base}/${model.repo}`;
+    return `${mirror.base}/${repo}`;
   });
 
   /**

@@ -47,10 +47,14 @@ export const BootstrapOutputSchema = z.object({
 export type BootstrapOutput = z.infer<typeof BootstrapOutputSchema>;
 
 /**
- * whisper 转写模型目录（走查四轮，2026-09-25）：管线真消费方是 mlx-whisper
- * （audio.transcribe → HF 仓库 mlx-community/whisper-*，落 HF 标准缓存
- * ~/.cache/huggingface/hub，与 transformers 等生态共享）。此前向导下载的
- * whisper.cpp ggml 文件无任何消费方，已退役。体积为 fp16 权重近似值。
+ * whisper 转写模型目录（走查四轮，2026-09-25）：管线真消费方是转录引擎
+ * （audio.transcribe → HF 仓库，落 HF 标准缓存 ~/.cache/huggingface/hub，
+ * 与 transformers 等生态共享）。此前向导下载的 whisper.cpp ggml 文件无任何
+ * 消费方，已退役。体积为 fp16 权重近似值。
+ *
+ * W9（2026-09-27）平台最优引擎：repo 字段是 darwin/arm64（mlx-whisper）一族；
+ * win/linux（faster-whisper / CTranslate2）经 WHISPER_FASTER_REPO_MAP 映射到
+ * Systran/faster-whisper-* 同档位仓库，型号档位 id 两平台共用。
  */
 export const WHISPER_MODEL_CATALOG = [
   { id: 'whisper-tiny', repo: 'mlx-community/whisper-tiny', sizeMb: 65, memoryHint: '约 0.3GB 内存 · 最快' },
@@ -59,6 +63,30 @@ export const WHISPER_MODEL_CATALOG = [
   { id: 'whisper-large-v3-turbo', repo: 'mlx-community/whisper-large-v3-turbo', sizeMb: 1620, memoryHint: '约 2.4GB 内存 · 默认推荐' },
   { id: 'whisper-large-v3-2023', repo: 'mlx-community/whisper-large-v3-2023', sizeMb: 3090, memoryHint: '约 4.5GB 内存 · 效果最好' },
 ] as const;
+
+/** faster-whisper（win/linux）档位 → Systran 仓库。CTranslate2 权重与 mlx 档位
+ * 一一对应；large-v3-2023 在 Systran 侧的仓库名无年份后缀（即初版 large-v3）。 */
+export const WHISPER_FASTER_REPO_MAP: Readonly<Record<string, string>> = {
+  'whisper-tiny': 'Systran/faster-whisper-tiny',
+  'whisper-base': 'Systran/faster-whisper-base',
+  'whisper-small': 'Systran/faster-whisper-small',
+  'whisper-large-v3-turbo': 'Systran/faster-whisper-large-v3-turbo',
+  'whisper-large-v3-2023': 'Systran/faster-whisper-large-v3',
+};
+
+/** 型号 id → 引擎族仓库全名；未知型号返回 undefined（调用方报可选列表）。 */
+export function whisperRepoFor(modelId: string, engine: 'mlx' | 'faster'): string | undefined {
+  return engine === 'mlx'
+    ? WHISPER_MODEL_CATALOG.find((m) => m.id === modelId)?.repo
+    : WHISPER_FASTER_REPO_MAP[modelId];
+}
+
+/** 仓库全名 → 型号 id（mlx/faster 两族都认；识别不出 null）。 */
+export function whisperModelIdFromRepo(repo: string): string | null {
+  const mlx = WHISPER_MODEL_CATALOG.find((m) => m.repo === repo)?.id;
+  if (mlx) return mlx;
+  return Object.keys(WHISPER_FASTER_REPO_MAP).find((k) => WHISPER_FASTER_REPO_MAP[k] === repo) ?? null;
+}
 
 /** whisper 镜像源（走查四轮）：base = HF_ENDPOINT 值，亦是模型页 URL 前缀
  * （HF_ENDPOINT 是 huggingface_hub 官方文档的镜像机制）。 */
@@ -95,7 +123,7 @@ export const WizardRunInputSchema = z.object({
   /** 强制执行：嗅探跳过与「已完成」都重跑；download 步骤强制=覆盖下载
    * （丢弃 .download 残差从头下载，走查 2026-09-24 · 三轮）。 */
   force: z.boolean().default(false),
-  /** download 参数化（whisper-model）：模型型号（WHISPER_MODEL_CATALOG.id → mlx 仓库），缺省保持行上既有。 */
+  /** download 参数化（whisper-model）：模型型号（WHISPER_MODEL_CATALOG.id → 当前引擎族仓库），缺省保持行上既有。 */
   model: z.string().optional(),
   /** download 参数化（whisper-model）：镜像源，缺省保持行上既有。 */
   mirror: z.enum(['official', 'cn']).optional(),
