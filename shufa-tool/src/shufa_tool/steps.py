@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -37,6 +38,22 @@ from . import pipeline
 
 class StepError(Exception):
     """步骤级失败（中文消息，直接面向 agent）。"""
+
+
+def require_ffmpeg_tools() -> None:
+    """ffmpeg/ffprobe 可用性预检（入口步骤调用）。
+
+    Windows 实证 2026-09-25：daemon 从旧终端继承的 PATH 不含 winget 装的
+    ffmpeg，probe 的 subprocess 裸抛 FileNotFoundError [WinError 2]，与
+    「视频不存在」不可区分，agent 误判成路径问题空烧 12 分钟。预检把这类
+    环境问题在入口翻译成可操作错误（指向向导步骤，装完重试即可自愈）。
+    """
+    missing = [t for t in ("ffprobe", "ffmpeg") if shutil.which(t) is None]
+    if missing:
+        raise StepError(
+            f"{','.join(missing)} 不在 PATH——ffmpeg 未安装或本进程未继承其路径。"
+            "请到后台「设置 → 准备步骤」完成 ffmpeg 安装；装完无需重启，直接重试本步骤。"
+        )
 
 
 # ------------------------------------------------------------ manifest --
@@ -87,6 +104,7 @@ def _check_video(args_video: Path, m: dict) -> Path:
 # --------------------------------------------------------------- commands --
 
 def cmd_probe(args: argparse.Namespace) -> dict:
+    require_ffmpeg_tools()
     video = Path(args.video).resolve()
     if not video.exists():
         raise StepError(f"视频不存在：{video}")
@@ -482,6 +500,22 @@ def main(argv: list[str] | None = None) -> None:
     except StepError as e:
         print(f"错误：{e}", file=sys.stderr)
         print(json.dumps({"step": args.command, "error": str(e)}, ensure_ascii=False))
+        raise SystemExit(1) from None
+    except FileNotFoundError as e:
+        # WinError 2 双关（输入文件缺失 vs 可执行文件不在 PATH）——点名缺失对象，
+        # 别让裸异常把 agent 引去猜视频路径（2026-09-25 实证教训）。后置步骤
+        # （clip/transcribe 的 ffmpeg 子进程）仍可能走到这里。
+        target = e.filename if e.filename else ""
+        is_win2 = (getattr(e, "winerror", None) or getattr(e, "errno", None)) == 2
+        if target in ("ffprobe", "ffmpeg") or (is_win2 and not target):
+            # spawn 失败且无文件名 = 可执行文件解析失败（Windows 实证 filename=None）
+            hint = ("ffmpeg/ffprobe 未安装或不在 PATH，请到后台「设置 → 准备步骤」"
+                    "完成安装后重试（装完无需重启，直接重试本步骤）")
+        else:
+            hint = f"路径不存在：{target or '未知对象'}"
+        msg = f"依赖缺失：{hint}"
+        print(f"错误：{type(e).__name__}: {msg}", file=sys.stderr)
+        print(json.dumps({"step": args.command, "error": msg}, ensure_ascii=False))
         raise SystemExit(1) from None
     except Exception as e:  # ffmpeg/ffprobe/cv2 等底层失败也保证 stdout JSON 契约
         print(f"错误：{type(e).__name__}: {e}", file=sys.stderr)

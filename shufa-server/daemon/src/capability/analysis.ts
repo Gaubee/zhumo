@@ -20,6 +20,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { refreshWindowsPath } from '../win-path-refresh.js';
 import type { CapabilityCallResult, CapabilityDefinition } from './core.js';
 
 /** shell 执行结果（测试注入 mock 的封闭形状）。 */
@@ -173,6 +174,12 @@ export function createAnalysisCapabilities(deps: AnalysisCapabilityDeps): Capabi
     // uv run 自动补装（uv run 只补缺不卸载，与 uv sync exact 语义不同）。
     // PYTHONUTF8：Windows 控制台 GBK 下统一 python 子进程输出为 UTF-8，
     // 与 daemon 解码一致（管线 stdout 末行 JSON 解析依赖此点）。
+    // PATH 自愈（2026-09-25 实证补全）：daemon 从旧终端继承的 PATH 可能不含
+    // winget 后装的 ffmpeg——refreshWindowsPath 重读注册表合并进 process.env，
+    // 且必须发生在下方 env 展开之前，子进程才能拿到刷新后的快照。0afa879
+    // 当时只接了向导嗅探（runShellCapture），agent 管线漏接导致 probe 的
+    // ffprobe 裸抛 WinError 2。非 win32 no-op。
+    await refreshWindowsPath();
     const command = [
       'uv',
       'run',
