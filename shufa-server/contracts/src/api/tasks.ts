@@ -234,3 +234,12 @@ export const ResultMetaOutputSchema = z.object({
   data: AnalysisDataSchema,
 });
 export type ResultMetaOutput = z.infer<typeof ResultMetaOutputSchema>;
+
+// ------------------------------------------------- 走查演示开关（W10e）
+
+/** 演示延迟设置（Owner 需求：浏览器走查不烧真实 LLM）。webui 从 URL query
+ * `demoDelay=<毫秒>` 读入并调用；daemon 新建/复活的会话改用内置 DemoAgent
+ * （定时消费内存队列、产演示帧），队列/打断/立刻发送/重排全走真实 API 面。 */
+export const DemoSetDelayInputSchema = z.object({ delay_ms: z.number().int().min(0).max(600_000) });
+export type DemoSetDelayInput = z.infer<typeof DemoSetDelayInputSchema>;
+export const DemoSetDelayOutputSchema = z.object({ accepted: z.literal(true) });

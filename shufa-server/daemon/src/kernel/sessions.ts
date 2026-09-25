@@ -167,6 +167,131 @@ function inboxMessageId(message: unknown): string {
   return String((message as { id?: unknown }).id ?? '');
 }
 
+/**
+ * 演示 agent（走查基建，Owner 需求 2026-09-27：「确定可以了再给我」需要不烧
+ * 真实 LLM 的浏览器走查开关）：与内核 agent 同构的最小面（内存 inbox 读写 +
+ * followup/steer/inject/cancel），不调 LLM——followup 入队后按 demoDelayMs
+ * 定时「消费」队头并经 onFrames 产帧（user-text 消费时落 + assistant-text
+ * 演示回复 + turn-end），与真实内核「排队不落 log、开轮才落」语义一致。
+ * 队列数后端管理：走查的队列/打断/立刻发送/重排全走真实 API 面，仅把
+ * LLM 换成定时器。demoDelayMs=0（默认）时永不启用。
+ */
+class DemoAgent implements AgentLike {
+  id: string;
+  status: string = 'idle';
+  session: { id: string; header: { cwd?: string; createdAt?: number | string } };
+  inbox = {
+    nextTurn: [] as unknown[],
+    nextStep: [] as unknown[],
+    remove: (messageId: string): boolean => {
+      const idx = this.inbox.nextTurn.findIndex((m) => inboxMessageId(m) === messageId);
+      if (idx >= 0) {
+        this.inbox.nextTurn.splice(idx, 1);
+        return true;
+      }
+      const s = this.inbox.nextStep.findIndex((m) => inboxMessageId(m) === messageId);
+      if (s >= 0) {
+        this.inbox.nextStep.splice(s, 1);
+        return true;
+      }
+      return false;
+    },
+    replace: (messageId: string, newMessage: unknown): boolean => {
+      const idx = this.inbox.nextTurn.findIndex((m) => inboxMessageId(m) === messageId);
+      if (idx >= 0) {
+        this.inbox.nextTurn[idx] = newMessage;
+        return true;
+      }
+      return false;
+    },
+    splice: (
+      target: 'next-turn' | 'next-step',
+      start: number,
+      deleteCount: number,
+      inserted: unknown[],
+    ): unknown[] => {
+      const list = target === 'next-turn' ? this.inbox.nextTurn : this.inbox.nextStep;
+      return list.splice(start, deleteCount, ...inserted);
+    },
+  };
+  /** 帧产出回调（makeEntry 后接 commitFrames）。 */
+  onFrames: ((frames: Frame[]) => void) | null = null;
+  /** makeEntry 的 registerPanelAnswerer 会挂审批监听——demo 无审批，no-op 订阅。 */
+  ctx = { on: (): (() => void) => () => {} };
+  private timer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(
+    sessionId: string,
+    private demoDelayMs: number,
+  ) {
+    this.id = sessionId;
+    this.session = { id: sessionId, header: { cwd: '/', createdAt: Date.now() } };
+  }
+
+  followup(message: unknown): void {
+    console.log(`[demo] DemoAgent.followup queue=${this.inbox.nextTurn.length + 1}`);
+    this.inbox.nextTurn.push(message);
+    this.schedule();
+  }
+
+  steer(message: unknown): void {
+    this.inbox.nextStep.push(message);
+  }
+
+  inject(message: unknown): void {
+    this.inbox.nextStep.push(message);
+  }
+
+  cancel(_cause: unknown, options?: unknown): void {
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    // keepInbox（打断语义）：排队保留，收敛后自动续跑队头——demo 同构。
+    if ((options as { keepInbox?: boolean } | undefined)?.keepInbox) this.schedule();
+    else this.inbox.nextTurn.length = 0;
+    this.status = 'idle';
+  }
+
+  /** 入队/续跑统一调度：有队头且无在途定时器才起表。 */
+  private schedule(): void {
+    if (this.timer !== null || this.inbox.nextTurn.length === 0) return;
+    this.status = 'running';
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.consumeHead();
+    }, this.demoDelayMs);
+  }
+
+  private consumeHead(): void {
+    console.log(`[demo] consumeHead delay=${this.demoDelayMs} queue=${this.inbox.nextTurn.length}`);
+    const head = this.inbox.nextTurn.shift();
+    if (head === undefined) {
+      this.status = 'idle';
+      return;
+    }
+    const text = inboxMessageText(head);
+    const frames: Frame[] = [
+      { at: Date.now(), seq: 0, kind: 'user-text', text },
+      {
+        at: Date.now(),
+        seq: 0,
+        kind: 'assistant-text',
+        text: `（演示回复，未调用真实模型）已收到：「${text.slice(0, 60)}」`,
+      },
+      { at: Date.now(), seq: 0, kind: 'turn-end', text: 'completed' },
+    ];
+    this.onFrames?.(frames);
+    this.schedule();
+  }
+
+  disposeOf(): void {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+    this.status = 'idle';
+  }
+}
+
 interface AgentsServiceLike {
   create(options: {
     sessionId: string;
@@ -220,6 +345,22 @@ export function createTaskSessions(deps: TaskSessionDeps) {
   const retention = deps.retention ?? DEFAULT_RETENTION;
   const live = new Map<string, LiveTaskSession>();
   let firehoseBound = false;
+  /** 演示延迟（Owner 走查开关，URL query 经 rpc demo.setDelay 设置；0=关闭）。
+   * >0 时新建/复活会话用 DemoAgent（不调真实 LLM）。 */
+  let demoDelayMs = 0;
+
+  /** demo 会话装配：DemoAgent + makeEntry + 帧回调接线。 */
+  function makeDemoEntry(sessionId: string, taskId: string, store: FrameStore, seeded: Frame[]): void {
+    const agent = new DemoAgent(sessionId, demoDelayMs);
+    const handle = { agent: agent as AgentLike, dispose: async () => agent.disposeOf() };
+    makeEntry(handle, taskId, store, seeded);
+    const entry = live.get(sessionId)!;
+    agent.onFrames = (frames) => {
+      const dated = frames.map((f, i) => ({ ...f, seq: entry.frameSeq + i }));
+      entry.frameSeq += dated.length;
+      commitFrames(entry, dated);
+    };
+  }
 
   /** `$name` 交付：命中 user-invocable 技能 → 官方双消息注入；否则原样回落。 */
   async function deliverSkillInvocation(
@@ -726,6 +867,16 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       bindFirehose(kernel);
     },
 
+    /** 演示延迟设置（Owner 走查开关；毫秒，0=关闭）。只影响其后新建/复活的会话。 */
+    setDemoDelay(ms: number): void {
+      demoDelayMs = Math.max(0, Math.min(ms, 600_000));
+    },
+
+    /** 演示模式是否激活（tasks.create 门控豁免依据）。 */
+    isDemoActive(): boolean {
+      return demoDelayMs > 0;
+    },
+
     /** / 与 $ 面板目录（DSH 官方一致性：命令/技能注册表出自内核，非产品硬编码）。 */
     listCommands,
     listUserSkills,
@@ -737,6 +888,15 @@ export function createTaskSessions(deps: TaskSessionDeps) {
      * 进程面 cwd 由 capability 层钉住）+ 首 prompt 启动。
      */
     async createTaskSession(taskId: string, input: TaskSessionStartInput): Promise<{ sessionId: string }> {
+      // 演示模式（走查开关）：不建内核 agent、不选模型、不调 LLM。
+      if (demoDelayMs > 0) {
+        const sessionId = `task-${randomUUID()}`;
+        makeDemoEntry(sessionId, taskId, new FrameStore(input.framesFile), []);
+        live.get(sessionId)!.agent.followup(
+          { id: `demo-${randomUUID()}`, role: 'user', content: [{ type: 'text', text: input.prompt }], source: { kind: 'user' } },
+        );
+        return { sessionId };
+      }
       const kernel = requireKernel();
       bindFirehose(kernel);
       const agents = agentsService(kernel.ctx);
@@ -766,6 +926,11 @@ export function createTaskSessions(deps: TaskSessionDeps) {
 
     /** 复活持久会话（内核 session log 重建 LLM 历史；帧环由 jsonl 末尾 seed）。 */
     async resumeTaskSession(taskId: string, input: TaskSessionResumeInput): Promise<{ sessionId: string }> {
+      // 演示模式：daemon 重启后的 demo 会话续聊——空 inbox 重建，历史帧回放。
+      if (demoDelayMs > 0) {
+        makeDemoEntry(input.sessionId, taskId, new FrameStore(input.framesFile), entryFramesFromDisk(new FrameStore(input.framesFile)));
+        return { sessionId: input.sessionId };
+      }
       const kernel = requireKernel();
       bindFirehose(kernel);
       const agents = agentsService(kernel.ctx);

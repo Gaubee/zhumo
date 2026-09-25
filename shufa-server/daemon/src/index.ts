@@ -81,18 +81,7 @@ async function main(): Promise<void> {
   }
 
   const rpcHandler = new RPCHandler<RpcContext>(router);
-  const blobs = new BlobStore(config.dataRoot, db);
-  const resources = new ResourceService({ config, db, blobs });
-  const http = new DaemonHttp({ config, db, wizard, secret, rpcHandler, resources, blobs, kb });
-  const port = await http.listen(config.port, config.host);
-  console.log(
-    `[boot] 朱墨 daemon 已启动：http://${config.host}:${port}（DATA_ROOT=${config.dataRoot}，webui=${config.webuiDir}）`,
-  );
-
-  // ------------------------------------------------------------- W4 内核挂载链
-  let kernel: ShufaKernelHandle | null = null;
-  let tasks: TaskService;
-  const sessions = createTaskSessions({
+const sessions = createTaskSessions({
     kernel: () => kernel,
     modelSelection: async (taskId: string) => {
       // 任务覆盖（五轮活动模型）优先；缺省回落默认模型/旧链首路由。
@@ -115,7 +104,19 @@ async function main(): Promise<void> {
     // 2026-09-25 三轮：内核 session/title 帧落任务行（列表标题告别 prompt 截断）。
     onSessionTitle: (sessionId, title) => tasks.applySessionTitle(sessionId, title),
   });
-  tasks = new TaskService({
+
+  const blobs = new BlobStore(config.dataRoot, db);
+  const resources = new ResourceService({ config, db, blobs });
+  const http = new DaemonHttp({ config, db, wizard, secret, rpcHandler, resources, blobs, kb, sessions });
+  const port = await http.listen(config.port, config.host);
+  console.log(
+    `[boot] 朱墨 daemon 已启动：http://${config.host}:${port}（DATA_ROOT=${config.dataRoot}，webui=${config.webuiDir}）`,
+  );
+
+  // ------------------------------------------------------------- W4 内核挂载链
+  let kernel: ShufaKernelHandle | null = null;
+  let tasks: TaskService;
+    tasks = new TaskService({
     config,
     db,
     blobs,

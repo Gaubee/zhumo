@@ -73,7 +73,20 @@
   let listOpen = $state(false);
   let detailOpen = $state(false);
 
-  onMount(() => {
+  onMount(async () => {
+    // 走查演示开关（Owner 需求）：URL query demoDelay=<毫秒> → daemon 端
+    // DemoAgent（不调真实 LLM，队列数后端管理）。写入 sessionStorage，
+    // hash 导航不丢；0/缺省关闭。
+    const demoDelay = Number(new URLSearchParams(location.search).get("demoDelay") ?? "");
+    if (Number.isFinite(demoDelay) && demoDelay > 0) {
+      sessionStorage.setItem("zhumo:demo-delay", String(Math.floor(demoDelay)));
+      location.search = ""; // 清 query，保持地址干净（hash 路由不受影响）
+      return;
+    }
+    const savedDelay = Number(sessionStorage.getItem("zhumo:demo-delay") ?? "0");
+    demoActive = Number.isFinite(savedDelay) && savedDelay > 0;
+    console.log("[demo-walkthrough] savedDelay=", savedDelay, "demoActive=", demoActive, "session=", auth.session !== null);
+    if (demoActive && auth.session !== null) await api.setDemoDelay(savedDelay);
     // 未登录（匿名关闭）不拉任务面——守卫卡呈现，避免 401 噪音。
     if (auth.session !== null) void loadTasks();
   });
@@ -121,6 +134,10 @@
   const selected = $derived(getSelectedTask());
   const items = $derived(projectFrames(tasks.frames));
   const detailRunning = $derived(selected?.status === "running" || tasks.sending);
+
+  /** 走查演示模式激活（URL demoDelay 写入 sessionStorage 后生效）。 */
+  let demoActive = $state(false);
+  const demoDelaySeconds = $derived(Math.round(Number(sessionStorage.getItem("zhumo:demo-delay") ?? "0")) / 1000);
 
   // ----------------------------- 队列面板协调（W10b，Owner 设计 2026-09-27）
 
@@ -262,6 +279,25 @@
           <span class="min-w-0 flex-1 font-mono text-[11px] leading-relaxed break-all text-destructive/90">
             {selected.error ?? "未知错误（无详情记录——可在对话中重发触发重试）"}
           </span>
+        </div>
+      {/if}
+      {#if demoActive}
+        <div
+          class="flex items-center gap-2 border-b border-violet-500/30 bg-violet-500/10 px-4 py-1 text-[11px] text-violet-700"
+          role="status"
+        >
+          演示模式：AI 请求已替换为定时模拟（{demoDelaySeconds}s），不产生真实调用
+          <button
+            type="button"
+            class="rounded px-1 underline underline-offset-2 hover:bg-violet-500/10"
+            onclick={() => {
+              sessionStorage.removeItem("zhumo:demo-delay");
+              demoActive = false;
+              void api.setDemoDelay(0);
+            }}
+          >
+            退出
+          </button>
         </div>
       {/if}
       <TranscriptView {items} running={detailRunning} />

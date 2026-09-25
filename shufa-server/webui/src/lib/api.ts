@@ -36,6 +36,7 @@ import type {
   TaskQueueSetModeInput,
   TaskQueueReorderInput,
   TaskQueueSendNowInput,
+  DemoSetDelayInput,
   TaskCreateInput,
   TaskFollowupInput,
   TaskFollowupOutput,
@@ -172,6 +173,9 @@ interface ShufaRpc {
   composer: {
     list(): Promise<ComposerCatalog>;
   };
+  demo: {
+    setDelay(input: DemoSetDelayInput): Promise<{ accepted: true }>;
+  };
   tasks: {
     list(): Promise<{ tasks: TaskItem[] }>;
     create(input: TaskCreateInput): Promise<TaskItem>;
@@ -186,6 +190,7 @@ interface ShufaRpc {
     queueSetMode(input: TaskQueueSetModeInput): Promise<{ accepted: true }>;
     queueReorder(input: TaskQueueReorderInput): Promise<{ accepted: true }>;
     queueSendNow(input: TaskQueueSendNowInput): Promise<{ accepted: true }>;
+    setDemoDelay(input: DemoSetDelayInput): Promise<{ accepted: true }>;
     followup(input: TaskFollowupInput): Promise<TaskFollowupOutput>;
     setModel(input: { task_id: string; provider: string; model: string }): Promise<{ task: TaskItem }>;
   };
@@ -256,6 +261,8 @@ export interface ShufaApi {
   taskQueueSetMode(taskId: string, messageId: string, mode: TaskQueueMode): Promise<void>;
   taskQueueReorder(taskId: string, orderedIds: string[]): Promise<void>;
   taskQueueSendNow(taskId: string, messageId: string): Promise<void>;
+  /** 走查演示开关：URL query demoDelay=<ms> 读取后调用一次。 */
+  setDemoDelay(delayMs: number): Promise<void>;
   createTask(
     prompt: string,
     video: File | null,
@@ -634,6 +641,8 @@ class MockApi implements ShufaApi {
   async taskQueueReorder(): Promise<void> {}
 
   async taskQueueSendNow(): Promise<void> {}
+
+  async setDemoDelay(): Promise<void> {}
 
   async createTask(
     prompt: string,
@@ -1118,6 +1127,10 @@ class RpcApi implements ShufaApi {
 
   async taskQueueSendNow(taskId: string, messageId: string): Promise<void> {
     await rpc().tasks.queueSendNow({ id: taskId, message_id: messageId });
+  }
+
+  async setDemoDelay(delayMs: number): Promise<void> {
+    await rpc().demo.setDelay({ delay_ms: delayMs });
   }
 
   async createTask(

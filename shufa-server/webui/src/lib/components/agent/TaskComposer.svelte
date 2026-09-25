@@ -97,7 +97,18 @@
   }
   let sending = $derived(tasks.sending);
   /** R4：bootstrap 已加载且生效路由为 null → 管理员未配置大模型服务。 */
-  let modelMissing = $derived(auth.bootstrap !== null && auth.bootstrap.modelRoute === null);
+  /** 走查演示模式（URL demoDelay 写入的 sessionStorage 标记）：模型路由未配置
+   * 也可建任务（DemoAgent 不调真实模型）。 */
+  const demoActive = (() => {
+    try {
+      return Number(sessionStorage.getItem("zhumo:demo-delay") ?? "0") > 0;
+    } catch {
+      return false;
+    }
+  })();
+  let modelMissing = $derived(
+    !demoActive && auth.bootstrap !== null && auth.bootstrap.modelRoute === null,
+  );
   /** BUG5：会话用户已被禁用 → 不能新建任务（仍可查看已有任务）。 */
   let userDisabled = $derived(auth.session !== null && auth.session.disabled);
 

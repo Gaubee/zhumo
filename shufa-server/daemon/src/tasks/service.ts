@@ -158,7 +158,8 @@ export class TaskService {
     }
     // 走查 BUG2 门控（2026-09-23；五轮沿用新链）：无任何已配置路由时拒绝创建，
     // 不再静默落入内核缺省路由（「后台没配大模型服务居然能用」的魔术根源）。
-    if (modelsRouteInfo(this.deps.db, this.deps.config) === null) {
+    // 演示模式豁免（走查基建：DemoAgent 不调真实模型，无路由也应可走查）。
+    if (!this.deps.sessions.isDemoActive() && modelsRouteInfo(this.deps.db, this.deps.config) === null) {
       throw new Error('管理员尚未配置大模型服务，请先在后台「设置 → 大模型服务」完成配置');
     }
     // 任务级模型覆盖（五轮活动模型）：必须命中已配置路由，防悬空引用。

@@ -41,6 +41,7 @@ import {
   TaskQueueSetModeInputSchema,
   TaskQueueReorderInputSchema,
   TaskQueueSendNowInputSchema,
+  DemoSetDelayInputSchema,
   TaskSetModelInputSchema,
   TaskCreateInputSchema,
   TaskFollowupInputSchema,
@@ -90,6 +91,7 @@ import { randomBytes } from 'node:crypto';
 import type { WizardRunner } from './wizard.js';
 import { modelsRouteInfo } from './tasks/service.js';
 import type { TaskService } from './tasks/service.js';
+import type { TaskSessions } from './kernel/sessions.js';
 import type { ResourceService } from './resources.js';
 import type { BlobStore } from './db/blobs.js';
 import { modelCatalog, refreshModelsDevCache } from './models-catalog.js';
@@ -134,6 +136,8 @@ export interface RpcContext {
   fetchImpl?: typeof fetch;
   /** 书法领域知识库（admin.kb.* 数据面；Owner 2026-09-22）。 */
   kb?: KbStore;
+  /** 会话层直通（demo.setDelay 走查开关；未装配时 501）。 */
+  sessions?: TaskSessions;
 }
 
 const base = os.$context<RpcContext>();
@@ -742,6 +746,17 @@ const tasksQueueReorder = requireActiveUser
     }
   });
 
+/** 演示延迟开关（走查）：毫秒，0=关闭；只影响其后新建/复活的会话。 */
+const demoSetDelay = requireActiveUser
+  .input(DemoSetDelayInputSchema)
+  .handler(async ({ context, input }) => {
+    if (context.sessions === undefined) {
+      throw new ORPCError('NOT_IMPLEMENTED', { message: '会话层未装配' });
+    }
+    context.sessions.setDemoDelay(input.delay_ms);
+    return { accepted: true as const };
+  });
+
 const tasksQueueSendNow = requireActiveUser
   .input(TaskQueueSendNowInputSchema)
   .handler(async ({ context, input }) => {
@@ -968,6 +983,10 @@ export const router = {
 
   composer: {
     list: composerList,
+  },
+
+  demo: {
+    setDelay: demoSetDelay,
   },
 
   res: {

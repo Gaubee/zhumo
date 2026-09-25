@@ -37,6 +37,7 @@ function fakeSessions() {
     stream: vi.fn(() => ({ frames: [], status: 'persisted' as const })),
     subscribe: vi.fn(() => () => {}),
     isLive: vi.fn(() => false),
+    isDemoActive: vi.fn(() => false),
     dispose: vi.fn(async () => {}),
   };
   return { service: raw as unknown as TaskSessions, raw, emitted };

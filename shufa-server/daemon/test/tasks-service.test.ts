@@ -50,6 +50,7 @@ function fakeSessions() {
     })),
     subscribe: vi.fn((_sessionId: string, _cb: (frame: Frame) => void) => () => {}),
     isLive: vi.fn(() => false),
+    isDemoActive: vi.fn(() => false),
     dispose: vi.fn(async () => {}),
   };
   return { service: service as unknown as TaskSessions, created, emitted, raw: service };
