@@ -53,7 +53,7 @@ export function createServices(seeds?: WizardSeedInput[]): TestServices {
   const db = openDatabase(config.dataRoot);
   ensureAnonymousUser(db);
   const wizardSeeds = seeds ?? defaultWizardSeeds({ dataRoot: config.dataRoot, shufaToolDir });
-  const wizard = new WizardRunner(db, wizardSeeds, { envFile });
+  const wizard = new WizardRunner(db, wizardSeeds, { envFile, shufaToolDir });
   installWizardSeeds(db, wizardSeeds);
   const blobs = new BlobStore(config.dataRoot, db);
   return {

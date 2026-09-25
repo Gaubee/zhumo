@@ -206,10 +206,12 @@ export function defaultWizardSeeds(
     {
       id: 'python-env',
       kind: 'command',
-      title: 'Python 分析环境（uv sync 预热依赖）',
+      // 标题显式引擎名（W9 二修）：本步骤就是转录引擎的独立安装项——win/linux
+      // 装 faster-whisper（CTranslate2）、mac 装 mlx-whisper；Intel mac 无引擎。
+      title: `Python 分析环境（uv sync${whisperEngine ? ` · 转录引擎 ${whisperEngine === 'mlx' ? 'mlx-whisper' : 'faster-whisper'}` : ''}）`,
       // --extra transcribe（走查四轮）：基础 sync 不含可选依赖，反而会卸掉
-      // mlx-whisper/torch——转录能力静默消失。extra 自带平台标记，非 darwin
-      // 上是空集，恒可安全传入。
+      // 已装引擎——转录能力静默消失。extra 自带平台标记（W9 后 win/linux
+      // =faster-whisper、darwin/arm64=mlx-whisper、Intel mac=空集），恒可安全传入。
       command: `uv sync --project "${ctx.shufaToolDir}" --extra transcribe`,
       probe: `uv run --no-sync --project "${ctx.shufaToolDir}" python -c "${pyProbeImports}"`,
       targetDir: ctx.shufaToolDir,
@@ -571,14 +573,16 @@ export class WizardRunner {
   }
 
   /**
-   * whisper 预热 runner（走查四轮；W9 顺延 2026-09-27）：`uv run --project
-   * <shufa-tool> --extra transcribe python -m shufa_tool.warm_whisper`——
-   * warm_whisper 五轮起是自管下载器（断点续传/校验免费，纯标准库零 venv
-   * 依赖）；--extra 使步骤可乱序：未先跑 python-env 时 uv run 自动补装引擎
-   * 依赖（uv run 只补缺不卸载，与 uv sync 的 exact 语义不同——mac 管线裸
-   * uv run 数月末曾卸掉 mlx 即实证）。镜像经 HF_ENDPOINT。进度行（已下载 …）
-   * 原位替换，其余逐行追加；取消 = 组杀（与命令步骤同型，killProcessTree）；
-   * force 透传脚本端清缓存（覆盖下载）。
+   * whisper 预热 runner（走查四轮；W9 顺延 2026-09-27 二修）：`uv run
+   * --no-sync --project <shufa-tool> python -m shufa_tool.warm_whisper`——
+   * warm_whisper 是自管下载器（断点续传/校验免费，纯标准库零 venv 依赖），
+   * 因此本步骤**只下载模型**：--no-sync 用既有 venv 的解释器、不触发任何
+   * 依赖安装（转录引擎的安装项是 python-env 步骤——uv sync --extra
+   * transcribe；此前为乱序自愈加过 --extra，会把引擎安装日志混进下载步骤，
+   * Owner 裁决职责分离后移除）。venv 未就绪时前置检查给中文引导而非让
+   * uv 报英文错。镜像经 HF_ENDPOINT。进度行（已下载 …）原位替换，其余逐行
+   * 追加；取消 = 组杀（与命令步骤同型，killProcessTree）；force 透传脚本端
+   * 清缓存（覆盖下载）。
    */
   private async runWhisperWarm(
     id: string,
@@ -589,14 +593,17 @@ export class WizardRunner {
   ): Promise<number> {
     const toolDir = this.options.shufaToolDir;
     if (!toolDir) throw new Error('向导上下文缺少 shufaToolDir（warm_whisper 无法调用）');
+    if (!existsSync(path.join(toolDir, '.venv'))) {
+      log.append('[失败] Python 环境未就绪：请先完成「Python 分析环境」步骤（转录引擎也由该步骤安装），再下载模型');
+      return 1;
+    }
     const { repo, endpoint } = whisperRunArgsFromUrl(row.url);
     const command = [
       'uv',
       'run',
+      '--no-sync',
       '--project',
       JSON.stringify(toolDir),
-      '--extra',
-      'transcribe',
       'python',
       '-m',
       'shufa_tool.warm_whisper',

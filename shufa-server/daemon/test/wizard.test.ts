@@ -546,6 +546,27 @@ describe('wizard whisper 参数化（走查 R6）', () => {
     });
   });
 
+  test('W9 二修：venv 未就绪时模型下载不启动（职责分离）——中文引导先跑 python-env，且不触发任何依赖安装', async () => {
+    const s = createServices();
+    // HF 缓存指到空目录：嗅探不命中 → 走 warm runner；shufa-tool 是假目录
+    // （无 .venv）→ 前置检查置 failed。此前版本会 uv run --extra transcribe
+    // 隐式装引擎（安装日志混进下载步骤），Owner 裁决职责分离后此路径必须
+    // 零安装副作用、直接引导。
+    const hfHome = mkdtempSync(path.join(tmpdir(), 'zhumo-hf-empty-'));
+    const prevHfHome = process.env.HF_HOME;
+    process.env.HF_HOME = hfHome;
+    try {
+      const v = await s.wizard.run('whisper-model', false, {});
+      expect(v.status).toBe('failed');
+      expect(v.last_log).toContain('Python 环境未就绪');
+      expect(v.last_log).toContain('Python 分析环境');
+    } finally {
+      if (prevHfHome === undefined) delete process.env.HF_HOME;
+      else process.env.HF_HOME = prevHfHome;
+      s.dispose();
+    }
+  });
+
   test('run（四轮）：模型页持久化回行；嗅探按 HF 缓存；选型回写 .env SHUFA_WHISPER_REPO', async () => {
     const s = createServices();
     // HF 缓存隔离到临时目录（hfHubDir 读 HF_HOME），预置 tiny/turbo 两仓权重。
