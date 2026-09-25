@@ -34,6 +34,7 @@ const SAMPLE_DATA: AnalysisData = {
   ink_curve: [0, 1003],
   frame_ts: [0, 0.5],
   limitations: [],
+  warnings: [],
   raw_stats: { steps: 1, grids: 3, annotations: 1, frames: 4 },
 };
 
