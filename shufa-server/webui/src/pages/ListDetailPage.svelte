@@ -24,14 +24,23 @@
   import TranscriptView from "$lib/components/agent/TranscriptView.svelte";
   import { auth } from "$lib/stores/auth.svelte";
   import {
+    cancelQueueEdit,
+    confirmQueueEdit,
+    editQueueItem,
     getSelectedTask,
     lastUsage,
     loadTasks,
     projectFrames,
+    queue,
+    refreshQueue,
+    removeQueueItem,
     selectTask,
     sendPrompt,
+    setQueueItemMode,
+    stopPrompt,
     tasks,
   } from "$lib/stores/tasks.svelte";
+  import QueuePanel from "$lib/components/agent/QueuePanel.svelte";
   import { navigate } from "$lib/router.svelte";
   import { onMount } from "svelte";
   import { api } from "$lib/api";
@@ -107,6 +116,27 @@
   const selected = $derived(getSelectedTask());
   const items = $derived(projectFrames(tasks.frames));
   const detailRunning = $derived(selected?.status === "running" || tasks.sending);
+
+  // ----------------------------- 队列面板协调（W10b，Owner 设计 2026-09-27）
+
+  /** composer 引用：进入编辑前校验输入框无未发送内容（有则拒绝编辑模式）。 */
+  let composerRef = $state<({ draftLength: () => number } | null)>(null);
+  /** 进入编辑时回填的文本（null=非编辑；变化触发 ComposerCard 填充）。 */
+  let editingDraft = $state<string | null>(null);
+
+  async function beginQueueEdit(messageId: string): Promise<void> {
+    if (composerRef !== null && composerRef.draftLength() > 0) {
+      tasks.error = "输入框有未发送内容，清空后再编辑队列消息";
+      return;
+    }
+    const text = await editQueueItem(messageId);
+    if (text !== null) editingDraft = text;
+  }
+
+  // 选中任务变化 → 队列视图跟随（帧驱动的刷新在 store 内）。
+  $effect(() => {
+    if (tasks.selectedId !== null && selected !== undefined) void refreshQueue();
+  });
 
   function timeLabel(iso: string): string {
     const date = new Date(iso);
@@ -196,8 +226,24 @@
       {/if}
       <TranscriptView {items} running={detailRunning} />
       <div class="border-t border-border p-3">
+        <!-- W10b 队列面板：内核 inbox 视图（空队列不占空间）；选中任务变化
+             或帧到达由 store 刷新。 -->
+        <QueuePanel
+          items={queue.items}
+          editing={queue.editing}
+          onedit={(messageId) => void beginQueueEdit(messageId)}
+          oncancel={() => void cancelQueueEdit()}
+          onremove={(messageId) => void removeQueueItem(messageId)}
+          onsetmode={(messageId, mode) => void setQueueItemMode(messageId, mode)}
+        />
         <ComposerCard
+          bind:this={composerRef}
           onsend={(text) => void sendPrompt(text)}
+          onstop={() => void stopPrompt()}
+          editingActive={queue.editing !== null}
+          editingDraft={editingDraft}
+          onconfirmedit={(text) => void confirmQueueEdit(text)}
+          oncanceledit={() => void cancelQueueEdit()}
           sending={tasks.sending}
           videoName={selected.videoName}
           models={availableModels}

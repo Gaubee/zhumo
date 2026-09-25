@@ -28,11 +28,19 @@ import type {
   RefreshInput,
   SettingKey,
   TaskCancelInput,
+  TaskStopInput,
+  TaskQueueEditInput,
+  TaskQueueEditConfirmInput,
+  TaskQueueEditCancelInput,
+  TaskQueueRemoveInput,
+  TaskQueueSetModeInput,
   TaskCreateInput,
   TaskFollowupInput,
   TaskFollowupOutput,
   TaskGetInput,
   TaskGetOutput,
+  TaskQueueListOutput,
+  TaskQueueMode,
   TaskItem,
   TokenOutput,
   UpdateUserInput,
@@ -167,6 +175,13 @@ interface ShufaRpc {
     create(input: TaskCreateInput): Promise<TaskItem>;
     get(input: TaskGetInput): Promise<TaskGetOutput>;
     cancel(input: TaskCancelInput): Promise<TaskItem>;
+    stop(input: TaskStopInput): Promise<TaskItem>;
+    queueList(input: { id: string }): Promise<TaskQueueListOutput>;
+    queueEdit(input: TaskQueueEditInput): Promise<{ text: string }>;
+    queueEditConfirm(input: TaskQueueEditConfirmInput): Promise<{ accepted: true }>;
+    queueEditCancel(input: TaskQueueEditCancelInput): Promise<{ accepted: true }>;
+    queueRemove(input: TaskQueueRemoveInput): Promise<{ accepted: true }>;
+    queueSetMode(input: TaskQueueSetModeInput): Promise<{ accepted: true }>;
     followup(input: TaskFollowupInput): Promise<TaskFollowupOutput>;
     setModel(input: { task_id: string; provider: string; model: string }): Promise<{ task: TaskItem }>;
   };
@@ -225,7 +240,16 @@ export interface ShufaApi {
   listTasks(): Promise<Task[]>;
   getTaskFrames(taskId: string): Promise<Frame[]>;
   subscribeTaskFrames(taskId: string, onFrame: (frame: Frame) => void): () => void;
-  sendTaskPrompt(taskId: string, prompt: string): Promise<void>;
+  sendTaskPrompt(taskId: string, prompt: string, mode?: "followup" | "steer"): Promise<void>;
+  /** 打断当前轮（W10）：任务回 done 可续聊；区别于终态取消。 */
+  stopTask(taskId: string): Promise<void>;
+  /** 队列面板（W10b）：视图/编辑（冻结）/确认/取消/删除/改模式。 */
+  taskQueue(taskId: string): Promise<TaskQueueListOutput>;
+  taskQueueEdit(taskId: string, messageId: string): Promise<string>;
+  taskQueueEditConfirm(taskId: string, text: string): Promise<void>;
+  taskQueueEditCancel(taskId: string): Promise<void>;
+  taskQueueRemove(taskId: string, messageId: string): Promise<void>;
+  taskQueueSetMode(taskId: string, messageId: string, mode: TaskQueueMode): Promise<void>;
   createTask(
     prompt: string,
     video: File | null,
@@ -579,6 +603,27 @@ class MockApi implements ShufaApi {
   async sendTaskPrompt(taskId: string, prompt: string): Promise<void> {
     void replayAgentTurn(taskId, prompt);
   }
+
+  async stopTask(taskId: string): Promise<void> {
+    const task = mockDb.tasks.find((t) => t.id === taskId);
+    if (task && task.status === "running") task.status = "done";
+  }
+
+  async taskQueue(): Promise<TaskQueueListOutput> {
+    return { items: [], editing: null };
+  }
+
+  async taskQueueEdit(): Promise<string> {
+    return "";
+  }
+
+  async taskQueueEditConfirm(): Promise<void> {}
+
+  async taskQueueEditCancel(): Promise<void> {}
+
+  async taskQueueRemove(): Promise<void> {}
+
+  async taskQueueSetMode(): Promise<void> {}
 
   async createTask(
     prompt: string,
@@ -1022,9 +1067,39 @@ class RpcApi implements ShufaApi {
     return () => ws.close();
   }
 
-  /** 前台续聊（W7b）：running 排队投递；done/failed 先 resume（任务回 running）。 */
-  async sendTaskPrompt(taskId: string, text: string): Promise<void> {
-    await rpc().tasks.followup({ id: taskId, text });
+  /** 前台续聊（W7b；W10 加 mode）：followup=排队（缺省）/ steer=引导当前轮。 */
+  async sendTaskPrompt(taskId: string, text: string, mode?: "followup" | "steer"): Promise<void> {
+    await rpc().tasks.followup({ id: taskId, text, ...(mode === "steer" ? { mode } : {}) });
+  }
+
+  /** 打断当前轮（W10）：后端 cancel{user}+keepInbox，任务回 done 可续聊。 */
+  async stopTask(taskId: string): Promise<void> {
+    await rpc().tasks.stop({ id: taskId });
+  }
+
+  taskQueue(taskId: string): Promise<TaskQueueListOutput> {
+    return rpc().tasks.queueList({ id: taskId });
+  }
+
+  async taskQueueEdit(taskId: string, messageId: string): Promise<string> {
+    const out = await rpc().tasks.queueEdit({ id: taskId, message_id: messageId });
+    return out.text;
+  }
+
+  async taskQueueEditConfirm(taskId: string, text: string): Promise<void> {
+    await rpc().tasks.queueEditConfirm({ id: taskId, text });
+  }
+
+  async taskQueueEditCancel(taskId: string): Promise<void> {
+    await rpc().tasks.queueEditCancel({ id: taskId });
+  }
+
+  async taskQueueRemove(taskId: string, messageId: string): Promise<void> {
+    await rpc().tasks.queueRemove({ id: taskId, message_id: messageId });
+  }
+
+  async taskQueueSetMode(taskId: string, messageId: string, mode: TaskQueueMode): Promise<void> {
+    await rpc().tasks.queueSetMode({ id: taskId, message_id: messageId, mode });
   }
 
   async createTask(

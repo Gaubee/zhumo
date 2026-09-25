@@ -107,12 +107,84 @@ export const TaskCancelInputSchema = z.object({ id: IdSchema });
 export type TaskCancelInput = z.infer<typeof TaskCancelInputSchema>;
 export const TaskCancelOutputSchema = TaskItemSchema;
 
+/** 打断当前轮（W10，对齐 DSH 内核 cancel{kind:'user'}+keepInbox）：中止生成、
+ * 任务回 done（idle 等待输入、可续聊）；排队消息保留并由内核自动续跑。
+ * 与终态取消（tasks.cancel → cancelled 不可续聊）语义不同。 */
+export const TaskStopInputSchema = z.object({ id: IdSchema });
+export type TaskStopInput = z.infer<typeof TaskStopInputSchema>;
+export const TaskStopOutputSchema = TaskItemSchema;
+
 /** 前台续聊（W7b）：running 任务排队投递；done/failed 任务先 resume 再投递。 */
 export const TaskFollowupInputSchema = z.object({
   id: IdSchema,
   text: z.string().min(1).max(20000),
+  /** 投递通道（W10）：followup=排队下一轮（缺省，运行中自动进 next-turn
+   * inbox）；steer=引导——运行中的 driver 在下一 step 边界消费（影响当前
+   * 轮），idle 时等价开新轮。 */
+  mode: z.enum(['followup', 'steer']).optional(),
 });
 export type TaskFollowupInput = z.infer<typeof TaskFollowupInputSchema>;
+
+// ------------------------------------------------- 队列面板（W10b，内核 inbox）
+
+/** 队列投递模式：queue=排队下一轮（内核 next-turn inbox，逐条生效）；
+ * steer=引导当前轮（下一 step 边界消费）；inject=注入（同 step 边界但不作
+ * 为对话轮唤醒）。mode 由 daemon 在投递时记录（next-step 两模式同桶不可辨）。 */
+export const TaskQueueModeSchema = z.enum(['queue', 'steer', 'inject']);
+export type TaskQueueMode = z.infer<typeof TaskQueueModeSchema>;
+
+/** 队列条目（内核 inbox 消息的产品视图：id 稳定，跨编辑 replace 保持可寻址）。 */
+export const TaskQueueItemSchema = z.object({
+  message_id: z.string(),
+  mode: TaskQueueModeSchema,
+  text: z.string(),
+});
+export type TaskQueueItem = z.infer<typeof TaskQueueItemSchema>;
+
+export const TaskQueueListInputSchema = z.object({ id: IdSchema });
+export type TaskQueueListInput = z.infer<typeof TaskQueueListInputSchema>;
+/** items 按生效序（queue 在前逐条开轮；steer/inject 为 step 边界挂起项）；
+ * editing=冻结中的条目 id（编辑会话期间该条及其后暂离队列）。 */
+export const TaskQueueListOutputSchema = z.object({
+  items: z.array(TaskQueueItemSchema),
+  editing: z.string().nullable(),
+});
+export type TaskQueueListOutput = z.infer<typeof TaskQueueListOutputSchema>;
+
+/** 进入编辑（Owner 设计 2026-09-27）：该条及其后的排队消息冻结（暂离内核
+ * inbox，当前轮结束后不再自动开轮）；文本回填输入框，确认/取消前队列尾部悬置。 */
+export const TaskQueueEditInputSchema = z.object({ id: IdSchema, message_id: z.string() });
+export type TaskQueueEditInput = z.infer<typeof TaskQueueEditInputSchema>;
+export const TaskQueueEditOutputSchema = z.object({ text: z.string() });
+export type TaskQueueEditOutput = z.infer<typeof TaskQueueEditOutputSchema>;
+
+/** 确认编辑：冻结首条按新文本重建，整段按原序放回（idle 时逐条唤醒开轮）。 */
+export const TaskQueueEditConfirmInputSchema = z.object({ id: IdSchema, text: z.string().min(1).max(20000) });
+export type TaskQueueEditConfirmInput = z.infer<typeof TaskQueueEditConfirmInputSchema>;
+export const TaskQueueEditConfirmOutputSchema = z.object({ accepted: z.literal(true) });
+export type TaskQueueEditConfirmOutput = z.infer<typeof TaskQueueEditConfirmOutputSchema>;
+
+/** 取消编辑：冻结段按原序原样放回。 */
+export const TaskQueueEditCancelInputSchema = z.object({ id: IdSchema });
+export type TaskQueueEditCancelInput = z.infer<typeof TaskQueueEditCancelInputSchema>;
+export const TaskQueueEditCancelOutputSchema = z.object({ accepted: z.literal(true) });
+export type TaskQueueEditCancelOutput = z.infer<typeof TaskQueueEditCancelOutputSchema>;
+
+/** 删除一条（含冻结段外/next-step 挂起项）；不在队列时幂等成功。 */
+export const TaskQueueRemoveInputSchema = z.object({ id: IdSchema, message_id: z.string() });
+export type TaskQueueRemoveInput = z.infer<typeof TaskQueueRemoveInputSchema>;
+export const TaskQueueRemoveOutputSchema = z.object({ accepted: z.literal(true) });
+export type TaskQueueRemoveOutput = z.infer<typeof TaskQueueRemoveOutputSchema>;
+
+/** 修改投递模式（Owner 设计：可改成注入或引导；排队项转 step 边界语义）。 */
+export const TaskQueueSetModeInputSchema = z.object({
+  id: IdSchema,
+  message_id: z.string(),
+  mode: TaskQueueModeSchema,
+});
+export type TaskQueueSetModeInput = z.infer<typeof TaskQueueSetModeInputSchema>;
+export const TaskQueueSetModeOutputSchema = z.object({ accepted: z.literal(true) });
+export type TaskQueueSetModeOutput = z.infer<typeof TaskQueueSetModeOutputSchema>;
 
 /** accepted 恒真；resumed=本次是否触发了会话复活；task=投递后的任务视图。 */
 export const TaskFollowupOutputSchema = z.object({

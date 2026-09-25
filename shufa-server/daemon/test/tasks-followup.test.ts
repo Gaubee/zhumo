@@ -29,6 +29,7 @@ function fakeSessions() {
     }),
     resumeTaskSession: vi.fn(async (_taskId: string, input: { sessionId: string }) => ({ sessionId: input.sessionId })),
     followup: vi.fn((_sessionId: string, _text: string) => undefined),
+    steer: vi.fn(),
     cancel: vi.fn(),
     emit: vi.fn((_sessionId: string, frame: Omit<Frame, 'at' | 'seq'>) => {
       emitted.push({ ...frame, at: Date.now(), seq: emitted.length + 1 } as Frame);
@@ -169,6 +170,36 @@ describe('TaskService.followup', () => {
 
     const out = await service.followup(root, { id: task.id, text: 'admin 续聊' });
     expect(out.accepted).toBe(true);
+  });
+  it('W10 stop：打断当前轮=live cancel(keepInbox)+任务回 done（可续聊）；cancelled 任务拒绝', async () => {
+    const mk = (ownerId: string, session: string, status: string): string => {
+      const video = createResource(env.db, { ownerId, parentId: null, name: 'v.mp4', isDir: false });
+      const task = createTask(env.db, { ownerId, resourceId: null, videoResourceId: video.id, prompt: 'p' });
+      updateTask(env.db, task.id, { agentSessionId: session, status: status as never });
+      return task.id;
+    };
+    const taskId = mk(alice.id, 'sess-stop', 'running');
+    sessions.raw.isLive = vi.fn(() => true);
+    const stopped = await service.stop(alice, taskId);
+    // 内核 cancel 以 user cause 调用（keepInbox 语义在 sessions 层）。
+    expect(sessions.raw.cancel).toHaveBeenCalledWith('sess-stop');
+    expect(stopped.status).toBe('done');
+    // 打断后可续聊（followup 正常投递——区别于终态 cancel）。
+    const followed = await service.followup(alice, { id: taskId, text: '打断后继续' });
+    expect(followed.accepted).toBe(true);
+    // 终态取消的任务不可 stop。
+    // stop 是同步方法：作为 expect 参数求值时同步抛出，用 toThrow 断言。
+    expect(() => service.stop(bob, mk(bob.id, 'sess-c', 'cancelled'))).toThrow('已取消的任务不可操作');
+  });
+
+  it('W10 followup mode=steer：改走 sessions.steer 通道', async () => {
+    const video = createResource(env.db, { ownerId: alice.id, parentId: null, name: 'v.mp4', isDir: false });
+    const task = createTask(env.db, { ownerId: alice.id, resourceId: null, videoResourceId: video.id, prompt: 'p' });
+    updateTask(env.db, task.id, { agentSessionId: 'sess-steer', status: 'running' });
+    const out = await service.followup(alice, { id: task.id, text: '引导一下', mode: 'steer' });
+    expect(out.accepted).toBe(true);
+    expect(sessions.raw.steer).toHaveBeenCalledWith('sess-steer', '引导一下');
+    expect(sessions.raw.followup).not.toHaveBeenCalledWith('sess-steer', '引导一下');
   });
 });
 

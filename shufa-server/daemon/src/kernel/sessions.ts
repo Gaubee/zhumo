@@ -140,7 +140,31 @@ interface AgentLike {
   status: string;
   session: { id: string; header: { cwd?: string; createdAt?: number | string } };
   followup(message: unknown): void;
+  steer(message: unknown): void;
+  inject(message: unknown): void;
   cancel(cause: unknown, options?: unknown): void;
+  /** 排队工作读写面（W10b 队列面板）。消息以内核 UserMessage 形状流转
+   * （unknown 收窄；text 提取/重建由本模块负责）。 */
+  inbox: {
+    readonly nextTurn: readonly unknown[];
+    readonly nextStep: readonly unknown[];
+    remove(messageId: string): boolean;
+    replace(messageId: string, newMessage: unknown): boolean;
+    splice(target: 'next-turn' | 'next-step', start: number, deleteCount: number, inserted: unknown[]): unknown[];
+  };
+}
+
+/** 内核 UserMessage 的产品侧收窄（content.text 块拼接为面板文本）。 */
+function inboxMessageText(message: unknown): string {
+  const blocks = (message as { content?: Array<{ type?: string; text?: string }> }).content ?? [];
+  return blocks
+    .filter((b) => b.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text)
+    .join('\n');
+}
+
+function inboxMessageId(message: unknown): string {
+  return String((message as { id?: unknown }).id ?? '');
 }
 
 interface AgentsServiceLike {
@@ -180,6 +204,16 @@ interface LiveTaskSession {
   deltaAt: number;
   pending: Map<number, { resolve: (answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> }) => void }>;
   subscribers: Set<(frame: Frame) => void>;
+  /** W10b 队列面板：next-step 桶内 steer/inject 同桶不可辨——投递时按
+   * messageId 记模式（缺省 queue；条目被内核消费后自动失时效，map 只增不减
+   * 无碍——id 全局唯一）。 */
+  queueModes: Map<string, 'steer' | 'inject'>;
+  /** 编辑冻结段（Owner 设计 2026-09-27）：编辑某条排队消息时，该条及其后
+   * 全部暂离内核 inbox（当前轮结束后不再自动开轮），暂存于此；确认/取消
+   * 后按原序放回（放回走 followup 逐条投递——冻结段必为 next-turn 队尾
+   * 连续段，append 语义无损，idle 时首条即唤醒）。 */
+  frozenQueue: unknown[];
+  frozenEditingId: string | null;
 }
 
 export function createTaskSessions(deps: TaskSessionDeps) {
@@ -634,6 +668,9 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       deltaAt: Date.now(),
       pending: new Map(),
       subscribers: new Set(),
+      queueModes: new Map(),
+      frozenQueue: [],
+      frozenEditingId: null,
     };
     registerPanelAnswerer(entry);
     live.set(handle.agent.session.id, entry);
@@ -826,6 +863,115 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     entry.agent.followup(
       createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] }) as never,
     );
+  },
+
+  /**
+   * 引导当前轮（W10，DSH 内核 steer）：运行中的 driver 在下一 step 边界消费，
+   * idle 时等价开新轮。与 followup 不同：不做 / 与 $ 分流——面板语义
+   * （命令执行/技能注入）属于整轮对话，引导是中途改口的裸文本。
+   * 不在册时抛错（调用方复活后重试，与 followup 同约定）。
+   * 投递消息记 queueModes（W10b 队列面板按 id 辨 steer/inject）。
+   */
+  steer(sessionId: string, text: string): void {
+    const entry = live.get(sessionId);
+    if (!entry) throw new Error(`agent session not found: ${sessionId}`);
+    const message = createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text }],
+    });
+    entry.queueModes.set((message as { id?: string }).id ?? '', 'steer');
+    entry.agent.steer(message as never);
+  },
+
+  // ------------------------------------------------ 队列面板（W10b，内核 inbox）
+
+  /** 队列视图：next-turn（排队，逐条生效序）在前 + next-step（steer/inject
+   * 挂起项）在后；冻结段暂离 inbox 不在视图（editing 字段告知悬置）。 */
+  queueView(
+    sessionId: string,
+  ): { items: Array<{ messageId: string; mode: 'queue' | 'steer' | 'inject'; text: string }>; editing: string | null } {
+    const entry = live.get(sessionId);
+    if (!entry) throw new Error(`agent session not found: ${sessionId}`);
+    const items = [
+      ...entry.agent.inbox.nextTurn.map((m) => ({
+        messageId: inboxMessageId(m),
+        mode: 'queue' as const,
+        text: inboxMessageText(m),
+      })),
+      ...entry.agent.inbox.nextStep.map((m) => {
+        const id = inboxMessageId(m);
+        return {
+          messageId: id,
+          mode: entry.queueModes.get(id) ?? 'steer',
+          text: inboxMessageText(m),
+        };
+      }),
+    ];
+    return { items, editing: entry.frozenEditingId };
+  },
+
+  /** 冻结（进入编辑，Owner 设计）：该条及其后的排队消息暂离 inbox——当前轮
+   * 结束后不再自动开轮。返回编辑文本。仅 queue 模式条目（steer/inject 是
+   * step 边界挂起项，无逐条生效序，不参与冻结）。 */
+  queueFreeze(sessionId: string, messageId: string): string {
+    const entry = live.get(sessionId);
+    if (!entry) throw new Error(`agent session not found: ${sessionId}`);
+    if (entry.frozenEditingId !== null) throw new Error('已有编辑中的队列条目（先确认或取消）');
+    const turn = entry.agent.inbox.nextTurn;
+    const idx = turn.findIndex((m) => inboxMessageId(m) === messageId);
+    if (idx < 0) throw new Error(`队列中没有该排队条目：${messageId}`);
+    entry.frozenQueue = entry.agent.inbox.splice('next-turn', idx, turn.length - idx, []);
+    entry.frozenEditingId = messageId;
+    return inboxMessageText(entry.frozenQueue[0]);
+  },
+
+  /** 放回冻结段（确认/取消共用）：按原序逐条 followup 投递——冻结段必为原
+   * next-turn 队尾连续段，append 语义无损还原位置；idle 时首条唤醒开轮、
+   * 其余排队。确认时首条文本换新（firstText=null 为取消，原样放回）。 */
+  queueUnfreeze(sessionId: string, firstText: string | null): void {
+    const entry = live.get(sessionId);
+    if (!entry) throw new Error(`agent session not found: ${sessionId}`);
+    const frozen = entry.frozenQueue;
+    entry.frozenQueue = [];
+    entry.frozenEditingId = null;
+    frozen.forEach((message, i) => {
+      const text = i === 0 && firstText !== null ? firstText : inboxMessageText(message);
+      entry.agent.followup(
+        createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] }) as never,
+      );
+    });
+  },
+
+  /** 删除一条（排队/挂起皆可；不在队列幂等成功）。 */
+  queueRemove(sessionId: string, messageId: string): void {
+    const entry = live.get(sessionId);
+    if (!entry) throw new Error(`agent session not found: ${sessionId}`);
+    entry.queueModes.delete(messageId);
+    entry.agent.inbox.remove(messageId);
+  },
+
+  /** 修改投递模式（Owner 设计：可改成注入或引导）：取出→按新模式重投。
+   * 三个高层方法各自处理桶归属与唤醒；新消息 id 记 queueModes 辨识。 */
+  queueSetMode(sessionId: string, messageId: string, mode: 'queue' | 'steer' | 'inject'): void {
+    const entry = live.get(sessionId);
+    if (!entry) throw new Error(`agent session not found: ${sessionId}`);
+    const message = [...entry.agent.inbox.nextTurn, ...entry.agent.inbox.nextStep].find(
+      (m) => inboxMessageId(m) === messageId,
+    );
+    if (message === undefined) throw new Error(`队列中没有该条目：${messageId}`);
+    entry.queueModes.delete(messageId);
+    entry.agent.inbox.remove(messageId);
+    const rebuilt = createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: inboxMessageText(message) }],
+    });
+    const rebuiltId = (rebuilt as { id?: string }).id ?? '';
+    if (mode === 'queue') entry.agent.followup(rebuilt as never);
+    else {
+      entry.queueModes.set(rebuiltId, mode);
+      if (mode === 'steer') entry.agent.steer(rebuilt as never);
+      else entry.agent.inject(rebuilt as never);
+    }
   },
 
     /** 回答一个待答请求（未知/已解决返回 false）。 */

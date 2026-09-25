@@ -17,6 +17,34 @@ export class FakeAgent {
   session: { id: string; header: { cwd?: string } };
   prompts: RecordedPrompt[] = [];
   cancellations: Array<{ cause: unknown; options: unknown }> = [];
+  /** W10b：steer/inject 记录面（消息同时进 next-step 桶；驱动器不模拟消费，
+   * 消息停留桶中供队列面板操作与断言）。 */
+  steers: unknown[] = [];
+  injects: unknown[] = [];
+  /** W10b 队列面板：内核 inbox 的最小内存实现（followup/steer/inject 入桶，
+   * remove/replace/splice 可操作——真实内核的持久化语义不在测试面）。 */
+  inbox = {
+    nextTurn: [] as unknown[],
+    nextStep: [] as unknown[],
+    remove: (messageId: string): boolean => {
+      const t = this.inbox.nextTurn.findIndex((m) => FakeAgent.messageId(m) === messageId);
+      if (t >= 0) { this.inbox.nextTurn.splice(t, 1); return true; }
+      const s = this.inbox.nextStep.findIndex((m) => FakeAgent.messageId(m) === messageId);
+      if (s >= 0) { this.inbox.nextStep.splice(s, 1); return true; }
+      return false;
+    },
+    replace: (messageId: string, newMessage: unknown): boolean => {
+      const t = this.inbox.nextTurn.findIndex((m) => FakeAgent.messageId(m) === messageId);
+      if (t >= 0) { this.inbox.nextTurn[t] = newMessage; return true; }
+      const s = this.inbox.nextStep.findIndex((m) => FakeAgent.messageId(m) === messageId);
+      if (s >= 0) { this.inbox.nextStep[s] = newMessage; return true; }
+      return false;
+    },
+    splice: (target: 'next-turn' | 'next-step', start: number, deleteCount: number, inserted: unknown[]): unknown[] => {
+      const list = target === 'next-turn' ? this.inbox.nextTurn : this.inbox.nextStep;
+      return list.splice(start, deleteCount, ...inserted);
+    },
+  };
   /** user-questions/request 监听器（审批应答面）。 */
   answerer: ((request: { questions?: unknown }, next: () => Promise<unknown>) => Promise<unknown>) | null = null;
   ctx = {
@@ -28,13 +56,29 @@ export class FakeAgent {
     },
   };
 
+  /** 消息 id 提取（与 sessions.ts 的 inboxMessageId 同规则）。 */
+  static messageId(message: unknown): string {
+    return String((message as { id?: unknown }).id ?? '');
+  }
+
   constructor(sessionId: string) {
     this.id = sessionId;
     this.session = { id: sessionId, header: { cwd: '/tmp' } };
   }
 
   followup(message: unknown): void {
+    this.inbox.nextTurn.push(message);
     this.prompts.push({ text: JSON.stringify(message) });
+  }
+
+  steer(message: unknown): void {
+    this.inbox.nextStep.push(message);
+    this.steers.push(message);
+  }
+
+  inject(message: unknown): void {
+    this.inbox.nextStep.push(message);
+    this.injects.push(message);
   }
 
   cancel(cause: unknown, options?: unknown): void {

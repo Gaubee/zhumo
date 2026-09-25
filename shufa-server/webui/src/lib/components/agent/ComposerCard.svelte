@@ -15,6 +15,8 @@
 <script lang="ts">
   import IconFile from "@lucide/svelte/icons/file";
   import IconSend from "@lucide/svelte/icons/send";
+  import IconSquare from "@lucide/svelte/icons/square";
+  import IconZap from "@lucide/svelte/icons/zap";
   import IconChevronDown from "@lucide/svelte/icons/chevron-down";
   import IconCheck from "@lucide/svelte/icons/check";
   import IconImage from "@lucide/svelte/icons/image";
@@ -49,8 +51,21 @@
     capacity = null,
     onsetmodel,
     onseteffort,
+    /** 停止当前轮（W10）：running 态回调；缺省时 running 仍可排队发送。 */
+    onstop = null,
+    /** 队列编辑态（W10b）：发送按钮变「确认修改」，Enter=确认、Escape=取消。 */
+    editingActive = false,
+    /** 进入编辑时回填的队列文本（变化触发填充；null=非编辑）。 */
+    editingDraft = null,
+    onconfirmedit = null,
+    oncanceledit = null,
   }: {
-    onsend: (text: string) => void;
+    onsend: (text: string, mode?: "followup" | "steer") => void;
+    onstop?: (() => void) | null;
+    editingActive?: boolean;
+    editingDraft?: string | null;
+    onconfirmedit?: ((text: string) => void) | null;
+    oncanceledit?: (() => void) | null;
     disabled?: boolean;
     sending?: boolean;
     videoName?: string | null;
@@ -222,22 +237,61 @@
 
   // ------------------------------------------------------------ 提交与键盘
 
-  function submit(): void {
+  /** 队列编辑回填（W10b）：editingDraft 变化即填充（页面层点「编辑」时置入）。 */
+  $effect(() => {
+    if (editingDraft !== null && editingActive) text = editingDraft;
+  });
+
+  /** 页面层协调用（bind:this）：进入编辑前查输入框是否有未发送内容
+   * （Owner 设计：有内容拒绝编辑模式）。 */
+  export function draftLength(): number {
+    return text.trim().length;
+  }
+
+  function submit(mode: "followup" | "steer" = "followup"): void {
     const trimmed = text.trim();
     if (trimmed.length === 0 || sending || disabled) return;
-    // 附件路径注入（走查 R7：agent 经工具按路径读取图片）。
+    // 队列编辑态（W10b）：发送=确认修改（文本回冻结段首条），不走 onsend。
+    if (editingActive) {
+      onconfirmedit?.(trimmed);
+      text = "";
+      attachments = [];
+      return;
+    }
+    // 附件路径注入（走查 R7）：agent 经工具按路径读取图片。
     const attachLines = attachments
       .map((a) => `[图片附件 ${a.name}]：${a.path}`)
       .join("\n");
-    onsend(attachLines.length > 0 ? `${trimmed}\n${attachLines}` : trimmed);
+    onsend(attachLines.length > 0 ? `${trimmed}\n${attachLines}` : trimmed, mode);
+    // W10 通道反馈：运行中发送走内核 inbox/steer，等待被消费——即时告知去向。
+    if (running) notice(mode === "steer" ? "已引导当前轮（下一步即生效）" : "已排队，本轮结束后自动送达");
     text = "";
     attachments = [];
+  }
+
+  /** 通道反馈（W10）：3s 自清。 */
+  let noticeText = $state<string | null>(null);
+  let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  function notice(message: string): void {
+    noticeText = message;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => (noticeText = null), 3000);
+  }
+
+  /** 停止当前轮（W10）：turn/end(cancelled) 帧与任务 done 状态由 WS 流到达。 */
+  function stop(): void {
+    onstop?.();
   }
 
   function onkeydown(event: KeyboardEvent): void {
     // 触发面板键盘先占（v2 同序：命令 → 知识库 → 资源；任一消费即止）。
     if (slashMenu?.handleKeydown(event)) return;
     if (kbMenu?.handleKeydown(event)) return;
+    if (event.key === "Escape" && editingActive) {
+      event.preventDefault();
+      oncanceledit?.();
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
       submit();
@@ -331,6 +385,12 @@
     class="hidden"
     onchange={(event) => void onFilesPicked(event.currentTarget.files)}
   />
+  {#if noticeText !== null}
+    <div class="mb-1 flex items-center gap-1.5 px-1 text-[11px] text-muted-foreground" role="status">
+      <IconZap class="h-3 w-3 shrink-0" aria-hidden="true" />
+      <span>{noticeText}</span>
+    </div>
+  {/if}
   <textarea
     bind:this={textareaEl}
     bind:value={text}
@@ -338,7 +398,7 @@
     oninput={syncCaret}
     onclick={syncCaret}
     onkeyup={syncCaret}
-    {placeholder}
+    placeholder={editingActive ? "编辑队列消息（Enter 确认，Esc 取消）…" : placeholder}
     rows="1"
     class="block w-full resize-none bg-transparent px-1.5 py-1 text-[13px] leading-6 outline-none placeholder:text-muted-foreground/70"
   ></textarea>
@@ -501,14 +561,67 @@
         </Popover.Root>
       {/if}
     {/if}
-    <Button
-      size="sm"
-      class="h-8 w-8 rounded-full p-0"
-      disabled={sending || disabled || text.trim().length === 0}
-      onclick={submit}
-      aria-label="发送"
-    >
-      <IconSend class="h-4 w-4" />
-    </Button>
+    {#if editingActive}
+      <!-- W10b 队列编辑：发送位变「确认修改」+ 取消（Owner 设计）。 -->
+      <Button
+        size="sm"
+        variant="outline"
+        class="h-8 w-8 rounded-full p-0"
+        disabled={disabled}
+        onclick={() => oncanceledit?.()}
+        aria-label="取消编辑"
+        title="取消编辑（队列按原样放回）"
+      >
+        <IconX class="h-4 w-4" />
+      </Button>
+      <Button
+        size="sm"
+        class="h-8 w-8 rounded-full p-0"
+        disabled={sending || disabled || text.trim().length === 0}
+        onclick={() => submit()}
+        aria-label="确认修改"
+        title="确认修改（该条及其后按原序放回队列）"
+      >
+        <IconCheck class="h-4 w-4" />
+      </Button>
+    {:else if running && text.trim().length === 0 && onstop !== null}
+      <!-- W10 三态：运行中且无输入 → 停止（cancel{user}+keepInbox，任务回 done 可续聊）。 -->
+      <Button
+        size="sm"
+        class="h-8 w-8 rounded-full p-0 hover:bg-destructive/10 hover:text-destructive"
+        disabled={disabled}
+        onclick={stop}
+        aria-label="停止生成"
+        title="停止生成（已排队的消息保留）"
+      >
+        <IconSquare class="h-3.5 w-3.5 fill-current" />
+      </Button>
+    {:else}
+      {#if running && text.trim().length > 0}
+        <!-- W10：运行中有输入 → 引导（steer，下一 step 边界消费，影响当前轮）。 -->
+        <Button
+          size="sm"
+          variant="outline"
+          class="h-8 w-8 rounded-full p-0"
+          disabled={sending || disabled}
+          onclick={() => submit("steer")}
+          aria-label="引导当前轮"
+          title="立即引导：不等本轮结束，下一步即生效"
+        >
+          <IconZap class="h-3.5 w-3.5" />
+        </Button>
+      {/if}
+      <!-- running 时发送=排队（内核 next-turn inbox，本轮结束自动续跑）。 -->
+      <Button
+        size="sm"
+        class="h-8 w-8 rounded-full p-0"
+        disabled={sending || disabled || text.trim().length === 0}
+        onclick={() => submit()}
+        aria-label={running ? "排队发送" : "发送"}
+        title={running ? "排队发送：本轮结束后自动送达" : "发送"}
+      >
+        <IconSend class="h-4 w-4" />
+      </Button>
+    {/if}
   </div>
 </div>

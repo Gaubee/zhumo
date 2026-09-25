@@ -9,6 +9,7 @@
  */
 import { api } from "$lib/api";
 import type { Frame, Task, TaskResultRefView } from "$lib/types";
+import type { TaskQueueItem, TaskQueueMode } from "@zhumo/contracts";
 
 export const tasks = $state({
   list: [] as Task[],
@@ -19,6 +20,13 @@ export const tasks = $state({
   sending: false,
   loading: true,
   error: null as string | null,
+});
+
+/** 队列面板（W10b，内核 inbox 视图）：items 按生效序；editing=冻结中的
+ * 条目 id（编辑会话期间该条及其后暂离队列）。 */
+export const queue = $state({
+  items: [] as TaskQueueItem[],
+  editing: null as string | null,
 });
 
 let unsubscribe: (() => void) | null = null;
@@ -44,6 +52,8 @@ export async function selectTask(taskId: string): Promise<void> {
   // 先清结果/帧：切换瞬间不残留上一任务的标签与转录（走查 2026-09-25：
   // 用户实测「导出结果不跟着任务走」——慢网下旧任务响应晚到覆盖新任务）。
   tasks.results = [];
+  queue.items = [];
+  queue.editing = null;
   const frames = await api.getTaskFrames(taskId);
   if (tasks.selectedId !== taskId) return; // 已切走：过期响应丢弃
   tasks.frames = frames;
@@ -69,6 +79,12 @@ export async function selectTask(taskId: string): Promise<void> {
     }
     // 内核会话标题帧（2026-09-25 三轮）：行标题即时跟进（title 落库回读）。
     if (frame.kind === "session-title") void loadTaskRow(taskId);
+    // 队列面板（W10b）：队头被消费（user-text）或轮结束（turn-end）→ 队列
+    // 已变，重拉视图（不在编辑冻结中拉——冻结段不在内核 inbox，重拉会把
+    // 悬置段从面板上抹掉）。
+    if (frame.kind === "user-text" || frame.kind === "turn-end") {
+      if (queue.editing === null) void refreshQueue();
+    }
   });
   if (tasks.selectedId !== taskId) {
     subscribe(); // 等待期间已切走：立即退订，不留悬挂订阅
@@ -128,13 +144,14 @@ function dropOptimistic(text: string): void {
   if (idx !== undefined) tasks.frames = tasks.frames.filter((_, i) => i !== idx);
 }
 
-export async function sendPrompt(prompt: string): Promise<void> {
+export async function sendPrompt(prompt: string, mode: "followup" | "steer" = "followup"): Promise<void> {
   const taskId = tasks.selectedId;
   const trimmed = prompt.trim();
   if (taskId === null || tasks.sending || trimmed.length === 0) return;
   // 内核命令（/compact 等，2026-09-25 前台对齐）：daemon 分流不进 LLM、不产生
   // user 帧——不插乐观气泡，也不做 running 联动（命令结果由帧流呈现）。
-  if (trimmed.startsWith("/")) {
+  // steer 是裸文本通道（W10），"/" 前缀在 steer 下按普通文本投递。
+  if (trimmed.startsWith("/") && mode === "followup") {
     tasks.sending = true;
     tasks.error = null;
     try {
@@ -158,7 +175,7 @@ export async function sendPrompt(prompt: string): Promise<void> {
   };
   tasks.frames = [...tasks.frames, optimistic];
   try {
-    await api.sendTaskPrompt(taskId, trimmed);
+    await api.sendTaskPrompt(taskId, trimmed, mode);
     // followup 触发 resume（done/failed 续聊）时任务即时回 running；状态帧到达前先行联动。
     tasks.list = tasks.list.map((t) =>
       t.id === taskId && t.status !== "running" ? { ...t, status: "running" as const } : t,
@@ -168,6 +185,100 @@ export async function sendPrompt(prompt: string): Promise<void> {
     tasks.error = error instanceof Error ? error.message : String(error);
   } finally {
     tasks.sending = false;
+  }
+}
+
+/** 打断当前轮（W10）：后端 cancel{user}+keepInbox——任务回 done（等待输入、
+ * 可续聊）；turn/end(cancelled) 帧与 status 帧由 WS 流到达。乐观联动任务态，
+ * 避免停止后到帧前的窗口期 composer 仍显示 running 态按钮。 */
+export async function stopPrompt(): Promise<void> {
+  const taskId = tasks.selectedId;
+  if (taskId === null) return;
+  try {
+    await api.stopTask(taskId);
+    tasks.list = tasks.list.map((t) =>
+      t.id === taskId && t.status === "running" ? { ...t, status: "done" as const } : t,
+    );
+  } catch (error) {
+    tasks.error = error instanceof Error ? error.message : String(error);
+  }
+}
+
+// ------------------------------------------------ 队列面板操作（W10b）
+
+export async function refreshQueue(): Promise<void> {
+  const taskId = tasks.selectedId;
+  if (taskId === null) return;
+  try {
+    const out = await api.taskQueue(taskId);
+    queue.items = out.items;
+    queue.editing = out.editing;
+  } catch {
+    // 队列拉取失败不打断对话流；下次帧到达或操作后重试。
+  }
+}
+
+/** 进入编辑（冻结该条及其后）：返回回填文本；失败（已有编辑中/条目已消费）
+ * 返回 null 并置错误。 */
+export async function editQueueItem(messageId: string): Promise<string | null> {
+  const taskId = tasks.selectedId;
+  if (taskId === null) return null;
+  try {
+    const text = await api.taskQueueEdit(taskId, messageId);
+    queue.editing = messageId;
+    await refreshQueue();
+    return text;
+  } catch (error) {
+    tasks.error = error instanceof Error ? error.message : String(error);
+    return null;
+  }
+}
+
+/** 确认编辑（发送=确认按钮触发）：冻结段按原序放回，首条用新文本。 */
+export async function confirmQueueEdit(text: string): Promise<void> {
+  const taskId = tasks.selectedId;
+  if (taskId === null) return;
+  try {
+    await api.taskQueueEditConfirm(taskId, text);
+    queue.editing = null;
+    await refreshQueue();
+  } catch (error) {
+    tasks.error = error instanceof Error ? error.message : String(error);
+  }
+}
+
+/** 取消编辑：冻结段原样放回。 */
+export async function cancelQueueEdit(): Promise<void> {
+  const taskId = tasks.selectedId;
+  if (taskId === null) return;
+  try {
+    await api.taskQueueEditCancel(taskId);
+    queue.editing = null;
+    await refreshQueue();
+  } catch (error) {
+    tasks.error = error instanceof Error ? error.message : String(error);
+  }
+}
+
+export async function removeQueueItem(messageId: string): Promise<void> {
+  const taskId = tasks.selectedId;
+  if (taskId === null) return;
+  try {
+    await api.taskQueueRemove(taskId, messageId);
+    await refreshQueue();
+  } catch (error) {
+    tasks.error = error instanceof Error ? error.message : String(error);
+  }
+}
+
+export async function setQueueItemMode(messageId: string, mode: TaskQueueMode): Promise<void> {
+  const taskId = tasks.selectedId;
+  if (taskId === null) return;
+  try {
+    await api.taskQueueSetMode(taskId, messageId, mode);
+    await refreshQueue();
+  } catch (error) {
+    tasks.error = error instanceof Error ? error.message : String(error);
   }
 }
 

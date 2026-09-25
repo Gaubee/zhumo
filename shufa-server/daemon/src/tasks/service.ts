@@ -23,6 +23,13 @@ import type {
   TaskFollowupOutput,
   TaskGetOutput,
   TaskItem,
+  TaskQueueEditCancelOutput,
+  TaskQueueEditConfirmOutput,
+  TaskQueueEditOutput,
+  TaskQueueListOutput,
+  TaskQueueMode,
+  TaskQueueRemoveOutput,
+  TaskQueueSetModeOutput,
   TaskStatus,
 } from '@zhumo/contracts';
 import type { AppConfig } from '../config.js';
@@ -398,7 +405,10 @@ export class TaskService {
    * done/failed → 先 resume（任务拉回 running + 状态帧）再排队；resume 失败置
    * failed 并向调用方抛错（不静默）。权限：仅本人（admin 豁免）。
    */
-  async followup(user: UserRow, input: { id: string; text: string }): Promise<TaskFollowupOutput> {
+  async followup(
+    user: UserRow,
+    input: { id: string; text: string; mode?: 'followup' | 'steer' },
+  ): Promise<TaskFollowupOutput> {
     const task = getTaskById(this.deps.db, input.id);
     if (!task) throw new ORPCError('NOT_FOUND', { message: `任务不存在：${input.id}` });
     if (task.owner_id !== user.id && user.role !== 'admin') {
@@ -435,8 +445,15 @@ export class TaskService {
       this.emitStatus(sessionId, task.id, 'running');
     }
 
+    // 投递通道（W10）：followup=排队下一轮（缺省）；steer=引导当前轮
+    // （idle 时内核等价开新轮，复活路径与 followup 完全共用）。
+    const deliver = (): void =>
+      input.mode === 'steer'
+        ? this.deps.sessions.steer(sessionId, input.text)
+        : this.deps.sessions.followup(sessionId, input.text);
+
     try {
-      this.deps.sessions.followup(sessionId, input.text);
+      deliver();
     } catch {
       // running 但会话不在册（daemon 重启后）：复活一次再投递；失败同上收敛 failed。
       try {
@@ -446,7 +463,7 @@ export class TaskService {
         });
         this.rebind(task);
         resumed = true;
-        this.deps.sessions.followup(sessionId, input.text);
+        deliver();
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         console.warn(`[tasks] 续聊复活失败（task=${task.id}）：${detail}`);
@@ -458,6 +475,98 @@ export class TaskService {
 
     const fresh = getTaskById(this.deps.db, task.id) ?? task;
     return { accepted: true, resumed, task: this.toItem(fresh) };
+  }
+
+  /**
+   * 打断当前轮（W10，DSH 内核 cancel{kind:'user'}+keepInbox）：中止生成、
+   * 任务回 done（idle 等待输入、可续聊）；排队消息保留——内核在被打断轮
+   * 收敛后自动续跑下一轮排队项。与终态取消（cancel → cancelled 不可续聊）
+   * 语义不同。非 running（无可打断活动）幂等返回现值；会话不在册（daemon
+   * 重启后）任务本就不在生成中，同样幂等。
+   */
+  stop(user: UserRow, id: string): TaskItem {
+    const task = this.requireOwnedTask(user, id);
+    if (task.status === 'cancelled') {
+      throw new ORPCError('CONFLICT', { message: '已取消的任务不可操作' });
+    }
+    if (task.agent_session_id && this.deps.sessions.isLive(task.agent_session_id)) {
+      this.deps.sessions.cancel(task.agent_session_id);
+      // turn/end(cancelled) 帧由内核 firehose 自然落下（投影已有）；任务状态
+      // 置 done=等待下一次输入——排队消息由内核自动续跑，续跑的 turn/end
+      // 会再次到达，届时状态不变（仍 done，除非新一轮失败路径改写）。
+      const updated = updateTask(this.deps.db, task.id, { status: 'done', error: null });
+      if (task.agent_session_id) this.emitStatus(task.agent_session_id, task.id, 'done');
+      return this.toItem(updated ?? task);
+    }
+    if (task.status === 'running' || task.status === 'queued') {
+      // live 已丢（daemon 重启窗口）：没有可中止的活动，直接回 done 收口。
+      const updated = updateTask(this.deps.db, task.id, { status: 'done', error: null });
+      if (task.agent_session_id) this.emitStatus(task.agent_session_id, task.id, 'done');
+      return this.toItem(updated ?? task);
+    }
+    return this.toItem(task);
+  }
+
+  // ------------------------------------------------ 队列面板（W10b，内核 inbox）
+
+  /** 队列视图：live 不在册（daemon 重启后未 resume）返回空——重开对话
+   * （followup/面板操作触发 resume）时 inbox 由内核持久 splices 恢复。 */
+  queueView(user: UserRow, id: string): TaskQueueListOutput {
+    const task = this.requireOwnedTask(user, id);
+    if (!task.agent_session_id || !this.deps.sessions.isLive(task.agent_session_id)) {
+      return { items: [], editing: null };
+    }
+    const view = this.deps.sessions.queueView(task.agent_session_id);
+    return {
+      items: view.items.map((i) => ({ message_id: i.messageId, mode: i.mode, text: i.text })),
+      editing: view.editing,
+    };
+  }
+
+  /** 进入编辑：冻结该条及其后的排队消息（暂离内核 inbox，不再自动开轮）。 */
+  queueEdit(user: UserRow, id: string, messageId: string): TaskQueueEditOutput {
+    const task = this.requireOwnedTask(user, id);
+    this.requireLiveSession(task);
+    return { text: this.deps.sessions.queueFreeze(task.agent_session_id!, messageId) };
+  }
+
+  /** 确认编辑：首条按新文本重建，冻结段按原序放回（idle 时逐条唤醒开轮）。 */
+  queueEditConfirm(user: UserRow, id: string, text: string): TaskQueueEditConfirmOutput {
+    const task = this.requireOwnedTask(user, id);
+    this.requireLiveSession(task);
+    this.deps.sessions.queueUnfreeze(task.agent_session_id!, text);
+    return { accepted: true };
+  }
+
+  /** 取消编辑：冻结段原样放回。 */
+  queueEditCancel(user: UserRow, id: string): TaskQueueEditCancelOutput {
+    const task = this.requireOwnedTask(user, id);
+    this.requireLiveSession(task);
+    this.deps.sessions.queueUnfreeze(task.agent_session_id!, null);
+    return { accepted: true };
+  }
+
+  /** 删除一条（幂等）。 */
+  queueRemove(user: UserRow, id: string, messageId: string): TaskQueueRemoveOutput {
+    const task = this.requireOwnedTask(user, id);
+    this.requireLiveSession(task);
+    this.deps.sessions.queueRemove(task.agent_session_id!, messageId);
+    return { accepted: true };
+  }
+
+  /** 修改投递模式（排队↔引导/注入）。 */
+  queueSetMode(user: UserRow, id: string, messageId: string, mode: TaskQueueMode): TaskQueueSetModeOutput {
+    const task = this.requireOwnedTask(user, id);
+    this.requireLiveSession(task);
+    this.deps.sessions.queueSetMode(task.agent_session_id!, messageId, mode);
+    return { accepted: true };
+  }
+
+  /** 队列写操作前置：会话必须 live（不在册=重启后未开对话，队列本就空）。 */
+  private requireLiveSession(task: TaskRow): void {
+    if (!task.agent_session_id || !this.deps.sessions.isLive(task.agent_session_id)) {
+      throw new ORPCError('CONFLICT', { message: '会话不在运行，队列不可操作（先发送一条消息重开对话）' });
+    }
   }
 
   private async tryResume(task: TaskRow): Promise<void> {

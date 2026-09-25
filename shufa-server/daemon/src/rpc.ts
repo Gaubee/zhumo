@@ -32,6 +32,13 @@ import {
   SettingGetInputSchema,
   SettingPutInputSchema,
   TaskCancelInputSchema,
+  TaskStopInputSchema,
+  TaskQueueListInputSchema,
+  TaskQueueEditInputSchema,
+  TaskQueueEditConfirmInputSchema,
+  TaskQueueEditCancelInputSchema,
+  TaskQueueRemoveInputSchema,
+  TaskQueueSetModeInputSchema,
   TaskSetModelInputSchema,
   TaskCreateInputSchema,
   TaskFollowupInputSchema,
@@ -645,6 +652,84 @@ const tasksFollowup = requireActiveUser
     }
   });
 
+/** 打断当前轮（W10）：中止生成、任务回 done 可续聊；区别于终态 cancel。 */
+const tasksStop = requireActiveUser
+  .input(TaskStopInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      return await requireTaskService(context).stop(context.user as UserRow, input.id);
+    } catch (error) {
+      return taskOwnedException(error);
+    }
+  });
+
+// ----------------------------- 队列面板（W10b，内核 inbox；Owner 设计 2026-09-27）
+
+const tasksQueueList = requireActiveUser
+  .input(TaskQueueListInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      return await requireTaskService(context).queueView(context.user as UserRow, input.id);
+    } catch (error) {
+      return taskOwnedException(error);
+    }
+  });
+
+const tasksQueueEdit = requireActiveUser
+  .input(TaskQueueEditInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      return await requireTaskService(context).queueEdit(context.user as UserRow, input.id, input.message_id);
+    } catch (error) {
+      return taskOwnedException(error);
+    }
+  });
+
+const tasksQueueEditConfirm = requireActiveUser
+  .input(TaskQueueEditConfirmInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      return await requireTaskService(context).queueEditConfirm(context.user as UserRow, input.id, input.text);
+    } catch (error) {
+      return taskOwnedException(error);
+    }
+  });
+
+const tasksQueueEditCancel = requireActiveUser
+  .input(TaskQueueEditCancelInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      return await requireTaskService(context).queueEditCancel(context.user as UserRow, input.id);
+    } catch (error) {
+      return taskOwnedException(error);
+    }
+  });
+
+const tasksQueueRemove = requireActiveUser
+  .input(TaskQueueRemoveInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      return await requireTaskService(context).queueRemove(context.user as UserRow, input.id, input.message_id);
+    } catch (error) {
+      return taskOwnedException(error);
+    }
+  });
+
+const tasksQueueSetMode = requireActiveUser
+  .input(TaskQueueSetModeInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      return await requireTaskService(context).queueSetMode(
+        context.user as UserRow,
+        input.id,
+        input.message_id,
+        input.mode,
+      );
+    } catch (error) {
+      return taskOwnedException(error);
+    }
+  });
+
 // ---------------------------------------------------------------- res（资源管理器，§4「认证（仅本人文件夹）」）
 
 /** 附件上传（走查 R7）：登录用户；blob + 资源树登记，返回 agent 可读路径。 */
@@ -846,6 +931,13 @@ export const router = {
     create: tasksCreate,
     get: tasksGet,
     cancel: tasksCancel,
+    stop: tasksStop,
+    queueList: tasksQueueList,
+    queueEdit: tasksQueueEdit,
+    queueEditConfirm: tasksQueueEditConfirm,
+    queueEditCancel: tasksQueueEditCancel,
+    queueRemove: tasksQueueRemove,
+    queueSetMode: tasksQueueSetMode,
     setModel: tasksSetModel,
     followup: tasksFollowup,
   },
