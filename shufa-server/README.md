@@ -140,10 +140,10 @@ pnpm --filter @zhumo/daemon start   # 默认 http://127.0.0.1:8217
   ffmpeg ≥4 用宽字符 API，理论可用；但 uv/Python 子进程的输出编码与控制台代码页
   未经实测（如遇乱码可 `chcp 65001`）。稳妥起见，部署建议用**纯 ASCII 且不含
   空格**的路径。
-- **better-sqlite3 编译链**：v13 的 npm 包内自带 win32-x64 / win32-arm64 预编译
-  二进制（N-API，与 Node 小版本解耦），正常**无需** VS Build Tools；仅当安装
-  期命中源码编译兜底时才需要 Visual Studio Build Tools（含「使用 C++ 的桌面
-  开发」工作负载）。
+- **原生编译依赖：已清零（2026-09-25）**：SQLite 层已从 better-sqlite3（原生
+  模块）迁移到 Node 内置 `node:sqlite`（需 Node ≥ 23.4；本产品要求 Node 24+，
+  免 flag）。`pnpm install` 不再触发任何 node-gyp/预编译二进制下载，
+  Windows 上无需 Visual Studio Build Tools。
 - **防火墙弹窗**：首次启动若 Windows 防火墙弹「允许访问」，本产品默认只绑
   `127.0.0.1`，拒绝弹窗亦不影响本机使用；需要局域网访问时放行并把 `.env` 的
   `HOST` 改为 `0.0.0.0`（自行评估暴露面）。
