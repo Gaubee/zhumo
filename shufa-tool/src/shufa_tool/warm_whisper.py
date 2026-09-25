@@ -204,7 +204,20 @@ def link_snapshot(cache: Path, commit: str, spec: FileSpec, blobs: Path) -> None
     snap.parent.mkdir(parents=True, exist_ok=True)
     if snap.is_symlink() or snap.exists():
         snap.unlink()
-    snap.symlink_to(os.path.relpath(blobs / spec.blob_name, snap.parent))
+    target = blobs / spec.blob_name
+    try:
+        snap.symlink_to(os.path.relpath(target, snap.parent))
+    except OSError:
+        # Windows 普通用户无符号链接特权（WinError 1314）：同盘退硬链，跨盘退拷贝。
+        # 消费方（faster-whisper/mlx-whisper）按 HF 缓存约定读 snapshot 文件，
+        # 真实文件与符号链接等价；dir_size_bytes 的软链跳过语义不受影响（双计
+        # 仅膨胀日志展示，不破坏结构）。
+        try:
+            os.link(target, snap)
+        except OSError:
+            import shutil
+
+            shutil.copy2(target, snap)
 
 
 def dir_size_bytes(path: Path) -> int:
@@ -310,7 +323,14 @@ def main() -> int:
     refs.mkdir(parents=True, exist_ok=True)
     (refs / "main").write_text(commit)
     snap_dir = cache / "snapshots" / commit
-    weights = [p for p in snap_dir.iterdir() if p.name.endswith((".safetensors", ".npz"))]
+    # 权重后缀按引擎族：mlx=.safetensors/.npz、faster-whisper(CTranslate2)=.bin
+    # （W9 实测 Windows：Systran 仓库的 model.bin 不在旧后缀列表里，自检误报
+    # 「权重缺失」退码 6——faster 路径 mac 侧走不到，仅 win/linux 暴露）。
+    weights = [
+        p
+        for p in snap_dir.iterdir()
+        if p.name.endswith((".safetensors", ".npz", ".bin"))
+    ]
     if not weights or not all(w.is_file() and w.stat().st_size > 0 for w in weights):
         print("[失败] 预热完成但权重文件缺失或为空（悬空缓存？请重跑）", file=sys.stderr)
         return 6

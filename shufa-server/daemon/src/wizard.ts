@@ -263,8 +263,10 @@ export function whisperRepoFromUrl(url: string | null): string | null {
 }
 
 /** 预热完成判定：snapshots 下存在权重文件。mlx 仓库新格式 .safetensors、
- * 老格式 weights.npz 都认（实证 whisper-tiny 即 npz）。 */
-const WHISPER_WEIGHT_EXTS = ['.safetensors', '.npz'];
+ * 老格式 weights.npz 都认（实证 whisper-tiny 即 npz）；W9 faster-whisper
+ * （CTranslate2）权重是 model.bin——三平台实测 Windows 上后验误报「命令成功
+ * 但嗅探未通过」即缺此后缀（faster 路径 mac 侧走不到）。 */
+const WHISPER_WEIGHT_EXTS = ['.safetensors', '.npz', '.bin'];
 export function whisperCacheReady(repo: string): boolean {
   const dir = whisperCacheRepoDir(repo);
   if (!existsSync(dir)) return false;
