@@ -100,7 +100,7 @@ export interface DaemonHttpOptions {
 }
 
 export class DaemonHttp {
-  private server: http.Server | null = null;
+  private readonly servers: http.Server[] = [];
   private readonly wsServer = new WebSocketServer({ noServer: true });
   private readonly sockets = new Set<Socket>();
 
@@ -116,39 +116,76 @@ export class DaemonHttp {
     this.options.mcpEndpoint = endpoint;
   }
 
+  /**
+   * 监听（回环双栈，Windows 实证修复 2026-09-25）：host 为 IPv4 回环
+   * （127.0.0.1，含缺省）时额外绑 IPv6 回环 ::1——Windows 的 localhost
+   * 优先解析 ::1，HTTP fetch 会回退 127.0.0.1 但 WebSocket 直连失败
+   * （Owner 实测 ws://localhost 报错而 127.0.0.1 正常）。::1 绑定失败
+   * （无 IPv6 环境）降级仅 IPv4，不影响启动。
+   */
   listen(port: number, host: string): Promise<number> {
+    const hosts = host === '127.0.0.1' ? ['127.0.0.1', '::1'] : [host];
     return new Promise((resolve, reject) => {
-      const server = http.createServer((req, res) => {
-        void this.handle(req, res);
-      });
-      server.on('connection', (socket) => {
-        this.sockets.add(socket);
-        socket.once('close', () => this.sockets.delete(socket));
-      });
-      server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
-      server.once('error', reject);
-      server.listen(port, host, () => {
-        const address = server.address();
-        this.server = server;
-        resolve(typeof address === 'object' && address ? address.port : port);
-      });
+      let settled = false;
+      let pending = hosts.length;
+      const fail = (error: unknown): void => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      };
+      const done = (): void => {
+        pending -= 1;
+        if (pending === 0 && !settled) {
+          settled = true;
+          const address = this.servers[0]?.address();
+          resolve(typeof address === 'object' && address ? address.port : port);
+        }
+      };
+      for (const bindHost of hosts) {
+        const server = http.createServer((req, res) => {
+          void this.handle(req, res);
+        });
+        server.on('connection', (socket) => {
+          this.sockets.add(socket);
+          socket.once('close', () => this.sockets.delete(socket));
+        });
+        server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
+        server.once('error', (error) => {
+          // ::1 不可用（IPv6 缺席）按降级处理；主地址失败按启动失败上抛。
+          if (bindHost === '::1' && hosts[0] === '127.0.0.1') {
+            server.close();
+            console.warn('[http] ::1 绑定降级（IPv6 不可用）：仅监听 127.0.0.1');
+            done();
+            return;
+          }
+          fail(error);
+        });
+        server.listen(port, bindHost, () => {
+          this.servers.push(server);
+          done();
+        });
+      }
     });
   }
 
   /** 有界停机：宽限期内未走完的连接强制断开（优雅退出用）。 */
   stop(graceMs = 1000): Promise<void> {
-    const server = this.server;
-    if (!server) return Promise.resolve();
-    this.server = null;
+    const servers = this.servers.splice(0);
+    if (servers.length === 0) return Promise.resolve();
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         for (const client of this.wsServer.clients) client.terminate();
         for (const socket of this.sockets) socket.destroy();
-        server.closeAllConnections();
+        for (const server of servers) server.closeAllConnections();
       }, graceMs);
       timer.unref();
       this.wsServer.close(() => {
-        server.close(() => resolve());
+        let closing = servers.length;
+        if (closing === 0) return resolve();
+        for (const server of servers) server.close(() => {
+          closing -= 1;
+          if (closing === 0) resolve();
+        });
       });
     });
   }
