@@ -1,8 +1,11 @@
 """焦点区剪辑：从讲评视频裁出矩形区域 → 转正 → 小体积 H.264 mp4。
 
 意图（原始需求 2026-09-22）：分析 HTML 需要"可控、可重播的动态讲解"——把老师
-讲解焦点区域（bbox 为转正坐标系 (x,y,w,h)）从源视频裁成可循环 mp4，base64 内嵌
-自包含 HTML。体积控制：360p / crf30 / veryfast / 24fps / AAC 64k（保留讲解人声）。
+讲解焦点区域（bbox 为转正坐标系 (x,y,w,h)）从源视频裁成可循环 mp4。
+画质参数沿革（2026-09-25 实证修订）：早期为 base64 内嵌自包含 HTML 采用
+360p/crf30 极限体积；现资产经 daemon HTTP 流式分发（/api/results/{id}/assets），
+且本剪辑即结果页主播放器画面——360p/crf30 实测 40kbps，笔迹细节糊成一团
+（导出 72uzF2CLBNDF 走查实锤）。现为 720p / crf23 / medium / 24fps / AAC 128k。
 滤镜链顺序固定：先 transpose 转正（rotate_cw_steps 由 orient 模块产出，旋转元数据
 缺失时使用）→ 再 crop（参数即转正坐标系）→ scale；bbox 先按转正后实际尺寸在
 Python 侧钳制并对齐到偶数（libx264/yuv420p 要求，偶数 x/y 还避免色度错位）。
@@ -19,7 +22,7 @@ from pathlib import Path
 
 _HOMEBREW_BIN = "/opt/homebrew/bin"
 _STD_VCODEC = [
-    "-c:v", "libx264", "-crf", "30", "-preset", "veryfast",
+    "-c:v", "libx264", "-crf", "23", "-preset", "medium",
     "-pix_fmt", "yuv420p", "-movflags", "+faststart",
 ]
 
@@ -77,7 +80,7 @@ def make_focus_clip(
     rotate_cw_steps: int = 0,          # 顺时针 90° 步数
     start_s: float = 0.0,
     end_s: float | None = None,        # None = 到片尾
-    height: int = 360,
+    height: int = 720,
     with_audio: bool = True,
     enhance: bool = True,              # 音频降噪+响度归一 / 视频降噪+统一调色
 ) -> dict:
@@ -117,7 +120,7 @@ def make_focus_clip(
     if with_audio:
         if enhance:
             cmd += ["-af", "afftdn=nr=10:nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11"]
-        cmd += ["-c:a", "aac", "-b:a", "64k"]
+        cmd += ["-c:a", "aac", "-b:a", "128k"]
     else:
         cmd += ["-an"]
     cmd.append(str(out_path))
