@@ -73,22 +73,36 @@
   let listOpen = $state(false);
   let detailOpen = $state(false);
 
-  onMount(async () => {
-    // 走查演示开关（Owner 需求）：URL query demoDelay=<毫秒> → daemon 端
-    // DemoAgent（不调真实 LLM，队列数后端管理）。写入 sessionStorage，
-    // hash 导航不丢；0/缺省关闭。
+  onMount(() => {
+    // 走查演示开关（Owner 需求）：URL query demoDelay=<毫秒> → sessionStorage
+    //（hash 导航不丢）；0/缺省关闭。daemon 侧设置见下方 $effect（等 auth 就绪）。
     const demoDelay = Number(new URLSearchParams(location.search).get("demoDelay") ?? "");
     if (Number.isFinite(demoDelay) && demoDelay > 0) {
       sessionStorage.setItem("zhumo:demo-delay", String(Math.floor(demoDelay)));
       location.search = ""; // 清 query，保持地址干净（hash 路由不受影响）
-      return;
     }
-    const savedDelay = Number(sessionStorage.getItem("zhumo:demo-delay") ?? "0");
-    demoActive = Number.isFinite(savedDelay) && savedDelay > 0;
-    console.log("[demo-walkthrough] savedDelay=", savedDelay, "demoActive=", demoActive, "session=", auth.session !== null);
-    if (demoActive && auth.session !== null) await api.setDemoDelay(savedDelay);
+    demoActive = Number(sessionStorage.getItem("zhumo:demo-delay") ?? "0") > 0;
     // 未登录（匿名关闭）不拉任务面——守卫卡呈现，避免 401 噪音。
-    if (auth.session !== null) void loadTasks();
+    if (auth.session !== null)
+      void (async () => {
+        await api.ensureRpcReady();
+        await loadTasks();
+      })();
+  });
+
+  /** 演示延迟下发（W10g 竞态修复）：reload 后 auth.session 异步恢复，onMount
+   * 时刻可能仍为 null 导致 setDemoDelay 被跳过、demo 静默失效——改为跟随
+   * session 就绪一次性下发。 */
+  let demoDelayApplied = $state(false);
+  $effect(() => {
+    if (demoDelayApplied || auth.session === null) return;
+    const saved = Number(sessionStorage.getItem("zhumo:demo-delay") ?? "0");
+    if (!(saved > 0)) return;
+    demoDelayApplied = true;
+    void (async () => {
+      await api.ensureRpcReady();
+      await api.setDemoDelay(saved);
+    })().catch(() => {});
   });
 
   // 可用模型（走查 R6：对话中模型 chip；拉取失败静默隐藏 chip）。

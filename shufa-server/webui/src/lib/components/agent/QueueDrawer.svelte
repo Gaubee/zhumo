@@ -2,10 +2,12 @@
   /**
    * 队列抽屉（W10c，Owner 设计 2026-09-27 二轮）：输入面板上方紧贴长出的
    * 手风琴——收起=一行预览（条数 + 下一条文本），展开=完整队列列表。
-   * 行布局：status（锁定，可点击主动锁）+ 单行文本（含模式微标）+ actions
-   * （编辑/改模式/删除）。整行可拖动排序（HTML5 DnD）：拖动开始即全面板
-   * 锁定（actions 禁用、暂停帧驱动刷新防抖动），drop 一次性提交新序；
-   * 主动锁定的行固定原位（不可拖、重排时其余行绕开它滑动）。
+   * 行布局：status（三态锁，Owner 设计 2026-09-27）+ 单行文本（含模式微标）
+   * + actions（立刻发送/编辑/改模式/删除）。锁三态：解锁 / 主动锁定（点击
+   * 上锁）/ 被动锁定（生效序中位于主动锁之后的条目因互斥连带锁定，点击=
+   * 把主动锁上移到该行）。锁定（含被动）禁操作不可拖、重排固定原位。
+   * 整行可拖动排序（HTML5 DnD）：拖动开始即全面板锁定（actions 禁用、暂停
+   * 帧驱动刷新防抖动），drop 一次性提交新序。
    */
   import { slide } from "svelte/transition";
   import IconChevronDown from "@lucide/svelte/icons/chevron-down";
@@ -63,14 +65,35 @@
   let localOrder = $state<string[] | null>(null);
   let dragId = $state<string | null>(null);
 
-  const isLocked = (id: string): boolean => locked[id] === true;
-
-  const displayItems = $derived.by(() => {
-    if (localOrder === null) return items;
-    const byId = new Map(items.map((i) => [i.message_id, i]));
-    const shown = localOrder.map((id) => byId.get(id)).filter((i) => i !== undefined);
-    return shown as TaskQueueItem[];
+  /**
+   * 三态锁（Owner 设计）：生效序中第一把主动锁之后的全部条目被动锁定
+   * （互斥连带——锁定即「从这里到队尾视为整体」）。返回每条的锁态。
+   */
+  const lockStateOf = $derived.by(() => {
+    const states = new Map<string, "unlocked" | "locked" | "passive">();
+    let frozen = false;
+    for (const item of items) {
+      const active = locked[item.message_id] === true;
+      if (active) frozen = true;
+      states.set(item.message_id, active ? "locked" : frozen ? "passive" : "unlocked");
+    }
+    return states;
   });
+  const lockState = (id: string): "unlocked" | "locked" | "passive" =>
+    lockStateOf.get(id) ?? "unlocked";
+  const isLocked = (id: string): boolean => lockState(id) !== "unlocked";
+
+  /** 两组视图（W10g 时序如实表达）：挂起组（引导/注入=当前轮下一 step 边界，
+   * 时序上先于排队）在前；排队组按生效序。拖动只作用于排队组（挂起项无
+   * 逐条生效序）。 */
+  const queueItems = $derived.by(() => {
+    if (localOrder === null) return items.filter((i) => i.mode === "queue");
+    const byId = new Map(items.map((i) => [i.message_id, i]));
+    return localOrder
+      .map((id) => byId.get(id))
+      .filter((i): i is TaskQueueItem => i !== undefined && i.mode === "queue");
+  });
+  const pendingItems = $derived(items.filter((i) => i.mode !== "queue"));
 
   /** 非锁定行滑动、锁定行原位（挖槽回填）。 */
   function moveWithLocked(ids: string[], movingId: string, targetIndex: number): string[] {
@@ -109,7 +132,7 @@
   function onDragStart(event: DragEvent, item: TaskQueueItem): void {
     if (isLocked(item.message_id) || editing !== null) return;
     dragId = item.message_id;
-    localOrder = items.map((i) => i.message_id);
+    localOrder = queueItems.map((i) => i.message_id);
     onreordering(true); // store 置位：暂停帧驱动刷新（面板锁定）
     event.dataTransfer?.setData("text/plain", item.message_id);
     if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
@@ -125,7 +148,7 @@
   function onDragEnd(): void {
     if (dragId === null || localOrder === null) return;
     const ordered = localOrder;
-    const original = items.map((i) => i.message_id);
+    const original = queueItems.map((i) => i.message_id);
     dragId = null;
     localOrder = null;
     onreordering(false); // 先解锁刷新，提交后 refreshQueue 拉权威序
@@ -135,7 +158,7 @@
 
   /** 原序拖回（取消）：无需提交，但仍要恢复一次远端视图。 */
   async function onreorderRefreshOnly(): Promise<void> {
-    onreorder(items.map((i) => i.message_id));
+    onreorder(queueItems.map((i) => i.message_id));
   }
 </script>
 
@@ -172,7 +195,9 @@
         </span>
       {:else if items.length > 0}
         <span class="min-w-0 flex-1 truncate text-muted-foreground/70">
-          下一条：{displayItems[0]?.text ?? items[0]?.text}
+          {pendingItems.length > 0
+            ? `即将生效：${pendingItems[0]?.text}`
+            : `下一条：${queueItems[0]?.text}`}
         </span>
       {:else}
         <span class="flex-1"></span>
@@ -182,115 +207,138 @@
     {#if open}
       <div class="border-t border-border/60 px-2 py-1.5" transition:slide={{ duration: 140 }}>
         <p class="px-0.5 pb-1 text-[10px] text-muted-foreground/60">
-          逐条生效 · 拖动排序（拖动期间队列锁定）· 点锁可固定一条
+          点锁可固定一条（其后的消息连带锁定） · 拖动排序（拖动期间队列锁定）
+        </p>
+        {#snippet row(item: TaskQueueItem, index: number)}
+          <li
+            class="flex items-center gap-2 rounded border px-2 py-1 text-[12px] transition-colors {dragId === item.message_id
+              ? 'border-primary/50 bg-primary/5 opacity-60'
+              : 'border-border/60 bg-card'} {isLocked(item.message_id) ? 'opacity-75' : ''}"
+            draggable={item.mode === "queue" && !isLocked(item.message_id) && editing === null && !reordering}
+            ondragstart={(e) => onDragStart(e, item)}
+            ondragover={(e) => onDragOver(e, index)}
+            ondragend={onDragEnd}
+            class:cursor-grab={item.mode === "queue" && !isLocked(item.message_id) && editing === null}
+          >
+            <!-- status：三态锁定位（主动锁点击解锁；被动锁点击=主动锁上移到该行） -->
+            <button
+              type="button"
+              class="shrink-0 rounded p-0.5 {lockState(item.message_id) === 'locked'
+                ? 'text-amber-600'
+                : lockState(item.message_id) === 'passive'
+                  ? 'text-amber-600/45'
+                  : 'text-muted-foreground/40 hover:text-muted-foreground'}"
+              title={lockState(item.message_id) === 'locked'
+                ? "已主动锁定：本条及之后全部禁操作（点击解除）"
+                : lockState(item.message_id) === 'passive'
+                  ? "被动锁定（因本条之前有主动锁）；点击把锁定边界上移到本条"
+                  : "锁定：本条及之后全部视为整体（防误操作，排序时固定）"}
+              aria-label={lockState(item.message_id) === 'unlocked' ? "锁定" : "解锁"}
+              onclick={() => onsetlocked(item.message_id, lockState(item.message_id) !== 'locked')}
+            >
+              {#if lockState(item.message_id) === 'unlocked'}
+                <IconLockOpen class="h-3 w-3" />
+              {:else}
+                <IconLock class="h-3 w-3" />
+              {/if}
+            </button>
+            <!-- 模式微标 + 单行文本 -->
+            <span
+              class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] {item.mode === 'queue'
+                ? 'bg-primary/10 text-primary'
+                : item.mode === 'steer'
+                  ? 'bg-amber-500/15 text-amber-600'
+                  : 'bg-violet-500/15 text-violet-600'}"
+              title={item.mode === 'queue' ? '本轮结束后自动开轮' : item.mode === 'steer' ? '下一 step 边界影响当前轮' : '注入上下文（不作为对话轮）'}
+            >
+              {MODE_LABEL[item.mode]}
+            </span>
+            <span class="min-w-0 flex-1 truncate" title={item.text}>{item.text}</span>
+            <!-- actions：立刻发送/编辑（仅排队条目）/改模式/删除；锁定或拖动中禁用 -->
+            {#if item.mode === "queue"}
+              <button
+                type="button"
+                class="shrink-0 rounded p-1 text-muted-foreground hover:bg-primary/10 hover:text-primary disabled:opacity-30"
+                title="立刻发送：打断当前工作，以这条消息立即开始新一轮"
+                aria-label="立刻发送该消息"
+                disabled={isLocked(item.message_id) || editing !== null || reordering}
+                onclick={() => onsendnow(item.message_id)}
+              >
+                <IconSend class="h-3 w-3" />
+              </button>
+              <button
+                type="button"
+                class="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+                title="编辑（该条及其后冻结，文本回输入框）"
+                aria-label="编辑该消息"
+                disabled={isLocked(item.message_id) || editing !== null || reordering}
+                onclick={() => onedit(item.message_id)}
+              >
+                <IconPencil class="h-3 w-3" />
+              </button>
+            {/if}
+            <Popover.Root open={modeOpenId === item.message_id} onOpenChange={(o) => (modeOpenId = o ? item.message_id : null)}>
+              <Popover.Trigger>
+                {#snippet child({ props })}
+                  <button
+                    type="button"
+                    {...props}
+                    class="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+                    title="修改模式（排队 / 引导 / 注入）"
+                    aria-label="修改投递模式"
+                    disabled={isLocked(item.message_id) || editing !== null || reordering}
+                  >
+                    <IconRepeat class="h-3 w-3" />
+                  </button>
+                {/snippet}
+              </Popover.Trigger>
+              <Popover.Content side="top" align="end" class="w-36 p-1">
+                {#each MODE_CYCLE as mode (mode)}
+                  <button
+                    type="button"
+                    class="flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-[12px] hover:bg-muted {mode === item.mode ? 'font-medium text-primary' : ''}"
+                    onclick={() => {
+                      if (mode !== item.mode) onsetmode(item.message_id, mode);
+                      modeOpenId = null;
+                    }}
+                  >
+                    <span>{MODE_LABEL[mode]}</span>
+                    {#if mode === item.mode}
+                      <span class="text-[10px] text-muted-foreground">当前</span>
+                    {/if}
+                  </button>
+                {/each}
+              </Popover.Content>
+            </Popover.Root>
+            <button
+              type="button"
+              class="shrink-0 rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-30"
+              title="从队列删除"
+              aria-label="删除该消息"
+              disabled={isLocked(item.message_id) || reordering}
+              onclick={() => onremove(item.message_id)}
+            >
+              <IconTrash class="h-3 w-3" />
+            </button>
+          </li>
+        {/snippet}
+
+        {#if pendingItems.length > 0}
+          <p class="px-0.5 pb-1 pt-0.5 text-[10px] font-medium text-amber-600" title="当前轮的下一 step 边界立即消费——时序上先于全部排队消息">
+            即将生效 · 当前轮下一步（{pendingItems.length}）
+          </p>
+          <ul class="mb-1.5 flex flex-col gap-1">
+            {#each pendingItems as item (item.message_id)}
+              {@render row(item, -1)}
+            {/each}
+          </ul>
+        {/if}
+        <p class="px-0.5 pb-1 text-[10px] font-medium text-primary" title="本轮结束后按序逐条开轮">
+          排队 · 按序生效（{queueItems.length}）
         </p>
         <ul class="flex flex-col gap-1">
-          {#each displayItems as item, index (item.message_id)}
-            <li
-              class="flex items-center gap-2 rounded border px-2 py-1 text-[12px] transition-colors {dragId === item.message_id
-                ? 'border-primary/50 bg-primary/5 opacity-60'
-                : 'border-border/60 bg-card'} {isLocked(item.message_id) ? 'opacity-80' : ''}"
-              draggable={!isLocked(item.message_id) && editing === null && !reordering}
-              ondragstart={(e) => onDragStart(e, item)}
-              ondragover={(e) => onDragOver(e, index)}
-              ondragend={onDragEnd}
-              class:cursor-grab={!isLocked(item.message_id) && editing === null}
-            >
-              <!-- status：锁定位（点击主动锁定/解锁；锁定行禁操作固定原位） -->
-              <button
-                type="button"
-                class="shrink-0 rounded p-0.5 {isLocked(item.message_id)
-                  ? 'text-amber-600'
-                  : 'text-muted-foreground/40 hover:text-muted-foreground'}"
-                title={isLocked(item.message_id) ? "已锁定：不可编辑/删除/拖动" : "锁定该条（防误操作，排序时固定原位）"}
-                aria-label={isLocked(item.message_id) ? "解锁" : "锁定"}
-                onclick={() => onsetlocked(item.message_id, !isLocked(item.message_id))}
-              >
-                {#if isLocked(item.message_id)}
-                  <IconLock class="h-3 w-3" />
-                {:else}
-                  <IconLockOpen class="h-3 w-3" />
-                {/if}
-              </button>
-              <!-- 模式微标 + 单行文本 -->
-              <span
-                class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] {item.mode === 'queue'
-                  ? 'bg-primary/10 text-primary'
-                  : item.mode === 'steer'
-                    ? 'bg-amber-500/15 text-amber-600'
-                    : 'bg-violet-500/15 text-violet-600'}"
-                title={item.mode === 'queue' ? '本轮结束后自动开轮' : item.mode === 'steer' ? '下一 step 边界影响当前轮' : '注入上下文（不作为对话轮）'}
-              >
-                {MODE_LABEL[item.mode]}
-              </span>
-              <span class="min-w-0 flex-1 truncate" title={item.text}>{item.text}</span>
-              <!-- actions：立刻发送/编辑（仅排队条目）/改模式/删除；锁定或拖动中禁用 -->
-              {#if item.mode === "queue"}
-                <button
-                  type="button"
-                  class="shrink-0 rounded p-1 text-muted-foreground hover:bg-primary/10 hover:text-primary disabled:opacity-30"
-                  title="立刻发送：打断当前工作，以这条消息立即开始新一轮"
-                  aria-label="立刻发送该消息"
-                  disabled={isLocked(item.message_id) || editing !== null || reordering}
-                  onclick={() => onsendnow(item.message_id)}
-                >
-                  <IconSend class="h-3 w-3" />
-                </button>
-                <button
-                  type="button"
-                  class="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
-                  title="编辑（该条及其后冻结，文本回输入框）"
-                  aria-label="编辑该消息"
-                  disabled={isLocked(item.message_id) || editing !== null || reordering}
-                  onclick={() => onedit(item.message_id)}
-                >
-                  <IconPencil class="h-3 w-3" />
-                </button>
-              {/if}
-              <Popover.Root open={modeOpenId === item.message_id} onOpenChange={(o) => (modeOpenId = o ? item.message_id : null)}>
-                <Popover.Trigger>
-                  {#snippet child({ props })}
-                    <button
-                      type="button"
-                      {...props}
-                      class="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
-                      title="修改模式（排队 / 引导 / 注入）"
-                      aria-label="修改投递模式"
-                      disabled={isLocked(item.message_id) || editing !== null || reordering}
-                    >
-                      <IconRepeat class="h-3 w-3" />
-                    </button>
-                  {/snippet}
-                </Popover.Trigger>
-                <Popover.Content side="top" align="end" class="w-36 p-1">
-                  {#each MODE_CYCLE as mode (mode)}
-                    <button
-                      type="button"
-                      class="flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-[12px] hover:bg-muted {mode === item.mode ? 'font-medium text-primary' : ''}"
-                      onclick={() => {
-                        if (mode !== item.mode) onsetmode(item.message_id, mode);
-                        modeOpenId = null;
-                      }}
-                    >
-                      <span>{MODE_LABEL[mode]}</span>
-                      {#if mode === item.mode}
-                        <span class="text-[10px] text-muted-foreground">当前</span>
-                      {/if}
-                    </button>
-                  {/each}
-                </Popover.Content>
-              </Popover.Root>
-              <button
-                type="button"
-                class="shrink-0 rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-30"
-                title="从队列删除"
-                aria-label="删除该消息"
-                disabled={isLocked(item.message_id) || reordering}
-                onclick={() => onremove(item.message_id)}
-              >
-                <IconTrash class="h-3 w-3" />
-              </button>
-            </li>
+          {#each queueItems as item, index (item.message_id)}
+            {@render row(item, index)}
           {/each}
         </ul>
       </div>

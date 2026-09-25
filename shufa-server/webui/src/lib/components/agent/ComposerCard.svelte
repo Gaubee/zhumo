@@ -29,6 +29,7 @@
   import type { Attachment, AvailableModel } from "$lib/types";
   import TriggerMenu, { type MenuEntry } from "./TriggerMenu.svelte";
   import ContextMeter from "./ContextMeter.svelte";
+  import { toast } from "$lib/components/ui/toast/store.svelte";
 
   let {
     onsend,
@@ -269,13 +270,9 @@
     attachments = [];
   }
 
-  /** 通道反馈（W10）：3s 自清。 */
-  let noticeText = $state<string | null>(null);
-  let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  /** 通道反馈（W10；W10g 改走全局 toast——输入框内不再内嵌提示条）。 */
   function notice(message: string): void {
-    noticeText = message;
-    clearTimeout(noticeTimer);
-    noticeTimer = setTimeout(() => (noticeText = null), 3000);
+    toast(message);
   }
 
   /** 停止当前轮（W10）：turn/end(cancelled) 帧与任务 done 状态由 WS 流到达。 */
@@ -385,12 +382,6 @@
     class="hidden"
     onchange={(event) => void onFilesPicked(event.currentTarget.files)}
   />
-  {#if noticeText !== null}
-    <div class="mb-1 flex items-center gap-1.5 px-1 text-[11px] text-muted-foreground" role="status">
-      <IconZap class="h-3 w-3 shrink-0" aria-hidden="true" />
-      <span>{noticeText}</span>
-    </div>
-  {/if}
   <textarea
     bind:this={textareaEl}
     bind:value={text}

@@ -250,6 +250,8 @@ export interface ShufaApi {
   getTaskFrames(taskId: string): Promise<Frame[]>;
   subscribeTaskFrames(taskId: string, onFrame: (frame: Frame) => void): () => void;
   sendTaskPrompt(taskId: string, prompt: string, mode?: "followup" | "steer"): Promise<void>;
+  /** WS 通道就绪（刷新后首 RPC 前调用——未 open 时发送会被静默丢弃）。 */
+  ensureRpcReady(): Promise<void>;
   /** 打断当前轮（W10）：任务回 done 可续聊；区别于终态取消。 */
   stopTask(taskId: string): Promise<void>;
   /** 队列面板（W10b）：视图/编辑（冻结）/确认/取消/删除/改模式。 */
@@ -617,6 +619,8 @@ class MockApi implements ShufaApi {
     void replayAgentTurn(taskId, prompt);
   }
 
+  async ensureRpcReady(): Promise<void> {}
+
   async stopTask(taskId: string): Promise<void> {
     const task = mockDb.tasks.find((t) => t.id === taskId);
     if (task && task.status === "running") task.status = "done";
@@ -740,9 +744,21 @@ function setToken(token: string | null): void {
   if (token === null) localStorage.removeItem(TOKEN_KEY);
   else localStorage.setItem(TOKEN_KEY, token);
   cachedRpc = null; // token 变更 → 重建 WS 连接（token 在 upgrade query 上）
+  rpcReady = null;
 }
 
 let cachedRpc: ShufaRpc | null = null;
+let rpcReady: Promise<void> | null = null;
+
+/**
+ * 等 WS 通道就绪（W10g）：页面刷新后首个 RPC 若在 WebSocket open 之前发出
+ * 会被原生 WS 直接拒绝（InvalidStateError，async 调用方静默丢失——实测
+ * demo.setDelay 因此从未到达 daemon）。入口处 await 本方法消除竞态。
+ */
+export function ensureRpcReady(): Promise<void> {
+  rpc();
+  return rpcReady ?? Promise.resolve();
+}
 
 /** 同源 oRPC-over-WS 客户端；daemon 托管 webui 时天然同源（ws(s)://host/ws/rpc）。 */
 function rpc(): ShufaRpc {
@@ -752,6 +768,11 @@ function rpc(): ShufaRpc {
   const ws = new WebSocket(
     `${proto}//${location.host}/ws/rpc${token ? `?token=${encodeURIComponent(token)}` : ""}`,
   );
+  rpcReady = new Promise<void>((resolve) => {
+    ws.addEventListener("open", () => resolve(), { once: true });
+    // close/error 不 reject：错误路径由各 RPC 的既有 catch 呈现，避免未处理 rejection。
+    ws.addEventListener("close", () => resolve(), { once: true });
+  });
   const link = new RPCLink({ websocket: ws });
   cachedRpc = createORPCClient(link) as unknown as ShufaRpc;
   return cachedRpc;
@@ -1089,6 +1110,10 @@ class RpcApi implements ShufaApi {
   /** 前台续聊（W7b；W10 加 mode）：followup=排队（缺省）/ steer=引导当前轮。 */
   async sendTaskPrompt(taskId: string, text: string, mode?: "followup" | "steer"): Promise<void> {
     await rpc().tasks.followup({ id: taskId, text, ...(mode === "steer" ? { mode } : {}) });
+  }
+
+  async ensureRpcReady(): Promise<void> {
+    await ensureRpcReady();
   }
 
   /** 打断当前轮（W10）：后端 cancel{user}+keepInbox，任务回 done 可续聊。 */

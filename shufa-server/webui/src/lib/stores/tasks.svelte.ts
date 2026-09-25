@@ -11,6 +11,7 @@ import { api } from "$lib/api";
 import { navigate } from "$lib/router.svelte";
 import type { Frame, Task, TaskResultRefView } from "$lib/types";
 import type { TaskQueueItem, TaskQueueMode } from "@zhumo/contracts";
+import { toast } from "$lib/components/ui/toast/store.svelte";
 
 export const tasks = $state({
   list: [] as Task[],
@@ -290,15 +291,25 @@ export async function setQueueItemMode(messageId: string, mode: TaskQueueMode): 
   try {
     await api.taskQueueSetMode(taskId, messageId, mode);
     await refreshQueue();
+    // 时序语义提示（W10g）：改引导/注入会改变生效时点（先于排队消息），
+    // 队列视图分组如实表达——这里同步告知，避免「顺序乱了」的误解。
+    if (mode === "steer") toast("已改为引导：当前轮下一步立即生效（先于排队消息）");
+    else if (mode === "inject") toast("已改为注入：随下一步注入上下文（不作为对话轮）");
+    else toast("已改回排队：本轮结束后按序逐条开轮");
   } catch (error) {
     tasks.error = error instanceof Error ? error.message : String(error);
   }
 }
 
-/** 主动锁定一条（status 位点击）：锁定行禁操作、不可拖、重排保持原位。
- * 会话级 UI 态（内存），切任务/刷新复位。 */
+/** 主动锁定一条（status 位点击）：锁定行及其后全部连带锁定（被动锁由
+ * QueueDrawer 按生效序派生）。互斥模型（Owner 设计）：全队列只有一把主动
+ * 锁——上锁即替换边界；解锁只解除该把。会话级 UI 态（内存），切任务复位。 */
 export function setQueueItemLocked(messageId: string, locked: boolean): void {
-  queue.locked[messageId] = locked;
+  if (locked) queue.locked = { [messageId]: true };
+  else {
+    delete queue.locked[messageId];
+    queue.locked = { ...queue.locked };
+  }
 }
 
 /** 拖动期面板锁（QueueDrawer dragstart/dragend 回调）：true 期间暂停帧驱动刷新。 */

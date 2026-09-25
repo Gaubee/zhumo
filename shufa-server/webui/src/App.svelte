@@ -8,6 +8,7 @@
   3. 路由分发到五个页面。
 -->
 <script lang="ts">
+  import Toaster from "$lib/components/ui/toast/Toaster.svelte";
   import { onMount } from "svelte";
   import AdminPage from "$pages/AdminPage.svelte";
   import ListDetailPage from "$pages/ListDetailPage.svelte";
@@ -60,3 +61,4 @@
   {/snippet}
   {@render routeView()}
 {/if}
+<Toaster />
