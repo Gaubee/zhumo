@@ -1,5 +1,10 @@
 # W8：向导打磨与 Windows 适配
 
+> **归档（2026-09-25）**：三线（daemon 引擎 / webui UI / Windows 审计）代码
+> 工作完成并全绿；验收清单中 Owner 项「Windows 真机适配验证」未执行——按
+> Owner 安排转后续真机测试（发现问题回炉或开 W9，验证通过前不宣称 Windows
+> 支持）。归档不含「已完成真机验证」语义。
+
 日期：2026-09-23 ｜ 前序：W1–W7b（见 `.agents/documents/2026-09-22-shufa-analysis/工作报告.md`
 与 `PRODUCT_DESIGN.md` v0.2）｜ 类型：产品打磨 + 平台适配
 
