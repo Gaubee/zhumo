@@ -468,11 +468,11 @@ describe('wizard 种子定义（走查 R3/R4/R5/R6）', () => {
     //（CTranslate2 权重，与 mlx 档位一一对应）；title 标注 faster-whisper。
     for (const platform of ['win32', 'linux'] as const) {
       const w = defaultWizardSeeds(ctx, platform, 'x64').find((s) => s.id === 'whisper-model')!;
-      expect(w.url).toBe(`${WHISPER_MIRRORS[0].base}/Systran/faster-whisper-large-v3-turbo`);
+      expect(w.url).toBe(`${WHISPER_MIRRORS[0].base}/deepdml/faster-whisper-large-v3-turbo-ct2`);
       expect(w.title).toBe('whisper 转写模型（faster-whisper · 可选型号 + 镜像源）');
     }
     expect(defaultWizardSeeds(ctx, 'linux', 'arm64').find((s) => s.id === 'whisper-model')?.url).toContain(
-      'Systran/faster-whisper-large-v3-turbo',
+      'deepdml/faster-whisper-large-v3-turbo-ct2',
     );
     // Intel mac 维持 W9 前行为：mlx 无 x64 构建、Owner 裁决 macOS 保留现行为
     //（无转录，不展示永远跑不了的步骤）。
@@ -517,9 +517,9 @@ describe('wizard whisper 参数化（走查 R6）', () => {
   });
 
   test('resolveWhisperUrl / whisperRunArgsFromUrl（W9）：engine=faster 映射 Systran 族；两族 repo 都能反推型号', () => {
-    // 缺省（无行痕迹）faster 引擎 → Systran/faster-whisper-large-v3-turbo。
+    // 缺省（无行痕迹）faster 引擎 → deepdml/faster-whisper-large-v3-turbo-ct2。
     expect(resolveWhisperUrl(null, {}, 'faster')).toBe(
-      `${officialBase}/Systran/faster-whisper-large-v3-turbo`,
+      `${officialBase}/deepdml/faster-whisper-large-v3-turbo-ct2`,
     );
     // large-v3-2023 在 Systran 侧仓库名无年份后缀（初版 large-v3）。
     expect(resolveWhisperUrl(null, { model: 'whisper-large-v3-2023' }, 'faster')).toBe(

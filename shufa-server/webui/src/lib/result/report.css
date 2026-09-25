@@ -920,3 +920,25 @@
     grid-template-columns: 110px 1fr;
   }
 }
+
+/* 数据质量告警条（2026-09-25）：export 自检 warnings（语义缺失/同音校正等）
+   曾被契约剥离从未展示——Owner 实证「未识别卡无解释」。琥珀色弱提示，不阻断阅读。 */
+.shufa-report .quality-warnings {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border: 1px solid #d9a44166;
+  border-left: 3px solid #d9a441;
+  border-radius: 6px;
+  background: #d9a44114;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #7a5b1e;
+}
+.shufa-report .quality-warnings .qw-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.shufa-report .quality-warnings ul {
+  margin: 0;
+  padding-left: 18px;
+}

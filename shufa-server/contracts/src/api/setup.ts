@@ -64,13 +64,17 @@ export const WHISPER_MODEL_CATALOG = [
   { id: 'whisper-large-v3-2023', repo: 'mlx-community/whisper-large-v3-2023', sizeMb: 3090, memoryHint: '约 4.5GB 内存 · 效果最好' },
 ] as const;
 
-/** faster-whisper（win/linux）档位 → Systran 仓库。CTranslate2 权重与 mlx 档位
- * 一一对应；large-v3-2023 在 Systran 侧的仓库名无年份后缀（即初版 large-v3）。 */
+/** faster-whisper（win/linux）档位 → 仓库。CTranslate2 权重与 mlx 档位一一对应；
+ * large-v3-2023 在 Systran 侧的仓库名无年份后缀（即初版 large-v3）。
+ * turbo 换 deepdml 镜像（2026-09-25 Windows 实证）：Systran 原仓库转 gated，
+ * 匿名 401「Invalid username or password」且 hf-mirror 全路径 308 回源不再
+ * 镜像；deepdml/faster-whisper-large-v3-turbo-ct2 为同权重 CT2 直转
+ * （gated:false，hf-mirror 可下，实测转录质量与 mlx turbo 档对齐）。 */
 export const WHISPER_FASTER_REPO_MAP: Readonly<Record<string, string>> = {
   'whisper-tiny': 'Systran/faster-whisper-tiny',
   'whisper-base': 'Systran/faster-whisper-base',
   'whisper-small': 'Systran/faster-whisper-small',
-  'whisper-large-v3-turbo': 'Systran/faster-whisper-large-v3-turbo',
+  'whisper-large-v3-turbo': 'deepdml/faster-whisper-large-v3-turbo-ct2',
   'whisper-large-v3-2023': 'Systran/faster-whisper-large-v3',
 };
 

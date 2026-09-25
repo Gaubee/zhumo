@@ -202,6 +202,19 @@
       </div>
     </header>
 
+    {#if data.warnings?.length}
+      <!-- 数据质量告警（2026-09-25 契约补漏）：export 自检的语义缺失/同音校正
+           说明——「未识别」卡片的解释、转录被校正过什么都应可见。 -->
+      <aside class="quality-warnings" aria-label="数据质量提示">
+        <p class="qw-title">数据质量提示（{data.warnings.length}）</p>
+        <ul>
+          {#each data.warnings as w (w)}
+            <li>{w}</li>
+          {/each}
+        </ul>
+      </aside>
+    {/if}
+
     <main class="cols">
       <!-- 左列：动态学习（视频 + 移动端 tabs + 字幕列表宿主） -->
       <div class="col col-dyn">

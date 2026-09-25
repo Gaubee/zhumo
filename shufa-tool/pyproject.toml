@@ -14,6 +14,7 @@ requires-python = ">=3.11"
 dependencies = [
     "opencv-python>=4.10",
     "numpy>=1.26",
+    "pypinyin>=0.55.0",
 ]
 [project.optional-dependencies]
 # W9（2026-09-27）平台最优转录引擎：mac=mlx-whisper（arm64 构建）、

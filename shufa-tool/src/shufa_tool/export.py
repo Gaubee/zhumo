@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
@@ -17,6 +18,7 @@ import cv2
 import numpy as np
 
 from . import __version__
+from .transcript_lint import LintFix
 
 
 def write_png(img: np.ndarray, path: Path) -> str:
@@ -45,6 +47,7 @@ def export_bundle(
     entries: list[dict],        # 播放器时间轴条目（thumb 为 ndarray 的转文件）
     transcript_model: str,
     transcript_segments: list[dict],
+    transcript_fixes: list[LintFix] | None = None,  # 同音校正留痕（transcript_lint）
     summary: dict,
     ink_curve: list[float],
     frame_ts: list[float],
@@ -108,6 +111,10 @@ def export_bundle(
             "（旁注/转录与生字的关联不可用）")
     if not transcript_segments:
         all_warnings.append("转录为空：语音讲解内容不在分析包内")
+    for f in transcript_fixes or []:
+        all_warnings.append(
+            f"转录同音校正：「{f.wrong}」→「{f.right}」"
+            f"（段{f.seg}「{f.context}」）")
     if summary.get("source") == "heuristic":
         all_warnings.append("摘要为规则兜底生成，未经模型/人工撰写")
 
@@ -128,7 +135,13 @@ def export_bundle(
         "focus_grid_idx": focus["grid_idx"],
         "focus_char": focus.get("char", ""),
         "annotations": annos_out,
-        "transcript": {"model": transcript_model, "segments": transcript_segments},
+        "transcript": {
+            "model": transcript_model,
+            "segments": transcript_segments,
+            # 同音校正留痕（机器可读；结果页 warnings 另有人类可读文案）
+            **({"lint_fixes": [asdict(f) for f in transcript_fixes]}
+               if transcript_fixes else {}),
+        },
         "summary": summary,
         "ink_curve": ink_curve,
         "frame_ts": frame_ts,

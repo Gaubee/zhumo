@@ -73,6 +73,18 @@ export const AnalysisTranscriptSchema = z.object({
   // 拖垮整个结果页（2026-09-24 两次导出 500 实证）。
   model: z.string().nullable().transform((v) => v ?? ''),
   segments: z.array(z.object({ start: z.number(), end: z.number(), text: z.string() })),
+  // 同音校正留痕（transcript_lint，2026-09-25）：导出面按生字锚点自动校正
+  // 转录误转字并逐条记录——「这段话被改过什么」必须可溯源。
+  lint_fixes: z
+    .array(
+      z.object({
+        seg: z.number().int(),
+        wrong: z.string(),
+        right: z.string(),
+        context: z.string().optional(),
+      }),
+    )
+    .optional(),
 });
 export type AnalysisTranscript = z.infer<typeof AnalysisTranscriptSchema>;
 
@@ -112,6 +124,9 @@ export const AnalysisDataSchema = z.object({
   ink_curve: z.array(z.number()),
   frame_ts: z.array(z.number()),
   limitations: z.array(z.string()).default([]),
+  // 数据质量告警（export.py 自检，2026-09-25 契约补漏）：语义缺失/同音校正
+  // 等曾在此被 zod 剥离——结果页从未展示，Owner 实证「未识别卡无解释」。
+  warnings: z.array(z.string()).default([]),
   raw_stats: AnalysisRawStatsSchema,
 });
 export type AnalysisData = z.infer<typeof AnalysisDataSchema>;

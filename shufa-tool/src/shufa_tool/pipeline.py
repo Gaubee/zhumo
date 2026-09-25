@@ -41,6 +41,7 @@ from .ink import InkAnalysis, analyze_ink, grid_ink_curves
 from .orient import detect_orientation_steps, orient_flip_by_pinyin
 from .probe import ProbeInfo, probe
 from .summarize import Summary, load_injected, summarize
+from .transcript_lint import LintFix, lint_and_fix
 
 TURN_NAME = {0: "无需旋转", 1: "顺时针 90°", 2: "180°", 3: "逆时针 90°"}
 
@@ -520,6 +521,15 @@ def export_stage(
     # （讲解具有连续性，"上下要对齐""纠正一下"仍在讲之前那个字）。
     # Owner 注（2026-09-22）：一段讲解可能同时针对多个字——命中多个标签全保留。
     labels_list = [g["label"] for g in grids_data if g.get("label")]
+
+    # 转录同音字 lint（Owner 要求 2026-09-25：写入结构化数据时自动校验）：
+    # 锚点 = 本视频生字（labels 格 label + 焦点字）。误转字在导出面校正并
+    # 留痕——manifest 不动（保引擎原始输出可溯源），下方生字关联、时间轴
+    # 条目与正文全部消费校正稿（实证：原「要注意这个柜」校正为「桂」后，
+    # 段落↔生字关联才命中）。带调匹配避免「图/土」类近音误伤。
+    segments, transcript_fixes = lint_and_fix(
+        segments, [focus_char, *labels_list])
+
     segs = segments
     seg_grids: list[list[str]] = []
     current: list[str] = []
@@ -591,6 +601,7 @@ def export_stage(
         entries=entries,
         transcript_model=transcript_model,
         transcript_segments=segments,
+        transcript_fixes=transcript_fixes,
         summary={"topic": summary.topic, "paragraphs": summary.paragraphs,
                  "key_points": summary.key_points, "source": summary.source},
         ink_curve=ink_curve,
