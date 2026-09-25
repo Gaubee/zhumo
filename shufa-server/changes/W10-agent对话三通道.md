@@ -85,9 +85,31 @@ Owner 指令：围绕 DSH 内核改进 agent 对话支持——内核应支持�
   draftLength 供页面校验「输入框有内容拒绝编辑」）；帧驱动队列刷新
   （user-text/turn-end 到达且非编辑中）
 
+### W10c 队列抽屉重做（Owner 反馈二轮，2026-09-27）
+
+Owner 设计落地：抽屉形态（手风琴：收起=预览条「投递队列（N）· 下一条：…」，
+展开=完整列表）、行布局 status+单行文本+actions、status 位=锁定（点击主动
+锁定：禁操作/不可拖/重排固定原位）、整行拖动排序（拖动开始即全面板锁定：
+actions 禁用+暂停帧驱动刷新防抖动，drop 一次性提交新序）。
+
+- 契约/sessions/service/rpc：queueReorder（next-turn 全量 splice 重排；
+  集合不一致=并发消费拒绝，前端刷新重试）
+- QueueDrawer.svelte 替代 QueuePanel（紧贴 composer 顶部的抽屉造型：
+  rounded-t 无下边框）；Svelte 5 props 不可反写——reordering 经回调置 store
+- 编辑/删除/改模式按钮在锁定与拖动态禁用；锁定为会话级 UI 态（内存，
+  切任务复位）
+
+### 已定位待修（Owner 指示下一步处理）
+
+- 排队消息不出现在对话面板：内核只在消息被消费（开轮）时落 session log
+  并发 user/message 事件（sessions.ts 投影 user-text 帧的唯一来源）——
+  inbox 暂存期无帧，乐观帧成为唯一显示，selectTask 重拉/刷新即消失。
+  修复方向：queueView 驱动的 queued 补帧（或乐观帧保留至消费帧到达）。
+- 「变成插入方式发送」待复现定位。
+
 ### 验证
 
-- daemon 156/156（新增：sessions 队列七用例——视图/冻结/放回（改与不改）/
+- daemon 157/157（新增：sessions 队列八用例——含 queueReorder——视图/冻结/放回（改与不改）/
   删除/模式切换/不在册；service stop（打断≠取消回归）/steer 分流两用例）
   + tsc + svelte-check + build 全绿
 - FakeAgent 扩 inbox 内存实现（followup/steer/inject 入桶+remove/replace/

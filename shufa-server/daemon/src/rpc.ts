@@ -39,6 +39,7 @@ import {
   TaskQueueEditCancelInputSchema,
   TaskQueueRemoveInputSchema,
   TaskQueueSetModeInputSchema,
+  TaskQueueReorderInputSchema,
   TaskSetModelInputSchema,
   TaskCreateInputSchema,
   TaskFollowupInputSchema,
@@ -730,6 +731,16 @@ const tasksQueueSetMode = requireActiveUser
     }
   });
 
+const tasksQueueReorder = requireActiveUser
+  .input(TaskQueueReorderInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      return await requireTaskService(context).queueReorder(context.user as UserRow, input.id, input.ordered_ids);
+    } catch (error) {
+      return taskOwnedException(error);
+    }
+  });
+
 // ---------------------------------------------------------------- res（资源管理器，§4「认证（仅本人文件夹）」）
 
 /** 附件上传（走查 R7）：登录用户；blob + 资源树登记，返回 agent 可读路径。 */
@@ -938,6 +949,7 @@ export const router = {
     queueEditCancel: tasksQueueEditCancel,
     queueRemove: tasksQueueRemove,
     queueSetMode: tasksQueueSetMode,
+    queueReorder: tasksQueueReorder,
     setModel: tasksSetModel,
     followup: tasksFollowup,
   },

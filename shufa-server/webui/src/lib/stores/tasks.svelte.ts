@@ -23,11 +23,14 @@ export const tasks = $state({
   error: null as string | null,
 });
 
-/** 队列面板（W10b，内核 inbox 视图）：items 按生效序；editing=冻结中的
- * 条目 id（编辑会话期间该条及其后暂离队列）。 */
+/** 队列抽屉（W10c，Owner 设计）：items 按生效序；editing=冻结中的条目 id；
+ * locked=主动锁定（status 位点击切换，锁定行禁操作不可拖，重排保持原位）；
+ * reordering=拖动进行中（全面板锁定：暂停帧驱动刷新防排序抖动）。 */
 export const queue = $state({
   items: [] as TaskQueueItem[],
   editing: null as string | null,
+  locked: {} as Record<string, boolean>,
+  reordering: false,
 });
 
 let unsubscribe: (() => void) | null = null;
@@ -55,6 +58,8 @@ export async function selectTask(taskId: string): Promise<void> {
   tasks.results = [];
   queue.items = [];
   queue.editing = null;
+  queue.locked = {};
+  queue.reordering = false;
   const frames = await api.getTaskFrames(taskId);
   if (tasks.selectedId !== taskId) return; // 已切走：过期响应丢弃
   tasks.frames = frames;
@@ -84,7 +89,7 @@ export async function selectTask(taskId: string): Promise<void> {
     // 已变，重拉视图（不在编辑冻结中拉——冻结段不在内核 inbox，重拉会把
     // 悬置段从面板上抹掉）。
     if (frame.kind === "user-text" || frame.kind === "turn-end") {
-      if (queue.editing === null) void refreshQueue();
+      if (queue.editing === null && !queue.reordering) void refreshQueue();
     }
   });
   if (tasks.selectedId !== taskId) {
@@ -210,6 +215,8 @@ export async function stopPrompt(): Promise<void> {
 export async function refreshQueue(): Promise<void> {
   const taskId = tasks.selectedId;
   if (taskId === null) return;
+  // 编辑冻结段不在内核 inbox / 拖动中的本地序不可被远端覆盖：两者期间不拉。
+  if (queue.editing !== null || queue.reordering) return;
   try {
     const out = await api.taskQueue(taskId);
     queue.items = out.items;
@@ -280,6 +287,30 @@ export async function setQueueItemMode(messageId: string, mode: TaskQueueMode): 
     await refreshQueue();
   } catch (error) {
     tasks.error = error instanceof Error ? error.message : String(error);
+  }
+}
+
+/** 主动锁定一条（status 位点击）：锁定行禁操作、不可拖、重排保持原位。
+ * 会话级 UI 态（内存），切任务/刷新复位。 */
+export function setQueueItemLocked(messageId: string, locked: boolean): void {
+  queue.locked[messageId] = locked;
+}
+
+/** 拖动期面板锁（QueueDrawer dragstart/dragend 回调）：true 期间暂停帧驱动刷新。 */
+export function setQueueReordering(v: boolean): void {
+  queue.reordering = v;
+}
+
+/** 拖动排序提交（拖动结束一次性调用；拖动期间面板已由 reordering 锁定）。 */
+export async function reorderQueue(orderedIds: string[]): Promise<void> {
+  const taskId = tasks.selectedId;
+  if (taskId === null) return;
+  try {
+    await api.taskQueueReorder(taskId, orderedIds);
+  } catch (error) {
+    tasks.error = error instanceof Error ? error.message : String(error);
+  } finally {
+    await refreshQueue();
   }
 }
 

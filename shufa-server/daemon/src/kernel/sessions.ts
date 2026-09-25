@@ -974,6 +974,26 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     }
   },
 
+  /** 拖动排序（Owner 设计 2026-09-27 二轮）：next-turn 全量重排（splice 换入）。
+   * orderedIds 必须与当前队列恰为同集合（队头被消费等并发变化即拒绝，前端
+   * 刷新重试）；next-step（引导/注入挂起项）无逐条生效序，不参与排序。 */
+  queueReorder(sessionId: string, orderedIds: string[]): void {
+    const entry = live.get(sessionId);
+    if (!entry) throw new Error(`agent session not found: ${sessionId}`);
+    const turn = entry.agent.inbox.nextTurn;
+    const currentIds = turn.map(inboxMessageId);
+    if (
+      orderedIds.length !== currentIds.length ||
+      new Set(orderedIds).size !== orderedIds.length ||
+      orderedIds.some((id) => !currentIds.includes(id))
+    ) {
+      throw new Error('队列已变化（可能有消息正在被消费），请刷新后重试');
+    }
+    const byId = new Map(turn.map((m) => [inboxMessageId(m), m]));
+    const ordered = orderedIds.map((id) => byId.get(id)!);
+    entry.agent.inbox.splice('next-turn', 0, turn.length, ordered);
+  },
+
     /** 回答一个待答请求（未知/已解决返回 false）。 */
     answer(
       sessionId: string,

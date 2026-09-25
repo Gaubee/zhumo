@@ -29,6 +29,7 @@ import type {
   TaskQueueListOutput,
   TaskQueueMode,
   TaskQueueRemoveOutput,
+  TaskQueueReorderOutput,
   TaskQueueSetModeOutput,
   TaskStatus,
 } from '@zhumo/contracts';
@@ -559,6 +560,14 @@ export class TaskService {
     const task = this.requireOwnedTask(user, id);
     this.requireLiveSession(task);
     this.deps.sessions.queueSetMode(task.agent_session_id!, messageId, mode);
+    return { accepted: true };
+  }
+
+  /** 拖动排序（前端拖动期已锁面板防抖动，此处一次性提交全量新序）。 */
+  queueReorder(user: UserRow, id: string, orderedIds: string[]): TaskQueueReorderOutput {
+    const task = this.requireOwnedTask(user, id);
+    this.requireLiveSession(task);
+    this.deps.sessions.queueReorder(task.agent_session_id!, orderedIds);
     return { accepted: true };
   }
 

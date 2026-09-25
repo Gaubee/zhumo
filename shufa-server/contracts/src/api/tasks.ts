@@ -186,6 +186,17 @@ export type TaskQueueSetModeInput = z.infer<typeof TaskQueueSetModeInputSchema>;
 export const TaskQueueSetModeOutputSchema = z.object({ accepted: z.literal(true) });
 export type TaskQueueSetModeOutput = z.infer<typeof TaskQueueSetModeOutputSchema>;
 
+/** 拖动排序（Owner 设计 2026-09-27 二轮）：提交 next-turn 全量新序。前端在
+ * 拖动期间锁定面板（暂停刷新）防抖动，drop 时一次性提交；锁定（status 位）
+ * 的条目由前端保持原位。队列已变化（队头被消费）时拒绝，前端刷新重试。 */
+export const TaskQueueReorderInputSchema = z.object({
+  id: IdSchema,
+  ordered_ids: z.array(z.string()).min(1),
+});
+export type TaskQueueReorderInput = z.infer<typeof TaskQueueReorderInputSchema>;
+export const TaskQueueReorderOutputSchema = z.object({ accepted: z.literal(true) });
+export type TaskQueueReorderOutput = z.infer<typeof TaskQueueReorderOutputSchema>;
+
 /** accepted 恒真；resumed=本次是否触发了会话复活；task=投递后的任务视图。 */
 export const TaskFollowupOutputSchema = z.object({
   accepted: z.literal(true),

@@ -136,6 +136,17 @@ describe('sessions 队列面板（W10b，内核 inbox）', () => {
     expect(agent.steers).toHaveLength(1);
   });
 
+  it('queueReorder：按 messageId 全量新序重排；集合不一致拒绝且不污染', async () => {
+    const { sessionId } = await seedQueue(['一', '二', '三']);
+    const ids = sessions.queueView(sessionId).items.map((i) => i.messageId);
+    sessions.queueReorder(sessionId, [ids[2]!, ids[0]!, ids[1]!]);
+    expect(sessions.queueView(sessionId).items.map((i) => i.text)).toEqual(['三', '一', '二']);
+    // 队列已变化（缺 id / 多 id / 重复）一律拒绝且不污染。
+    expect(() => sessions.queueReorder(sessionId, [ids[0]!, ids[1]!])).toThrow('队列已变化');
+    expect(() => sessions.queueReorder(sessionId, [ids[0]!, ids[0]!, ids[1]!])).toThrow('队列已变化');
+    expect(sessions.queueView(sessionId).items.map((i) => i.text)).toEqual(['三', '一', '二']);
+  });
+
   it('不在册：队列操作抛错（调用方引导重开对话）', async () => {
     expect(() => sessions.queueView('nope')).toThrow('not found');
     expect(() => sessions.queueFreeze('nope', 'x')).toThrow('not found');

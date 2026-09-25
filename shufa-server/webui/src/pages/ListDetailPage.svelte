@@ -35,13 +35,16 @@
     queue,
     refreshQueue,
     removeQueueItem,
+    reorderQueue,
     selectTask,
     sendPrompt,
+    setQueueItemLocked,
     setQueueItemMode,
+    setQueueReordering,
     stopPrompt,
     tasks,
   } from "$lib/stores/tasks.svelte";
-  import QueuePanel from "$lib/components/agent/QueuePanel.svelte";
+  import QueueDrawer from "$lib/components/agent/QueueDrawer.svelte";
   import { navigate, router, stashReturnTo } from "$lib/router.svelte";
   import { onMount } from "svelte";
   import { api } from "$lib/api";
@@ -262,15 +265,20 @@
       {/if}
       <TranscriptView {items} running={detailRunning} />
       <div class="border-t border-border p-3">
-        <!-- W10b 队列面板：内核 inbox 视图（空队列不占空间）；选中任务变化
-             或帧到达由 store 刷新。 -->
-        <QueuePanel
+        <!-- W10c 队列抽屉：输入面板上方长出的手风琴（收起=预览，展开=列表+
+             拖动排序）；选中任务变化或帧到达由 store 刷新（编辑/拖动期暂停）。 -->
+        <QueueDrawer
           items={queue.items}
           editing={queue.editing}
+          locked={queue.locked}
+          reordering={queue.reordering}
           onedit={(messageId) => void beginQueueEdit(messageId)}
           oncancel={() => void cancelQueueEdit()}
           onremove={(messageId) => void removeQueueItem(messageId)}
           onsetmode={(messageId, mode) => void setQueueItemMode(messageId, mode)}
+          onsetlocked={(messageId, lock) => setQueueItemLocked(messageId, lock)}
+          onreorder={(orderedIds) => void reorderQueue(orderedIds)}
+          onreordering={(v) => setQueueReordering(v)}
         />
         <ComposerCard
           bind:this={composerRef}
