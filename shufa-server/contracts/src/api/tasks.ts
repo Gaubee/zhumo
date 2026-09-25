@@ -186,6 +186,14 @@ export type TaskQueueSetModeInput = z.infer<typeof TaskQueueSetModeInputSchema>;
 export const TaskQueueSetModeOutputSchema = z.object({ accepted: z.literal(true) });
 export type TaskQueueSetModeOutput = z.infer<typeof TaskQueueSetModeOutputSchema>;
 
+/** 立刻发送（Owner 设计 2026-09-27 三轮）：打断当前轮 + 该排队消息提到
+ * 队头——内核 cancel{kind:'user'}+keepInbox 在被打断轮收敛后自动开新一轮，
+ * 消费队头即本条（DSH 原生语义，无自造机制）。 */
+export const TaskQueueSendNowInputSchema = z.object({ id: IdSchema, message_id: z.string() });
+export type TaskQueueSendNowInput = z.infer<typeof TaskQueueSendNowInputSchema>;
+export const TaskQueueSendNowOutputSchema = z.object({ accepted: z.literal(true) });
+export type TaskQueueSendNowOutput = z.infer<typeof TaskQueueSendNowOutputSchema>;
+
 /** 拖动排序（Owner 设计 2026-09-27 二轮）：提交 next-turn 全量新序。前端在
  * 拖动期间锁定面板（暂停刷新）防抖动，drop 时一次性提交；锁定（status 位）
  * 的条目由前端保持原位。队列已变化（队头被消费）时拒绝，前端刷新重试。 */

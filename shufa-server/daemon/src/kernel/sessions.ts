@@ -974,6 +974,23 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     }
   },
 
+  /** 立刻发送（Owner 设计 2026-09-27 三轮）：该排队消息提到队头 + 打断当前轮
+   * （keepInbox）——内核在被打断轮收敛后自动开新一轮消费队头。idle 时 cancel
+   * 是 no-op，消息保持队头由下次 drain 消费。目标不在 next-turn（挂起项/已
+   * 消费）抛错。 */
+  queueSendNow(sessionId: string, messageId: string): void {
+    const entry = live.get(sessionId);
+    if (!entry) throw new Error(`agent session not found: ${sessionId}`);
+    const turn = entry.agent.inbox.nextTurn;
+    const idx = turn.findIndex((m) => inboxMessageId(m) === messageId);
+    if (idx < 0) throw new Error(`队列中没有该排队条目：${messageId}`);
+    if (idx > 0) {
+      const [message] = entry.agent.inbox.splice('next-turn', idx, 1, []);
+      entry.agent.inbox.splice('next-turn', 0, 0, [message!]);
+    }
+    entry.agent.cancel({ kind: 'user' }, { keepInbox: true });
+  },
+
   /** 拖动排序（Owner 设计 2026-09-27 二轮）：next-turn 全量重排（splice 换入）。
    * orderedIds 必须与当前队列恰为同集合（队头被消费等并发变化即拒绝，前端
    * 刷新重试）；next-step（引导/注入挂起项）无逐条生效序，不参与排序。 */

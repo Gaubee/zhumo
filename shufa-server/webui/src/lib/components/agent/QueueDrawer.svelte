@@ -12,6 +12,7 @@
   import IconPencil from "@lucide/svelte/icons/pencil";
   import IconTrash from "@lucide/svelte/icons/trash";
   import IconRepeat from "@lucide/svelte/icons/repeat";
+  import IconSend from "@lucide/svelte/icons/send";
   import IconLock from "@lucide/svelte/icons/lock";
   import IconLockOpen from "@lucide/svelte/icons/lock-open";
   import * as Popover from "$lib/components/ui/popover";
@@ -29,6 +30,7 @@
     onsetlocked,
     onreorder,
     onreordering,
+    onsendnow,
   }: {
     items: TaskQueueItem[];
     editing?: string | null;
@@ -44,6 +46,8 @@
     onreorder: (orderedIds: string[]) => void;
     /** 拖动期面板锁（Svelte 5 props 不可反写——经回调置 store）。 */
     onreordering: (v: boolean) => void;
+    /** 立刻发送（打断当前轮 + 该条提到队头，内核收敛后自动开轮）。 */
+    onsendnow: (messageId: string) => void;
   } = $props();
 
   const MODE_LABEL: Record<TaskQueueMode, string> = {
@@ -220,8 +224,18 @@
                 {MODE_LABEL[item.mode]}
               </span>
               <span class="min-w-0 flex-1 truncate" title={item.text}>{item.text}</span>
-              <!-- actions：编辑（仅排队条目）/改模式/删除；锁定或拖动中禁用 -->
+              <!-- actions：立刻发送/编辑（仅排队条目）/改模式/删除；锁定或拖动中禁用 -->
               {#if item.mode === "queue"}
+                <button
+                  type="button"
+                  class="shrink-0 rounded p-1 text-muted-foreground hover:bg-primary/10 hover:text-primary disabled:opacity-30"
+                  title="立刻发送：打断当前工作，以这条消息立即开始新一轮"
+                  aria-label="立刻发送该消息"
+                  disabled={isLocked(item.message_id) || editing !== null || reordering}
+                  onclick={() => onsendnow(item.message_id)}
+                >
+                  <IconSend class="h-3 w-3" />
+                </button>
                 <button
                   type="button"
                   class="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"

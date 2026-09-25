@@ -35,6 +35,7 @@ import type {
   TaskQueueRemoveInput,
   TaskQueueSetModeInput,
   TaskQueueReorderInput,
+  TaskQueueSendNowInput,
   TaskCreateInput,
   TaskFollowupInput,
   TaskFollowupOutput,
@@ -184,6 +185,7 @@ interface ShufaRpc {
     queueRemove(input: TaskQueueRemoveInput): Promise<{ accepted: true }>;
     queueSetMode(input: TaskQueueSetModeInput): Promise<{ accepted: true }>;
     queueReorder(input: TaskQueueReorderInput): Promise<{ accepted: true }>;
+    queueSendNow(input: TaskQueueSendNowInput): Promise<{ accepted: true }>;
     followup(input: TaskFollowupInput): Promise<TaskFollowupOutput>;
     setModel(input: { task_id: string; provider: string; model: string }): Promise<{ task: TaskItem }>;
   };
@@ -253,6 +255,7 @@ export interface ShufaApi {
   taskQueueRemove(taskId: string, messageId: string): Promise<void>;
   taskQueueSetMode(taskId: string, messageId: string, mode: TaskQueueMode): Promise<void>;
   taskQueueReorder(taskId: string, orderedIds: string[]): Promise<void>;
+  taskQueueSendNow(taskId: string, messageId: string): Promise<void>;
   createTask(
     prompt: string,
     video: File | null,
@@ -629,6 +632,8 @@ class MockApi implements ShufaApi {
   async taskQueueSetMode(): Promise<void> {}
 
   async taskQueueReorder(): Promise<void> {}
+
+  async taskQueueSendNow(): Promise<void> {}
 
   async createTask(
     prompt: string,
@@ -1109,6 +1114,10 @@ class RpcApi implements ShufaApi {
 
   async taskQueueReorder(taskId: string, orderedIds: string[]): Promise<void> {
     await rpc().tasks.queueReorder({ id: taskId, ordered_ids: orderedIds });
+  }
+
+  async taskQueueSendNow(taskId: string, messageId: string): Promise<void> {
+    await rpc().tasks.queueSendNow({ id: taskId, message_id: messageId });
   }
 
   async createTask(

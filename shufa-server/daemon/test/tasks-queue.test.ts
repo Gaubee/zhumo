@@ -147,6 +147,20 @@ describe('sessions 队列面板（W10b，内核 inbox）', () => {
     expect(sessions.queueView(sessionId).items.map((i) => i.text)).toEqual(['三', '一', '二']);
   });
 
+  it('queueSendNow：目标提到队头 + cancel{user}+keepInbox（内核收敛后自动消费队头）', async () => {
+    const { sessionId, agent } = await seedQueue(['一', '二', '三']);
+    agent.status = 'running';
+    const ids = sessions.queueView(sessionId).items.map((i) => i.messageId);
+    sessions.queueSendNow(sessionId, ids[2]!);
+    // 队头 = 目标条目；其余原序。
+    expect(sessions.queueView(sessionId).items.map((i) => i.text)).toEqual(['三', '一', '二']);
+    expect(agent.cancellations).toHaveLength(1);
+    expect(agent.cancellations[0]).toEqual({ cause: { kind: 'user' }, options: { keepInbox: true } });
+    // 不在 next-turn（如已消费）抛错。
+    sessions.queueRemove(sessionId, ids[2]!);
+    expect(() => sessions.queueSendNow(sessionId, ids[2]!)).toThrow('队列中没有该排队条目');
+  });
+
   it('不在册：队列操作抛错（调用方引导重开对话）', async () => {
     expect(() => sessions.queueView('nope')).toThrow('not found');
     expect(() => sessions.queueFreeze('nope', 'x')).toThrow('not found');

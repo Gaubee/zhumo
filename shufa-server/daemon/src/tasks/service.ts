@@ -30,6 +30,7 @@ import type {
   TaskQueueMode,
   TaskQueueRemoveOutput,
   TaskQueueReorderOutput,
+  TaskQueueSendNowOutput,
   TaskQueueSetModeOutput,
   TaskStatus,
 } from '@zhumo/contracts';
@@ -568,6 +569,14 @@ export class TaskService {
     const task = this.requireOwnedTask(user, id);
     this.requireLiveSession(task);
     this.deps.sessions.queueReorder(task.agent_session_id!, orderedIds);
+    return { accepted: true };
+  }
+
+  /** 立刻发送：打断当前轮 + 该条提到队头（内核收敛后自动开轮消费）。 */
+  queueSendNow(user: UserRow, id: string, messageId: string): TaskQueueSendNowOutput {
+    const task = this.requireOwnedTask(user, id);
+    this.requireLiveSession(task);
+    this.deps.sessions.queueSendNow(task.agent_session_id!, messageId);
     return { accepted: true };
   }
 

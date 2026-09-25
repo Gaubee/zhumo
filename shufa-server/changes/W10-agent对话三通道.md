@@ -99,6 +99,18 @@ actions 禁用+暂停帧驱动刷新防抖动，drop 一次性提交新序）。
 - 编辑/删除/改模式按钮在锁定与拖动态禁用；锁定为会话级 UI 态（内存，
   切任务复位）
 
+### W10d 立刻发送 + 抽屉不显示修复（Owner 反馈三轮，2026-09-27）
+
+- 立刻发送（actions 第四按钮，排队条目）：该条提到队头 + `cancel{kind:'user'}
+  +keepInbox`——内核在被打断轮收敛后自动开新一轮消费队头（DSH 原生语义，
+  无自造机制）；链路 queueSendNow 四层直通。
+- 抽屉从不出现根因修复：排队消息内核开轮前不落 session log（无
+  user/message 事件）→ 无 user-text 帧 → 帧驱动的 refreshQueue 永不触发
+  → 队列视图恒空 → 抽屉整条隐藏。修复：sendPrompt/stopPrompt 成功后主动
+  拉队列（sendQueueNow 同样）。
+- 排队消息对话面板不可见（乐观帧刷新即消失）仍在待修清单——需 queued
+  补帧或乐观帧保留至消费帧到达。
+
 ### 已定位待修（Owner 指示下一步处理）
 
 - 排队消息不出现在对话面板：内核只在消息被消费（开轮）时落 session log
@@ -109,7 +121,7 @@ actions 禁用+暂停帧驱动刷新防抖动，drop 一次性提交新序）。
 
 ### 验证
 
-- daemon 157/157（新增：sessions 队列八用例——含 queueReorder——视图/冻结/放回（改与不改）/
+- daemon 158/158（新增：sessions 队列九用例——含 queueReorder/queueSendNow——视图/冻结/放回（改与不改）/
   删除/模式切换/不在册；service stop（打断≠取消回归）/steer 分流两用例）
   + tsc + svelte-check + build 全绿
 - FakeAgent 扩 inbox 内存实现（followup/steer/inject 入桶+remove/replace/

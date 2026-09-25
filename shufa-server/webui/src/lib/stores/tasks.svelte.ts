@@ -186,6 +186,10 @@ export async function sendPrompt(prompt: string, mode: "followup" | "steer" = "f
     tasks.list = tasks.list.map((t) =>
       t.id === taskId && t.status !== "running" ? { ...t, status: "running" as const } : t,
     );
+    // 队列抽屉主动拉取（W10c 修复「抽屉从不出现」）：排队消息在内核开轮前
+    // 不落 session log（无 user/message 事件）→ 没有 user-text 帧驱动刷新；
+    // 发送成功即拉，队列条目立即可见。
+    void refreshQueue();
   } catch (error) {
     dropOptimistic(trimmed);
     tasks.error = error instanceof Error ? error.message : String(error);
@@ -205,6 +209,7 @@ export async function stopPrompt(): Promise<void> {
     tasks.list = tasks.list.map((t) =>
       t.id === taskId && t.status === "running" ? { ...t, status: "done" as const } : t,
     );
+    void refreshQueue();
   } catch (error) {
     tasks.error = error instanceof Error ? error.message : String(error);
   }
@@ -299,6 +304,26 @@ export function setQueueItemLocked(messageId: string, locked: boolean): void {
 /** 拖动期面板锁（QueueDrawer dragstart/dragend 回调）：true 期间暂停帧驱动刷新。 */
 export function setQueueReordering(v: boolean): void {
   queue.reordering = v;
+}
+
+/** 立刻发送（Owner 设计三轮）：打断当前轮 + 该条提到队头（内核收敛后自动
+ * 开轮消费）。乐观更新：目标条置队头（refreshQueue 拉权威序兜底）。 */
+export async function sendQueueNow(messageId: string): Promise<void> {
+  const taskId = tasks.selectedId;
+  if (taskId === null) return;
+  try {
+    await api.taskQueueSendNow(taskId, messageId);
+    const item = queue.items.find((i) => i.message_id === messageId);
+    if (item !== undefined) {
+      queue.items = [item, ...queue.items.filter((i) => i.message_id !== messageId)];
+    }
+    tasks.list = tasks.list.map((t) =>
+      t.id === taskId && t.status !== "running" ? { ...t, status: "running" as const } : t,
+    );
+    void refreshQueue();
+  } catch (error) {
+    tasks.error = error instanceof Error ? error.message : String(error);
+  }
 }
 
 /** 拖动排序提交（拖动结束一次性调用；拖动期间面板已由 reordering 锁定）。 */

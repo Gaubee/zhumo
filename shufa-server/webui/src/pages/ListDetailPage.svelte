@@ -38,6 +38,7 @@
     reorderQueue,
     selectTask,
     sendPrompt,
+    sendQueueNow,
     setQueueItemLocked,
     setQueueItemMode,
     setQueueReordering,
@@ -279,6 +280,7 @@
           onsetlocked={(messageId, lock) => setQueueItemLocked(messageId, lock)}
           onreorder={(orderedIds) => void reorderQueue(orderedIds)}
           onreordering={(v) => setQueueReordering(v)}
+          onsendnow={(messageId) => void sendQueueNow(messageId)}
         />
         <ComposerCard
           bind:this={composerRef}
