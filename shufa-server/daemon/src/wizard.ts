@@ -14,6 +14,7 @@
  *   [5] whisper 步骤参数化：型号×镜像组装 URL 并持久化回行。
  */
 import { spawn } from 'node:child_process';
+import { refreshWindowsPath } from './win-path-refresh.js';
 import { createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -820,7 +821,11 @@ function workDirFor(targetDir: string): string {
 }
 
 /** 嗅探/探针用：跑 shell 命令只取退出码，输出丢弃。 */
-function runShellCapture(command: string, cwd: string, shell?: string | boolean): Promise<number> {
+async function runShellCapture(command: string, cwd: string, shell?: string | boolean): Promise<number> {
+  // Windows PATH 快照刷新（2026-09-25 Owner 实测）：winget 装完新终端可见、
+  // daemon 嗅探仍失败——进程 PATH 是启动快照。probe 前重读注册表合并刷新，
+  // 嗅探与运行时 spawn 同源（process.env.PATH）。非 win32 no-op。
+  await refreshWindowsPath();
   return new Promise((resolve) => {
     const child = spawn(command, { cwd, shell: shell ?? true });
     child.on('error', () => resolve(-1));
