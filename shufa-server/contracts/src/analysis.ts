@@ -76,12 +76,15 @@ export const AnalysisTranscriptSchema = z.object({
 });
 export type AnalysisTranscript = z.infer<typeof AnalysisTranscriptSchema>;
 
-/** 总结（agent 亲自撰写注入，source='injected'）。 */
+/**
+ * 总结。source 词表（2026-09-25 对齐生产端）：agent=模型亲写（summary_write 注入，
+ * daemon 默认）/ injected=summary 文件注入（CLI 旧路径）/ heuristic=CLI 规则摘要。
+ */
 export const AnalysisSummarySchema = z.object({
   topic: z.string(),
   paragraphs: z.array(z.string()),
   key_points: z.array(z.string()),
-  source: z.string().optional(),
+  source: z.enum(['heuristic', 'injected', 'agent']).optional(),
 });
 export type AnalysisSummary = z.infer<typeof AnalysisSummarySchema>;
 

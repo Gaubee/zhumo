@@ -121,7 +121,11 @@
   });
 
   /** 内容总结副标：摘要来源（heuristic=规则摘要/injected=精修摘要）+ 讲解对象（report.ts） */
-  const SRC_MAP: Record<string, string> = { heuristic: "规则摘要", injected: "精修摘要" };
+  const SRC_MAP: Record<string, string> = {
+    heuristic: "规则摘要",
+    injected: "精修摘要",
+    agent: "AI 撰写",
+  };
   const summarySub = $derived.by<string>(() => {
     const s = data?.summary;
     if (!s) return "";
@@ -243,7 +247,7 @@
             <div class="char-row">
               {#if row.char}
                 <div class="char-grid">
-                  <img src={asset(row.char.crop)} alt="田字格：{row.char.label}" />
+                  <img src={asset(row.char.crop)} alt="田字格：{row.char.label || '未识别'}" />
                   <div class="cap">
                     {row.char.label}{#if row.char.idx === data.focus_grid_idx}<span class="chip"
                         >讲解焦点</span
@@ -251,7 +255,7 @@
                   </div>
                 </div>
                 <div class="char-info">
-                  <h3>「{row.char.label}」<span class="chip">{row.char.note}</span></h3>
+                  <h3>{row.char.label ? `「${row.char.label}」` : "未识别"}<span class="chip">{row.char.note}</span></h3>
                   <p class="dim-line">关联旁注 {row.related.length} 处</p>
                   <div class="char-annos">
                     {#if row.related.length > 0}

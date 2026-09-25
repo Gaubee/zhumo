@@ -30,7 +30,7 @@ const SAMPLE_DATA: AnalysisData = {
   focus_char: '桂',
   annotations: [{ idx: 0, first_ts: 9, desc: '旁注', grids: ['桂'], crop: 'assets/anno_0.png' }],
   transcript: { model: 'whisper-large-v3-turbo', segments: [{ start: 0, end: 3.9, text: '我们一起来看一下' }] },
-  summary: { topic: '桂', paragraphs: ['讲评'], key_points: ['左右结构'], source: 'injected' },
+  summary: { topic: '桂', paragraphs: ['讲评'], key_points: ['左右结构'], source: 'agent' },
   ink_curve: [0, 1003],
   frame_ts: [0, 0.5],
   limitations: [],
