@@ -80,8 +80,8 @@ describe('shufa capability 工具面', () => {
     expect(result.kind).toBe('ok');
     expect((result as { value: unknown }).value).toEqual({ ok: 1 });
     const entry = commands[0] as { command: string[]; cwd: string };
-    expect(entry.command.slice(0, 8)).toEqual(['uv', 'run', '--project', '/opt/shufa-tool', 'python', '-m', 'shufa_tool.steps', 'probe']);
-    expect(entry.command.slice(8)).toEqual([path.join(taskRoot, 'v.mp4'), path.join(taskDir, '.shufa-work')]);
+    expect(entry.command.slice(0, 10)).toEqual(['uv', 'run', '--project', '/opt/shufa-tool', '--extra', 'transcribe', 'python', '-m', 'shufa_tool.steps', 'probe']);
+    expect(entry.command.slice(10)).toEqual([path.join(taskRoot, 'v.mp4'), path.join(taskDir, '.shufa-work')]);
     expect(entry.cwd).toBe(taskDir);
   });
 
@@ -94,7 +94,7 @@ describe('shufa capability 工具面', () => {
     expect(result.kind).toBe('ok');
     const entry = commands[0] as { command: string[]; cwd: string };
     // agent 面相对、进程面绝对：python CLI 收到的 video/workdir 都是绝对路径。
-    expect(entry.command.slice(8)).toEqual([
+    expect(entry.command.slice(10)).toEqual([
       path.join(taskRoot, 'v-rel.mp4'),
       path.join(taskDir, '.shufa-work'),
     ]);
@@ -120,14 +120,14 @@ describe('shufa capability 工具面', () => {
   it('sample/clip/orient 的可选参数拼接', async () => {
     await registry.call('shufa.sample', { workdir: taskDir, fps: 2.5 }, 'agent');
     // W7b 不变量：python CLI 的 sample/clip/transcribe 需要 <video> <workdir> 双位置参数
-    expect(commands[0]?.command.slice(8, 10)).toEqual([
+    expect(commands[0]?.command.slice(10, 12)).toEqual([
       path.join(taskRoot, 'lecture.mp4'),
       path.join(taskDir, '.shufa-work'),
     ]);
     expect(commands[0]?.command.at(-2)).toBe('--fps');
     expect(commands[0]?.command.at(-1)).toBe('2.5');
     await registry.call('shufa.clip', { workdir: taskDir, enhance: true }, 'agent');
-    expect(commands[1]?.command.slice(8, 10)).toEqual([
+    expect(commands[1]?.command.slice(10, 12)).toEqual([
       path.join(taskRoot, 'lecture.mp4'),
       path.join(taskDir, '.shufa-work'),
     ]);

@@ -29,7 +29,10 @@ export interface ShellOutcome {
   stderr: string;
 }
 
-export type ShellRunner = (command: readonly string[], options: { cwd: string }) => Promise<ShellOutcome>;
+export type ShellRunner = (
+  command: readonly string[],
+  options: { cwd: string; env?: NodeJS.ProcessEnv },
+) => Promise<ShellOutcome>;
 
 /** 默认 shell 执行面（execFile，不经 shell 解析，参数数组直传）。 */
 export const execShell: ShellRunner = (command, options) =>
@@ -165,18 +168,28 @@ export function createAnalysisCapabilities(deps: AnalysisCapabilityDeps): Capabi
     step: string,
     args: readonly string[],
   ): Promise<CapabilityCallResult> {
+    // --extra transcribe（W9 顺延 2026-09-27）：转录步骤的引擎依赖（mac=mlx /
+    // win,linux=faster-whisper）随运行自愈——向导 python-env 未跑/未成时，
+    // uv run 自动补装（uv run 只补缺不卸载，与 uv sync exact 语义不同）。
+    // PYTHONUTF8：Windows 控制台 GBK 下统一 python 子进程输出为 UTF-8，
+    // 与 daemon 解码一致（管线 stdout 末行 JSON 解析依赖此点）。
     const command = [
       'uv',
       'run',
       '--project',
       deps.shufaToolDir,
+      '--extra',
+      'transcribe',
       'python',
       '-m',
       'shufa_tool.steps',
       step,
       ...args,
     ];
-    const outcome = await runShell(command, { cwd: context.taskDir });
+    const outcome = await runShell(command, {
+      cwd: context.taskDir,
+      env: { ...process.env, PYTHONUTF8: '1' },
+    });
     if (outcome.code !== 0) {
       const detail = outcome.stderr.trim().split('\n').at(-1) ?? `exit ${outcome.code}`;
       return noteFailure(context, step, detail);

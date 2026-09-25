@@ -571,10 +571,14 @@ export class WizardRunner {
   }
 
   /**
-   * whisper 预热 runner（走查四轮）：`uv run --project <shufa-tool> python -m
-   * shufa_tool.warm_whisper`——huggingface_hub 官方路径（断点续传/校验免费），
-   * 镜像经 HF_ENDPOINT。进度行（已下载 …）原位替换，其余逐行追加；取消 = 组杀
-   * （与命令步骤同型，killProcessTree）；force 透传脚本端清缓存（覆盖下载）。
+   * whisper 预热 runner（走查四轮；W9 顺延 2026-09-27）：`uv run --project
+   * <shufa-tool> --extra transcribe python -m shufa_tool.warm_whisper`——
+   * warm_whisper 五轮起是自管下载器（断点续传/校验免费，纯标准库零 venv
+   * 依赖）；--extra 使步骤可乱序：未先跑 python-env 时 uv run 自动补装引擎
+   * 依赖（uv run 只补缺不卸载，与 uv sync 的 exact 语义不同——mac 管线裸
+   * uv run 数月末曾卸掉 mlx 即实证）。镜像经 HF_ENDPOINT。进度行（已下载 …）
+   * 原位替换，其余逐行追加；取消 = 组杀（与命令步骤同型，killProcessTree）；
+   * force 透传脚本端清缓存（覆盖下载）。
    */
   private async runWhisperWarm(
     id: string,
@@ -591,6 +595,8 @@ export class WizardRunner {
       'run',
       '--project',
       JSON.stringify(toolDir),
+      '--extra',
+      'transcribe',
       'python',
       '-m',
       'shufa_tool.warm_whisper',
@@ -600,10 +606,14 @@ export class WizardRunner {
       JSON.stringify(endpoint),
       ...(force ? ['--force'] : []),
     ].join(' ');
+    // PYTHONUTF8：Windows 控制台代码页（GBK）下 python 子进程输出按代码页
+    // 编码，daemon 按 UTF-8 解码进 last_log 会乱码（2026-09-27 Owner 实测
+    //「[失败]」→「[ʧ…]」）；强制 Python UTF-8 模式统一两端。
     const child = spawn(command, {
       cwd: toolDir,
       shell: this.options.shell ?? true,
       detached: process.platform !== 'win32',
+      env: { ...process.env, PYTHONUTF8: '1' },
     });
     this.active.set(id, {
       kill: () => {

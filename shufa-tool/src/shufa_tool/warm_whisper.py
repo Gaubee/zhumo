@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import shutil
 import sys
@@ -54,34 +55,42 @@ class FileSpec:
 
 
 def list_repo_files(endpoint: str, repo: str) -> tuple[str, list[FileSpec]]:
-    """仓库元数据（files_metadata）：commit + 每文件 blob 名与体积。
+    """仓库元数据（标准库直调 REST：GET /api/models/{repo}?blobs=true——与
+    hf_hub model_info(files_metadata=True) 同一端点同一参数）：commit + 每文件
+    blob 名与体积。
 
     blob 命名对齐 hf_hub：LFS 文件用 lfs.oid（sha256），其余用 git blob_id
     （sha1）——实测两种缓存名均如此。
-    """
-    from huggingface_hub import HfApi  # 仅用元数据 API，不用于下载
 
-    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
-    info = None
+    W9 顺延（2026-09-27）：五轮自管下载器后 hf_hub 只剩这一处元数据用途；
+    实测 Windows 向导步骤乱序（未先跑 python-env）时 venv 缺 huggingface_hub，
+    warm 直接退出 3。改纯标准库（urllib+json），下载从此零 venv 依赖。
+    """
+    url = f"{endpoint.rstrip('/')}/api/models/{repo}?blobs=true"
+    data = None
     for attempt in range(1, RETRIES + 1):
         try:
-            info = HfApi(endpoint=endpoint).model_info(repo, files_metadata=True)
+            req = urllib.request.Request(url, headers={"User-Agent": "shufa-warm/1.0"})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
             break
         except Exception:  # noqa: BLE001 - 镜像 SSL 瞬断等，退避重试
             if attempt == RETRIES:
                 raise
             time.sleep(min(2**attempt, 30))
     specs: list[FileSpec] = []
-    for sib in info.siblings or []:
-        if sib.rfilename.endswith("/"):  # 目录占位
+    for sib in data.get("siblings") or []:
+        name = sib.get("rfilename", "")
+        if name.endswith("/"):  # 目录占位
             continue
-        if sib.lfs is not None:
-            # BlobLfsInfo 字段为 sha256（实测即缓存 blobs/<名>）
-            specs.append(FileSpec(sib.rfilename, sib.lfs.sha256, sib.lfs.size or 0, True))
+        # REST 字段与 hf_hub 属性名不同（hf_hub 客户端做了重命名）：JSON 是
+        # blobId / lfs.sha256，ModelInfo 对象是 blob_id / lfs.oid。
+        lfs = sib.get("lfs")
+        if lfs is not None:
+            specs.append(FileSpec(name, lfs.get("sha256", ""), int(lfs.get("size") or 0), True))
         else:
-            specs.append(FileSpec(sib.rfilename, sib.blob_id or "", sib.size or 0, False))
-    return str(info.sha), specs
+            specs.append(FileSpec(name, sib.get("blobId") or "", int(sib.get("size") or 0), False))
+    return str(data.get("sha", "")), specs
 
 
 def blob_complete(blobs: Path, spec: FileSpec) -> bool:
@@ -214,8 +223,8 @@ def dir_size_bytes(path: Path) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="预热 mlx-whisper 模型到 HF 缓存（自管断点续传）")
-    ap.add_argument("--repo", required=True, help="HF 仓库（如 mlx-community/whisper-tiny）")
+    ap = argparse.ArgumentParser(description="预热 whisper 模型到 HF 缓存（自管断点续传，纯标准库零 venv 依赖）")
+    ap.add_argument("--repo", required=True, help="HF 仓库（mlx-community/whisper-* 或 Systran/faster-whisper-*）")
     ap.add_argument("--endpoint", default="", help="镜像端点（默认官方）")
     ap.add_argument("--force", action="store_true", help="覆盖下载：清除该仓库缓存从头下载")
     args = ap.parse_args()
@@ -224,12 +233,6 @@ def main() -> int:
     if endpoint != DEFAULT_ENDPOINT:
         os.environ["HF_ENDPOINT"] = endpoint
         print(f"镜像端点：{endpoint}")
-
-    try:
-        from huggingface_hub import HfApi  # noqa: F401 - 探测依赖可用性
-    except ImportError:
-        print("[失败] huggingface_hub 未安装（uv sync --extra transcribe）", file=sys.stderr)
-        return 3
 
     cache = cache_repo_dir(args.repo)
     blobs = cache / "blobs"
