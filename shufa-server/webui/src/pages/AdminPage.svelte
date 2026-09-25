@@ -22,24 +22,30 @@
 <script lang="ts">
   import { tick } from "svelte";
   import IconFolder from "@lucide/svelte/icons/folder";
-  import IconChevronDown from "@lucide/svelte/icons/chevron-down";
   import IconBookOpen from "@lucide/svelte/icons/book-open";
   import IconLogIn from "@lucide/svelte/icons/log-in";
   import IconSettings from "@lucide/svelte/icons/settings";
   import IconUsers from "@lucide/svelte/icons/users";
+  import IconListChecks from "@lucide/svelte/icons/list-checks";
+  import IconBrain from "@lucide/svelte/icons/brain";
+  import IconShield from "@lucide/svelte/icons/shield";
+  import IconMenu from "@lucide/svelte/icons/menu";
+  import IconX from "@lucide/svelte/icons/x";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Select from "$lib/components/ui/select";
+  import * as Sheet from "$lib/components/ui/sheet";
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Switch } from "$lib/components/ui/switch";
+  import GithubMark from "$lib/components/brand/GithubMark.svelte";
   import KnowledgeManager from "$lib/components/kb/KnowledgeManager.svelte";
   import ModelsConfig from "$lib/components/models/ModelsConfig.svelte";
   import PrepStepsAccordion from "$lib/components/wizard/PrepStepsAccordion.svelte";
   import ResourceManager from "$lib/components/resources/ResourceManager.svelte";
   import { api } from "$lib/api";
   import { auth } from "$lib/stores/auth.svelte";
-  import { navigate, type Route } from "$lib/router.svelte";
+  import { navigate, stashReturnTo, type Route } from "$lib/router.svelte";
   import type { AdminSettings, UserInfo, WizardRunParams, WizardStep } from "$lib/types";
 
   let { tab }: { tab: Route & { name: "admin" } } = $props();
@@ -80,6 +86,36 @@
     { id: "kb", label: "知识库", icon: IconBookOpen },
     { id: "settings", label: "设置", icon: IconSettings },
   ] as const;
+
+  // ---- 设置页二级导航（Owner 2026-09-25：三个 details 折叠分区改为
+  // list-detail——桌面左侧分区导航 + 右侧内容；移动顶部横滑 pill 条。
+  // 默认落 models（原「版面让给高频的模型配置」语义由导航默认项承接）。
+  // 纯视图状态不进路由，与 details 默认折叠的刷新语义一致） ----
+  const settingSections = [
+    { id: "models", label: "大模型服务", icon: IconBrain },
+    { id: "prep", label: "准备步骤", icon: IconListChecks },
+    { id: "site", label: "站点与安全", icon: IconShield },
+  ] as const;
+  let section = $state<(typeof settingSections)[number]["id"]>("models");
+
+  // ---- 一级导航移动适配（Owner 2026-09-25：aside 固定 w-44 在窄屏挤占内容。
+  // 前台 ListDetailPage 同款：桌面常驻侧栏，移动收进左侧 Sheet 抽屉——
+  // 顶栏汉堡唤起，选中即收）。 ----
+  let desktop = $state(true);
+  $effect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    const sync = () => (desktop = mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  });
+  let navOpen = $state(false);
+
+  /** 一级导航项点击：路由跳转 + 移动抽屉收起。 */
+  function goto(item: (typeof navItems)[number]): void {
+    navigate(`#/admin/${item.id}`);
+    if (!desktop) navOpen = false;
+  }
 
   const isAdmin = $derived(auth.session?.role === "admin");
 
@@ -246,8 +282,36 @@
 </script>
 
 <div class="flex h-screen flex-col bg-paper">
-  <header class="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-card px-4">
-    <img src="/icon.svg" alt="朱墨" class="size-6 shrink-0 rounded-[4px]" />
+{#snippet primaryNavButtons()}
+  {#each navItems as item (item.id)}
+    {@const Icon = item.icon}
+    {@const active = tab.tab === item.id}
+    <button
+      type="button"
+      aria-current={active ? "page" : undefined}
+      class="flex items-center gap-2 rounded-md px-3 py-2 text-xs font-medium transition-colors {active
+        ? 'bg-accent-soft text-accent-foreground'
+        : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'}"
+      onclick={() => goto(item)}
+    >
+      <Icon class="h-4 w-4 shrink-0" aria-hidden="true" />
+      {item.label}
+    </button>
+  {/each}
+{/snippet}
+
+<header class="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-card px-3 md:gap-3 md:px-4">
+  {#if !desktop}
+    <Button
+      size="icon-sm"
+      variant="ghost"
+      aria-label="打开后台导航"
+      onclick={() => (navOpen = true)}
+    >
+      <IconMenu class="size-4" aria-hidden="true" />
+    </Button>
+  {/if}
+  <img src="/icon.svg" alt="朱墨" class="size-6 shrink-0 rounded-[4px]" />
     <span class="text-sm font-semibold">后台管理</span>
     <span class="flex-1"></span>
     <a
@@ -258,11 +322,7 @@
       title="GitHub 仓库"
       aria-label="GitHub 仓库"
     >
-<svg viewBox="0 0 16 16" fill="currentColor" class="size-4" aria-hidden="true">
-        <path
-          d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.2.037-.282-.096-.282-.214v-1.548c0-.716-.272-1.184-.586-1.421 1.921-.214 3.937-.945 3.937-4.213 0-.93-.332-1.691-.876-2.287.088-.214.38-1.082-.084-2.255 0 0-.716-.23-2.348.871a8.18 8.18 0 0 0-4.322 0C5.358 1.331 4.642 1.561 4.642 1.561c-.464 1.173-.172 2.041-.084 2.255C4.012 4.412 3.68 5.173 3.68 6.103c0 3.258 2.007 4.003 3.921 4.221-.246.214-.469.591-.546 1.143-.49.219-1.733.591-2.476-.704-.164-.265-.657-.914-1.349-.914-.737 0-.301.414-.013.573.379.209.789.985.789 1.386 0 .361.247 1.176 1.43 1.176 1.035 0 1.759-.017 2.146-.036v1.448c0 .118-.081.251-.279.214A8.013 8.013 0 0 1 0 8c0-4.42 3.58-8 8-8Z"
-        />
-      </svg>
+      <GithubMark />
     </a>
     <Button size="sm" variant="outline" onclick={() => navigate("#/")}>返回前台</Button>
   </header>
@@ -276,7 +336,14 @@
           当前会话无权访问后台管理。请使用管理员账号登录后再试。
         </p>
         <div class="mt-1 flex gap-2">
-          <Button size="sm" variant="outline" onclick={() => navigate("#/login")}>
+          <Button
+            size="sm"
+            variant="outline"
+            onclick={() => {
+              stashReturnTo();
+              navigate("#/login");
+            }}
+          >
             <IconLogIn data-icon="inline-start" />
             去登录
           </Button>
@@ -286,28 +353,18 @@
     </div>
   {:else}
     <div class="flex min-h-0 flex-1">
-      <!-- R1 侧栏导航（shadcn dashboard 惯例：aside+nav 手搓，激活态 accent 高亮） -->
-      <aside class="flex w-44 shrink-0 flex-col gap-1 border-r border-border bg-card p-2">
+      <!-- R1 侧栏导航（shadcn dashboard 惯例：aside+nav 手搓，激活态 accent 高亮；
+           ≥md 常驻，移动收进左侧 Sheet 抽屉（顶栏汉堡唤起，选中即收）。 -->
+      <aside class="hidden w-44 shrink-0 flex-col gap-1 border-r border-border bg-card p-2 md:flex">
         <nav class="flex flex-col gap-1" aria-label="后台导航">
-          {#each navItems as item (item.id)}
-            {@const Icon = item.icon}
-            {@const active = tab.tab === item.id}
-            <button
-              type="button"
-              aria-current={active ? "page" : undefined}
-              class="flex items-center gap-2 rounded-md px-3 py-2 text-xs font-medium transition-colors {active
-                ? 'bg-accent-soft text-accent-foreground'
-                : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'}"
-              onclick={() => navigate(`#/admin/${item.id}`)}
-            >
-              <Icon class="h-4 w-4 shrink-0" aria-hidden="true" />
-              {item.label}
-            </button>
-          {/each}
+          {@render primaryNavButtons()}
         </nav>
       </aside>
 
-      <main class="min-h-0 flex-1">
+      <!-- min-w-0：flex item 默认 min-width:auto 会放行内容固有宽（nowrap
+           truncate 的整行文本 min-content）——准备步骤列表在 375px 曾把
+           main 撑到 507px（Windows 实测定位）。 -->
+      <main class="min-h-0 min-w-0 flex-1">
         {#if loadError !== null}
           <div class="p-4">
             <div class="mx-auto max-w-2xl rounded-md border border-destructive/40 bg-destructive/5 p-4 text-xs text-destructive" role="alert">
@@ -323,7 +380,9 @@
                 <Button size="sm" onclick={() => (createOpen = true)}>+ 创建用户</Button>
               </div>
               <div class="overflow-hidden rounded-lg border bg-card">
-                <table class="w-full text-xs">
+                <!-- 桌面表格 / 移动卡片（Owner 2026-09-25：四列表格固有宽 ~460px，
+                     375px 视口必溢出——<md 换卡片列表，字段语义不变）。 -->
+                <table class="hidden w-full text-xs md:table">
                   <thead class="border-b bg-muted/40 text-left text-muted-foreground">
                     <tr>
                       <th class="px-3 py-2 font-medium">用户名</th>
@@ -394,6 +453,56 @@
                     {/each}
                   </tbody>
                 </table>
+                <div class="flex flex-col divide-y md:hidden">
+                  {#each users as user (user.id)}
+                    {@const isSystem = user.role === "anonymous"}
+                    <div class="flex flex-col gap-2 p-3">
+                      <div class="flex items-center gap-1.5">
+                        <span class="min-w-0 flex-1 truncate font-mono text-xs">{user.username}</span>
+                        {#if isSystem}
+                          <Badge variant="outline" class="shrink-0 text-[10px]">系统账户</Badge>
+                        {/if}
+                        <Badge variant="secondary" class="shrink-0 text-[10px]">{user.role}</Badge>
+                        {#if user.disabled}
+                          <Badge variant="destructive" class="shrink-0 text-[10px]">已禁用</Badge>
+                        {/if}
+                      </div>
+                      {#if isSystem}
+                        <span class="text-[11px] text-muted-foreground">—</span>
+                      {:else}
+                        <div class="flex flex-wrap justify-end gap-1">
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            onclick={() => {
+                              passwordTarget = user;
+                              nextPassword = "";
+                            }}
+                          >
+                            改密
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            disabled={busy}
+                            onclick={() => void toggleDisabled(user)}
+                          >
+                            {user.disabled ? "启用" : "禁用"}
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            class="text-destructive"
+                            disabled={busy}
+                            onclick={() => (deleteTarget = user)}
+                          >
+                            删除
+                          </Button>
+                        </div>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
               </div>
               {#if accountMessage}
                 <p class="text-xs text-destructive" role="alert">{accountMessage}</p>
@@ -444,107 +553,161 @@
           <!-- 知识库（Owner 2026-09-22：两级结构 + git 修订历史 + 5s 轮询实时回填） -->
           <KnowledgeManager />
         {:else}
-          <!-- 设置（五轮 R2：纯 flex 链——卡片列 min-h-full 撑满视口，Models 卡
-               flex-1 拿全部剩余且内部自滚。准备步骤/站点安全为低频配置，默认
-               折叠（details）把版面让给高频的模型配置；calc 视口公式与固定
-               rem/px 钳制全部移除）。 -->
-          <div class="flex h-full min-h-0 flex-col overflow-y-auto p-4">
-            <div class="mx-auto flex min-h-full w-full max-w-2xl flex-col gap-4">
-              <details class="group shrink-0 rounded-lg border bg-card">
-                <summary
-                  class="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium"
-                >
-                  准备步骤重跑
-                  <IconChevronDown
-                    class="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180"
-                    aria-hidden="true"
-                  />
-                </summary>
-                <div class="space-y-2 px-4 pb-4">
-                  <PrepStepsAccordion
-                    steps={wizardSteps}
-                    running={runningStep}
-                    onrun={runStep}
-                    oncancel={cancelStep}
-                  />
+          <!-- 设置（Owner 2026-09-25：三个 details 折叠分区 → 二级导航 list-detail。
+               桌面左分区导航右内容（一级 nav 同款样式）；移动顶部横滑 pill 条。
+               滚动所有权按分区分型：models 满高链组件内滚（ModelsConfig 设计语义
+               不变），prep/site 页面级滚动。 -->
+          <div class="flex h-full min-h-0 flex-col p-4">
+            <div class="mx-auto flex min-h-0 w-full max-w-4xl flex-1 gap-4">
+              <!-- 桌面：左侧分区导航（与一级 aside nav 同款视觉） -->
+              <nav
+                class="hidden w-40 shrink-0 flex-col gap-1 self-start rounded-lg border bg-card/60 p-1.5 md:flex"
+                aria-label="设置分区"
+              >
+                {#each settingSections as item (item.id)}
+                  {@const Icon = item.icon}
+                  {@const active = section === item.id}
+                  <button
+                    type="button"
+                    aria-current={active ? "true" : undefined}
+                    class="flex items-center gap-2 rounded-md px-3 py-2 text-xs font-medium transition-colors {active
+                      ? 'bg-accent-soft text-accent-foreground'
+                      : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'}"
+                    onclick={() => (section = item.id)}
+                  >
+                    <Icon class="h-4 w-4 shrink-0" aria-hidden="true" />
+                    {item.label}
+                  </button>
+                {/each}
+              </nav>
+              <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+                <!-- 移动：顶部横滑分区条（窄屏三个分区并列会挤，横滑最稳） -->
+                <div class="mb-3 flex gap-1 overflow-x-auto pb-0.5 md:hidden">
+                  {#each settingSections as item (item.id)}
+                    {@const active = section === item.id}
+                    {@const Icon = item.icon}
+                    <button
+                      type="button"
+                      aria-current={active ? "true" : undefined}
+                      class="flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors {active
+                        ? 'border-transparent bg-accent-soft text-accent-foreground'
+                        : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'}"
+                      onclick={() => (section = item.id)}
+                    >
+                      <Icon class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      {item.label}
+                    </button>
+                  {/each}
                 </div>
-              </details>
-              <section class="flex min-h-0 flex-1 flex-col rounded-lg border bg-card p-4">
-                <ModelsConfig />
-              </section>
-              <details class="group shrink-0 rounded-lg border bg-card">
-                <summary
-                  class="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium"
-                >
-                  站点与安全
-                  <IconChevronDown
-                    class="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180"
-                    aria-hidden="true"
-                  />
-                </summary>
-                <div class="space-y-3 px-4 pb-4">
-                <label class="flex flex-col gap-1 text-xs">
-                  <span class="text-muted-foreground">站点域名（对外链接拼接基址）</span>
-                  <Input
-                    class="h-8 max-w-sm font-mono text-xs"
-                    value={settings?.siteBaseUrl ?? ""}
-                    onchange={(event) => {
-                      if (settings) settings.siteBaseUrl = event.currentTarget.value;
-                      void api.updateAdminSettings({ siteBaseUrl: event.currentTarget.value });
-                    }}
-                  />
-                </label>
-                {#if lanUrls !== null && lanUrls.length > 0}
-                  <!-- R3/BUG3：局域网访问链接（加载失败时整块隐藏，不报错弹脸） -->
-                  <div class="flex max-w-sm flex-col gap-1.5 border-t border-border pt-3">
-                    <span class="text-xs font-medium">局域网访问</span>
-                    <p class="text-[11px] leading-snug text-muted-foreground">
-                      同一局域网内的设备可通过以下地址访问本站；防火墙放行后生效。
-                    </p>
-                    <div class="flex flex-col gap-0.5">
-                      {#each lanUrls as url (url)}
-                        <a
-                          href={url}
-                          target="_blank"
-                          rel="noreferrer"
-                          class="w-fit font-mono text-xs text-primary underline-offset-2 hover:underline"
-                        >
-                          {url}
-                        </a>
-                      {/each}
-                    </div>
+                {#if section === "models"}
+                  <!-- models：满高链交 ModelsConfig 内滚（滚动所有权在其 tab 内容容器） -->
+                  <section class="min-h-0 flex-1 rounded-lg border bg-card p-4">
+                    <ModelsConfig />
+                  </section>
+                {:else if section === "prep"}
+                  <!-- prep：页面级滚动；PrepStepsAccordion 内部自带步骤 list-detail -->
+                  <div class="min-h-0 flex-1 overflow-y-auto pr-0.5">
+                    <section class="rounded-lg border bg-card p-4">
+                      <h2 class="mb-3 text-sm font-medium">准备步骤重跑</h2>
+                      <PrepStepsAccordion
+                        steps={wizardSteps}
+                        running={runningStep}
+                        onrun={runStep}
+                        oncancel={cancelStep}
+                      />
+                    </section>
+                  </div>
+                {:else}
+                  <!-- site：页面级滚动 -->
+                  <div class="min-h-0 flex-1 overflow-y-auto pr-0.5">
+                    <section class="rounded-lg border bg-card p-4">
+                      <h2 class="mb-3 text-sm font-medium">站点与安全</h2>
+                      <div class="space-y-3">
+                        <label class="flex flex-col gap-1 text-xs">
+                          <span class="text-muted-foreground">站点域名（对外链接拼接基址）</span>
+                          <Input
+                            class="h-8 max-w-sm font-mono text-xs"
+                            value={settings?.siteBaseUrl ?? ""}
+                            onchange={(event) => {
+                              if (settings) settings.siteBaseUrl = event.currentTarget.value;
+                              void api.updateAdminSettings({ siteBaseUrl: event.currentTarget.value });
+                            }}
+                          />
+                        </label>
+                        {#if lanUrls !== null && lanUrls.length > 0}
+                          <!-- R3/BUG3：局域网访问链接（加载失败时整块隐藏，不报错弹脸） -->
+                          <div class="flex max-w-sm flex-col gap-1.5 border-t border-border pt-3">
+                            <span class="text-xs font-medium">局域网访问</span>
+                            <p class="text-[11px] leading-snug text-muted-foreground">
+                              同一局域网内的设备可通过以下地址访问本站；防火墙放行后生效。
+                            </p>
+                            <div class="flex flex-col gap-0.5">
+                              {#each lanUrls as url (url)}
+                                <a
+                                  href={url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  class="w-fit font-mono text-xs text-primary underline-offset-2 hover:underline"
+                                >
+                                  {url}
+                                </a>
+                              {/each}
+                            </div>
+                          </div>
+                        {/if}
+                        <div class="flex max-w-sm flex-col gap-2 border-t border-border pt-3">
+                          <span class="text-xs font-medium">管理员改密</span>
+                          <Input
+                            bind:value={oldPassword}
+                            type="password"
+                            placeholder="原密码"
+                            class="h-8 text-xs"
+                          />
+                          <Input
+                            bind:value={adminNewPassword}
+                            type="password"
+                            placeholder="新密码（≥8 位）"
+                            class="h-8 text-xs"
+                          />
+                          <div class="flex items-center gap-3">
+                            <Button size="sm" disabled={busy} onclick={() => void saveAdminPassword()}>
+                              更新密码
+                            </Button>
+                            {#if passwordMessage}
+                              <span class="text-[11px] text-muted-foreground">{passwordMessage}</span>
+                            {/if}
+                          </div>
+                        </div>
+                      </div>
+                    </section>
                   </div>
                 {/if}
-                <div class="flex max-w-sm flex-col gap-2 border-t border-border pt-3">
-                  <span class="text-xs font-medium">管理员改密</span>
-                  <Input
-                    bind:value={oldPassword}
-                    type="password"
-                    placeholder="原密码"
-                    class="h-8 text-xs"
-                  />
-                  <Input
-                    bind:value={adminNewPassword}
-                    type="password"
-                    placeholder="新密码（≥8 位）"
-                    class="h-8 text-xs"
-                  />
-                  <div class="flex items-center gap-3">
-                    <Button size="sm" disabled={busy} onclick={() => void saveAdminPassword()}>
-                      更新密码
-                    </Button>
-                    {#if passwordMessage}
-                      <span class="text-[11px] text-muted-foreground">{passwordMessage}</span>
-                    {/if}
-                  </div>
-                </div>
-                </div>
-              </details>
+              </div>
             </div>
           </div>
         {/if}
       </main>
     </div>
+
+    <!-- 移动一级导航抽屉（与前台任务列表同款：左抽屉 + 标题行内关闭）。 -->
+    <Sheet.Root bind:open={navOpen}>
+      <Sheet.Content side="left" class="w-60 gap-0 p-0" hideClose>
+        <Sheet.Header class="flex-row items-center justify-between border-b px-3 py-2">
+          <Sheet.Title class="text-xs font-medium text-muted-foreground">后台导航</Sheet.Title>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label="关闭导航"
+            onclick={() => (navOpen = false)}
+          >
+            <IconX class="size-4" aria-hidden="true" />
+          </Button>
+        </Sheet.Header>
+        <nav class="flex flex-col gap-1 p-2" aria-label="后台导航（移动）">
+          {@render primaryNavButtons()}
+        </nav>
+      </Sheet.Content>
+    </Sheet.Root>
   {/if}
 </div>
 

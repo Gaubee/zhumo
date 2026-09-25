@@ -15,8 +15,10 @@
   import IconPlus from "@lucide/svelte/icons/plus";
   import IconSearch from "@lucide/svelte/icons/search";
   import IconTrash2 from "@lucide/svelte/icons/trash-2";
+  import IconX from "@lucide/svelte/icons/x";
   import MiniSearch from "minisearch";
   import * as Dialog from "$lib/components/ui/dialog";
+  import * as Sheet from "$lib/components/ui/sheet";
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -83,6 +85,29 @@
   });
 
   const current = $derived(groups.find((g) => g.name === selected) ?? null);
+
+  // ---- list-detail 移动适配（Owner 2026-09-25：双栏在窄屏横向溢出。与设置页
+  // 准备步骤同款：桌面双栏常驻，移动分组列表全宽 + 点行右抽屉展开条目区）。 ----
+  let desktop = $state(true);
+  $effect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    const sync = () => (desktop = mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  });
+  let detailOpen = $state(false);
+
+  /** 移动：选中分组即开抽屉；清空搜索回列表态。 */
+  function pickGroup(name: string): void {
+    selected = name;
+    if (!desktop) detailOpen = true;
+  }
+
+  // 搜索态在移动端也要能到达结果（结果渲染在条目区=抽屉里）：输入即开抽屉。
+  $effect(() => {
+    if (!desktop && query.trim().length > 0) detailOpen = true;
+  });
 
   async function refresh(silent = false): Promise<void> {
     try {
@@ -218,25 +243,183 @@
   }
 </script>
 
+{#snippet groupsColumn()}
+  <div class="flex w-full min-w-0 flex-col gap-2 rounded-lg border bg-card p-2">
+    <div class="flex items-center gap-1">
+      <Input
+        bind:value={newGroupName}
+        placeholder="新分组名"
+        class="h-7 min-w-0 text-xs"
+        onkeydown={(e) => e.key === "Enter" && void createGroup()}
+      />
+      <Button size="xs" variant="ghost" disabled={busy || !newGroupName.trim()} onclick={() => void createGroup()} aria-label="创建分组">
+        <IconPlus class="h-3.5 w-3.5" aria-hidden="true" />
+      </Button>
+    </div>
+    <div class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
+      {#each groups as group (group.name)}
+        <button
+          type="button"
+          aria-current={selected === group.name ? "true" : undefined}
+          class="group flex flex-col rounded-md px-2.5 py-2 text-left transition-colors {selected === group.name
+            ? 'bg-accent-soft text-accent-foreground'
+            : 'hover:bg-muted/60'}"
+          onclick={() => pickGroup(group.name)}
+        >
+          <span class="flex w-full items-center justify-between gap-1">
+            <span class="truncate text-xs font-medium">{group.name}</span>
+            <!-- 触屏无 hover：移动常显（opacity-100），桌面保持 hover 浮现。 -->
+            <span class="flex shrink-0 items-center gap-0.5 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100">
+              <span
+                role="button"
+                tabindex="0"
+                class="rounded p-0.5 hover:bg-muted"
+                aria-label="重命名分组"
+                onclick={(e) => {
+                  e.stopPropagation();
+                  renameTarget = group;
+                  renameValue = group.name;
+                }}
+                onkeydown={(e) => e.key === "Enter" && ((e.stopPropagation(), (renameTarget = group), (renameValue = group.name)))}
+              >
+                <IconPencil class="h-3 w-3" aria-hidden="true" />
+              </span>
+              <span
+                role="button"
+                tabindex="0"
+                class="rounded p-0.5 text-destructive hover:bg-muted"
+                aria-label="删除分组"
+                onclick={(e) => {
+                  e.stopPropagation();
+                  deleteGroupTarget = group;
+                }}
+                onkeydown={(e) => e.key === "Enter" && ((e.stopPropagation(), (deleteGroupTarget = group)))}
+              >
+                <IconTrash2 class="h-3 w-3" aria-hidden="true" />
+              </span>
+            </span>
+          </span>
+          <span class="text-[10px] text-muted-foreground">{group.entries.length} 条</span>
+        </button>
+      {/each}
+    </div>
+  </div>
+{/snippet}
+
+{#snippet entriesPanel()}
+  <section class="flex min-h-0 min-w-0 flex-1 flex-col rounded-lg border bg-card">
+    {#if query.trim().length > 0}
+      <div class="flex min-h-0 flex-1 flex-col">
+        <div class="shrink-0 border-b px-3 py-2 text-xs text-muted-foreground">
+          搜索「{query.trim()}」— 命中 {searchHits.length} 条{searchHits.length >= 50 ? "（仅示前 50）" : ""}
+        </div>
+        <div class="min-h-0 flex-1 overflow-y-auto p-3">
+          {#if searchHits.length === 0}
+            <p class="py-8 text-center text-xs text-muted-foreground">无命中——换个词试试</p>
+          {:else}
+            <div class="space-y-2">
+              {#each searchHits as hit (hit.id)}
+                <button
+                  type="button"
+                  class="block w-full rounded-md border p-2 text-left transition-colors hover:bg-muted/50"
+                  onclick={() => {
+                    selected = hit.group;
+                    query = "";
+                    if (!desktop) detailOpen = false;
+                  }}
+                  aria-label="跳转到该条目所在分组"
+                >
+                  <span class="flex items-center gap-2">
+                    <Badge variant="secondary" class="shrink-0 text-[10px]">{hit.group}</Badge>
+                    <span class="min-w-0 flex-1 truncate text-xs font-medium">{hit.key}</span>
+                    <span class="shrink-0 text-[10px] text-muted-foreground">相关度 {(hit.score * 10).toFixed(0)}</span>
+                  </span>
+                  <span class="mt-1 line-clamp-2 block text-[11px] leading-snug text-muted-foreground">{hit.value}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </div>
+    {:else if current === null}
+      <div class="flex flex-1 items-center justify-center text-xs text-muted-foreground">尚无分组——左侧创建一个</div>
+    {:else}
+      <div class="shrink-0 border-b px-3 py-2">
+        <p class="text-xs font-medium">{current.name}</p>
+        <p class="mt-0.5 text-[11px] leading-snug text-muted-foreground">{current.note}</p>
+      </div>
+      <div class="flex shrink-0 items-center gap-1 border-b px-3 py-2">
+        <Input
+          bind:value={newEntryKey}
+          placeholder="新条目名"
+          class="h-7 w-full min-w-0 text-xs md:max-w-56"
+          onkeydown={(e) => e.key === "Enter" && void createEntry()}
+        />
+        <Button size="xs" variant="ghost" disabled={busy || !newEntryKey.trim()} onclick={() => void createEntry()} aria-label="新增条目">
+          <IconPlus class="h-3.5 w-3.5" aria-hidden="true" />
+        </Button>
+      </div>
+      <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3">
+        {#each current.entries as entry (entry.key)}
+          {@const id = `${current.name}/${entry.key}`}
+          <div class="rounded-md border p-2">
+            <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
+              <Input
+                class="h-7 w-full min-w-0 text-xs font-medium md:max-w-64"
+                value={entry.key}
+                aria-label="条目名"
+                onchange={(e) => {
+                  const next = e.currentTarget.value.trim();
+                  if (next && next !== entry.key) void saveEntry(entry.key, next);
+                  else e.currentTarget.value = entry.key;
+                }}
+              />
+              <span class="flex shrink-0 items-center gap-1">
+                <Button size="xs" disabled={busy || !draftDirty(id, entry.value)} onclick={() => void saveEntry(entry.key)}>保存</Button>
+                <Button size="xs" variant="ghost" class="text-destructive" disabled={busy} onclick={() => (deleteEntryTarget = entry.key)}>
+                  删除
+                </Button>
+              </span>
+            </div>
+            <textarea
+              rows="5"
+              class="w-full resize-y rounded-md border bg-background px-2 py-1.5 text-xs leading-relaxed"
+              value={draftValue(id, entry.value)}
+              oninput={(e) => {
+                drafts[id] = e.currentTarget.value;
+              }}
+              aria-label="条目内容"
+            ></textarea>
+          </div>
+        {/each}
+        {#if current.entries.length === 0}
+          <p class="py-6 text-center text-xs text-muted-foreground">本分组暂无条目</p>
+        {/if}
+      </div>
+    {/if}
+  </section>
+{/snippet}
+
 <div class="flex h-full min-h-0 flex-col gap-3 p-4">
-  <div class="mx-auto flex w-full max-w-4xl shrink-0 items-center justify-between">
-    <div>
+  <!-- 标题行（移动端折两行：标题/描述一行、搜索+历史一行；搜索框全宽参与折行） -->
+  <div class="mx-auto flex w-full max-w-4xl shrink-0 flex-wrap items-center justify-between gap-2">
+    <div class="min-w-0">
       <h2 class="text-sm font-medium">知识库</h2>
       <p class="text-[11px] text-muted-foreground">
         书法领域知识与总结模式（分组 → 条目）。每次变更记入 git 历史，agent 写总结前经 MCP 读取。
       </p>
     </div>
-    <div class="flex items-center gap-2">
-      <label class="relative">
+    <div class="flex w-full items-center gap-2 sm:w-auto">
+      <label class="relative min-w-0 flex-1 sm:w-52 sm:flex-none">
         <IconSearch class="pointer-events-none absolute top-1/2 left-2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
         <Input
           bind:value={query}
           placeholder="搜索分组/条目/内容"
-          class="h-8 w-52 pl-7 text-xs"
+          class="h-8 w-full pl-7 text-xs sm:w-52"
           aria-label="搜索知识库"
         />
       </label>
-      <Button size="sm" variant="outline" onclick={() => void openHistory()}>
+      <Button size="sm" variant="outline" class="shrink-0" onclick={() => void openHistory()}>
         <IconHistory data-icon="inline-start" />
         修订历史
       </Button>
@@ -251,160 +434,41 @@
     </div>
   {/if}
 
-  <div class="mx-auto flex min-h-0 w-full max-w-4xl flex-1 gap-3">
-    <!-- 左：分组 -->
-    <aside class="flex w-52 shrink-0 flex-col gap-2 rounded-lg border bg-card p-2">
-      <div class="flex items-center gap-1">
-        <Input
-          bind:value={newGroupName}
-          placeholder="新分组名"
-          class="h-7 text-xs"
-          onkeydown={(e) => e.key === "Enter" && void createGroup()}
-        />
-        <Button size="xs" variant="ghost" disabled={busy || !newGroupName.trim()} onclick={() => void createGroup()} aria-label="创建分组">
-          <IconPlus class="h-3.5 w-3.5" aria-hidden="true" />
-        </Button>
-      </div>
-      <div class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
-        {#each groups as group (group.name)}
-          <button
-            type="button"
-            aria-current={selected === group.name ? "true" : undefined}
-            class="group flex flex-col rounded-md px-2.5 py-2 text-left transition-colors {selected === group.name
-              ? 'bg-accent-soft text-accent-foreground'
-              : 'hover:bg-muted/60'}"
-            onclick={() => (selected = group.name)}
-          >
-            <span class="flex w-full items-center justify-between gap-1">
-              <span class="truncate text-xs font-medium">{group.name}</span>
-              <span class="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-                <span
-                  role="button"
-                  tabindex="0"
-                  class="rounded p-0.5 hover:bg-muted"
-                  aria-label="重命名分组"
-                  onclick={(e) => {
-                    e.stopPropagation();
-                    renameTarget = group;
-                    renameValue = group.name;
-                  }}
-                  onkeydown={(e) => e.key === "Enter" && ((e.stopPropagation(), (renameTarget = group), (renameValue = group.name)))}
-                >
-                  <IconPencil class="h-3 w-3" aria-hidden="true" />
-                </span>
-                <span
-                  role="button"
-                  tabindex="0"
-                  class="rounded p-0.5 text-destructive hover:bg-muted"
-                  aria-label="删除分组"
-                  onclick={(e) => {
-                    e.stopPropagation();
-                    deleteGroupTarget = group;
-                  }}
-                  onkeydown={(e) => e.key === "Enter" && ((e.stopPropagation(), (deleteGroupTarget = group)))}
-                >
-                  <IconTrash2 class="h-3 w-3" aria-hidden="true" />
-                </span>
-              </span>
-            </span>
-            <span class="text-[10px] text-muted-foreground">{group.entries.length} 条</span>
-          </button>
-        {/each}
-      </div>
-    </aside>
+  {#if desktop}
+    <!-- 桌面：分组 | 条目 双栏 -->
+    <div class="mx-auto flex min-h-0 w-full max-w-4xl flex-1 gap-3">
+      <aside class="flex w-52 shrink-0 flex-col">
+        {@render groupsColumn()}
+      </aside>
+      {@render entriesPanel()}
+    </div>
+  {:else}
+    <!-- 移动：分组列表全宽；点行右抽屉展开条目区（搜索输入也自动开抽屉）。 -->
+    <div class="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col">
+      {@render groupsColumn()}
+    </div>
 
-    <!-- 右：条目编辑器 / 搜索命中（查询时整库跨组检索） -->
-    <section class="flex min-h-0 flex-1 flex-col rounded-lg border bg-card">
-      {#if query.trim().length > 0}
-        <div class="flex min-h-0 flex-1 flex-col">
-          <div class="shrink-0 border-b px-3 py-2 text-xs text-muted-foreground">
-            搜索「{query.trim()}」— 命中 {searchHits.length} 条{searchHits.length >= 50 ? "（仅示前 50）" : ""}
-          </div>
-          <div class="min-h-0 flex-1 overflow-y-auto p-3">
-            {#if searchHits.length === 0}
-              <p class="py-8 text-center text-xs text-muted-foreground">无命中——换个词试试</p>
-            {:else}
-              <div class="space-y-2">
-                {#each searchHits as hit (hit.id)}
-                  <button
-                    type="button"
-                    class="block w-full rounded-md border p-2 text-left transition-colors hover:bg-muted/50"
-                    onclick={() => {
-                      selected = hit.group;
-                      query = "";
-                    }}
-                    aria-label="跳转到该条目所在分组"
-                  >
-                    <span class="flex items-center gap-2">
-                      <Badge variant="secondary" class="shrink-0 text-[10px]">{hit.group}</Badge>
-                      <span class="min-w-0 flex-1 truncate text-xs font-medium">{hit.key}</span>
-                      <span class="shrink-0 text-[10px] text-muted-foreground">相关度 {(hit.score * 10).toFixed(0)}</span>
-                    </span>
-                    <span class="mt-1 line-clamp-2 block text-[11px] leading-snug text-muted-foreground">{hit.value}</span>
-                  </button>
-                {/each}
-              </div>
-            {/if}
-          </div>
+    <Sheet.Root bind:open={detailOpen}>
+      <Sheet.Content side="right" class="gap-0 p-0 sm:max-w-md" hideClose>
+        {#if current !== null}
+          <Sheet.Header class="flex-row items-center justify-between gap-2 border-b px-3 py-2">
+            <Sheet.Title class="min-w-0 flex-1 truncate text-sm font-medium">{query.trim().length > 0 ? "搜索结果" : current.name}</Sheet.Title>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label="关闭分组详情"
+              onclick={() => (detailOpen = false)}
+            >
+              <IconX class="size-4" aria-hidden="true" />
+            </Button>
+          </Sheet.Header>
+        {/if}
+        <div class="flex min-h-0 flex-1 flex-col p-3">
+          {@render entriesPanel()}
         </div>
-      {:else if current === null}
-        <div class="flex flex-1 items-center justify-center text-xs text-muted-foreground">尚无分组——左侧创建一个</div>
-      {:else}
-        <div class="shrink-0 border-b px-3 py-2">
-          <p class="text-xs font-medium">{current.name}</p>
-          <p class="mt-0.5 text-[11px] leading-snug text-muted-foreground">{current.note}</p>
-        </div>
-        <div class="flex shrink-0 items-center gap-1 border-b px-3 py-2">
-          <Input
-            bind:value={newEntryKey}
-            placeholder="新条目名"
-            class="h-7 max-w-56 text-xs"
-            onkeydown={(e) => e.key === "Enter" && void createEntry()}
-          />
-          <Button size="xs" variant="ghost" disabled={busy || !newEntryKey.trim()} onclick={() => void createEntry()} aria-label="新增条目">
-            <IconPlus class="h-3.5 w-3.5" aria-hidden="true" />
-          </Button>
-        </div>
-        <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3">
-          {#each current.entries as entry (entry.key)}
-            {@const id = `${current.name}/${entry.key}`}
-            <div class="rounded-md border p-2">
-              <div class="mb-1 flex items-center justify-between gap-2">
-                <Input
-                  class=" h-7 max-w-64 text-xs font-medium"
-                  value={entry.key}
-                  aria-label="条目名"
-                  onchange={(e) => {
-                    const next = e.currentTarget.value.trim();
-                    if (next && next !== entry.key) void saveEntry(entry.key, next);
-                    else e.currentTarget.value = entry.key;
-                  }}
-                />
-                <span class="flex items-center gap-1">
-                  <Button size="xs" disabled={busy || !draftDirty(id, entry.value)} onclick={() => void saveEntry(entry.key)}>保存</Button>
-                  <Button size="xs" variant="ghost" class="text-destructive" disabled={busy} onclick={() => (deleteEntryTarget = entry.key)}>
-                    删除
-                  </Button>
-                </span>
-              </div>
-              <textarea
-                rows="5"
-                class="w-full resize-y rounded-md border bg-background px-2 py-1.5 text-xs leading-relaxed"
-                value={draftValue(id, entry.value)}
-                oninput={(e) => {
-                  drafts[id] = e.currentTarget.value;
-                }}
-                aria-label="条目内容"
-              ></textarea>
-            </div>
-          {/each}
-          {#if current.entries.length === 0}
-            <p class="py-6 text-center text-xs text-muted-foreground">本分组暂无条目</p>
-          {/if}
-        </div>
-      {/if}
-    </section>
-  </div>
+      </Sheet.Content>
+    </Sheet.Root>
+  {/if}
 </div>
 
 <!-- 历史面板 -->
