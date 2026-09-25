@@ -18,6 +18,7 @@
   import { Button } from "$lib/components/ui/button";
   import * as Sheet from "$lib/components/ui/sheet";
   import { Pane, PaneGroup, Handle } from "$lib/components/ui/resizable";
+  import GithubMark from "$lib/components/brand/GithubMark.svelte";
   import ComposerCard from "$lib/components/agent/ComposerCard.svelte";
   import TaskComposer from "$lib/components/agent/TaskComposer.svelte";
   import TaskDetailPanel from "$lib/components/agent/TaskDetailPanel.svelte";
@@ -41,7 +42,7 @@
     tasks,
   } from "$lib/stores/tasks.svelte";
   import QueuePanel from "$lib/components/agent/QueuePanel.svelte";
-  import { navigate } from "$lib/router.svelte";
+  import { navigate, router, stashReturnTo } from "$lib/router.svelte";
   import { onMount } from "svelte";
   import { api } from "$lib/api";
   import type { AvailableModel } from "$lib/types";
@@ -138,6 +139,34 @@
     if (tasks.selectedId !== null && selected !== undefined) void refreshQueue();
   });
 
+  // URL ↔ 会话同步（2026-09-25 路由锚定）：选中由路由派生——刷新/回退/深链
+  // #/t/{id} 恢复该会话；#/new = 新建态；#/ = 默认最新会话。UI 侧选择已同步
+  // 写过 hash，这里只处理 mismatch（回退键、直达 URL、URL 指向已删任务）。
+  $effect(() => {
+    const route = router.route;
+    if (route.name !== "home" || tasks.loading) return;
+    if (route.composer) {
+      if (tasks.selectedId !== null) {
+        tasks.selectedId = null;
+        tasks.frames = [];
+        tasks.results = [];
+      }
+      return;
+    }
+    const wanted = route.taskId ?? tasks.list[0]?.id ?? null;
+    if (wanted === null || wanted === tasks.selectedId) return;
+    if (!tasks.list.some((t) => t.id === wanted)) {
+      if (route.taskId !== null) navigate("#/");
+      return;
+    }
+    void selectTask(wanted);
+  });
+
+  // 标签页标题跟随当前会话（URL 之外的第二处「我在哪个会话」提示）。
+  $effect(() => {
+    document.title = selected === null ? "朱墨" : `${selected.title} · 朱墨`;
+  });
+
   function timeLabel(iso: string): string {
     const date = new Date(iso);
     return `${date.getMonth() + 1}-${date.getDate()} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
@@ -148,11 +177,18 @@
     tasks.selectedId = null;
     tasks.frames = [];
     tasks.results = [];
+    navigate("#/new");
+  }
+
+  /** 选中会话并锚定 URL（#/t/{id}）：刷新/回退/分享都回到同一会话。 */
+  function openTask(taskId: string): void {
+    void selectTask(taskId);
+    navigate(`#/t/${taskId}`);
   }
 
   /** 移动抽屉内选任务：选中即收抽屉。 */
   function pickTask(taskId: string): void {
-    void selectTask(taskId);
+    openTask(taskId);
     listOpen = false;
   }
 </script>
@@ -168,7 +204,7 @@
           task.id
             ? 'bg-accent-soft'
             : 'hover:bg-muted/60'}"
-          onclick={() => (desktop ? void selectTask(task.id) : pickTask(task.id))}
+          onclick={() => (desktop ? openTask(task.id) : pickTask(task.id))}
         >
           <span class="flex items-center gap-2">
             <span class="min-w-0 flex-1 truncate text-xs font-medium">{task.title}</span>
@@ -307,11 +343,7 @@
       title="GitHub 仓库"
       aria-label="GitHub 仓库"
     >
-<svg viewBox="0 0 16 16" fill="currentColor" class="size-4" aria-hidden="true">
-        <path
-          d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.2.037-.282-.096-.282-.214v-1.548c0-.716-.272-1.184-.586-1.421 1.921-.214 3.937-.945 3.937-4.213 0-.93-.332-1.691-.876-2.287.088-.214.38-1.082-.084-2.255 0 0-.716-.23-2.348.871a8.18 8.18 0 0 0-4.322 0C5.358 1.331 4.642 1.561 4.642 1.561c-.464 1.173-.172 2.041-.084 2.255C4.012 4.412 3.68 5.173 3.68 6.103c0 3.258 2.007 4.003 3.921 4.221-.246.214-.469.591-.546 1.143-.49.219-1.733.591-2.476-.704-.164-.265-.657-.914-1.349-.914-.737 0-.301.414-.013.573.379.209.789.985.789 1.386 0 .361.247 1.176 1.43 1.176 1.035 0 1.759-.017 2.146-.036v1.448c0 .118-.081.251-.279.214A8.013 8.013 0 0 1 0 8c0-4.42 3.58-8 8-8Z"
-        />
-      </svg>
+      <GithubMark />
     </a>
     {#if auth.session}
       <span class="text-[11px] text-muted-foreground">
@@ -335,7 +367,14 @@
         <p class="text-xs leading-snug text-muted-foreground">
           本站未开启匿名访问，登录后即可查看与创建书法分析任务。
         </p>
-        <Button size="sm" class="mt-1" onclick={() => navigate("#/login")}>
+        <Button
+          size="sm"
+          class="mt-1"
+          onclick={() => {
+            stashReturnTo();
+            navigate("#/login");
+          }}
+        >
           <IconLogIn data-icon="inline-start" />
           去登录
         </Button>

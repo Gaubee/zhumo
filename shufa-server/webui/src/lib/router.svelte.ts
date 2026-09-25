@@ -9,7 +9,7 @@
 export type Route =
   | { name: "setup" }
   | { name: "login" }
-  | { name: "home" }
+  | { name: "home"; taskId: string | null; composer: boolean }
   | { name: "admin"; tab: "accounts" | "resources" | "settings" | "kb" }
   | { name: "result"; publicId: string };
 
@@ -31,7 +31,14 @@ export function parseHash(hash: string): Route {
     }
     return { name: "admin", tab: "accounts" };
   }
-  return { name: "home" };
+  // 会话锚定（2026-09-25 路由优化）：#/t/{id} 打开指定会话（刷新/回退/分享
+  // 可恢复），#/new = 新建态；#/ 保持原语义 = 默认进最新会话。
+  if (segments[0] === "t") {
+    const taskId = segments[1] ?? "";
+    if (taskId.length > 0) return { name: "home", taskId, composer: false };
+  }
+  if (segments[0] === "new") return { name: "home", taskId: null, composer: true };
+  return { name: "home", taskId: null, composer: false };
 }
 
 /** 结果页深链（§3 /r/{public_id} 独立分享）：daemon SPA 回退使任意 path 都落到
@@ -84,7 +91,32 @@ export function routeHash(route: Route): string {
       return `#/admin/${route.tab}`;
     case "result":
       return `#/r/${route.publicId}`;
+    case "home":
+      if (route.composer) return "#/new";
+      return route.taskId !== null ? `#/t/${route.taskId}` : "#/";
     default:
       return "#/";
   }
+}
+
+/** 登录回跳（2026-09-25 会话锚定配套）：守卫卡进登录前记下来处 hash。 */
+export function stashReturnTo(): void {
+  if (location.hash === "" || location.hash === "#/login") return;
+  try {
+    sessionStorage.setItem("zhumo:return-to", location.hash);
+  } catch {
+    // 隐私模式等存储不可用：静默降级为登录后回 #/。
+  }
+}
+
+/** 登录成功后取回来处（一次性消费；无记录/无效值回默认首页）。 */
+export function consumeReturnTo(): string {
+  let to: string | null = null;
+  try {
+    to = sessionStorage.getItem("zhumo:return-to");
+    sessionStorage.removeItem("zhumo:return-to");
+  } catch {
+    to = null;
+  }
+  return to !== null && to !== "" && to !== "#/login" ? to : "#/";
 }

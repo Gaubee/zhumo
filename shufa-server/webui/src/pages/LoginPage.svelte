@@ -8,7 +8,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { login } from "$lib/stores/auth.svelte";
-  import { navigate } from "$lib/router.svelte";
+  import { consumeReturnTo, navigate } from "$lib/router.svelte";
 
   let username = $state("");
   let password = $state("");
@@ -20,7 +20,8 @@
     error = null;
     const ok = await login(username.trim(), password);
     busy = false;
-    if (ok) navigate("#/");
+    // 回跳来处（守卫卡 stash 的 #/t/{id} 等；无记录回默认首页）。
+    if (ok) navigate(consumeReturnTo());
   }
 </script>
 

@@ -8,6 +8,7 @@
  *       语法：user/assistant/tool/status/turn-end）。
  */
 import { api } from "$lib/api";
+import { navigate } from "$lib/router.svelte";
 import type { Frame, Task, TaskResultRefView } from "$lib/types";
 import type { TaskQueueItem, TaskQueueMode } from "@zhumo/contracts";
 
@@ -35,9 +36,9 @@ export async function loadTasks(): Promise<void> {
   tasks.loading = true;
   try {
     tasks.list = await api.listTasks();
-    if (tasks.selectedId === null && tasks.list[0] !== undefined) {
-      await selectTask(tasks.list[0].id);
-    }
+    // 默认会话的选中不再这里做（2026-09-25 路由锚定）：列表落地后由
+    // ListDetailPage 的路由 effect 依 #/t/{id}、#/new、#/ 统一派生，
+    // 避免这里抢先选第一个又被路由纠正的双跳。
   } catch (error) {
     tasks.error = error instanceof Error ? error.message : String(error);
   } finally {
@@ -302,7 +303,8 @@ export async function createTask(
   try {
     const task = await api.createTask(prompt, video, model);
     tasks.list = [task, ...tasks.list];
-    await selectTask(task.id);
+    // 选中经路由派生（#/t/{id}）而非直调 selectTask——新建会话同样可刷新恢复。
+    navigate(`#/t/${task.id}`);
   } catch (error) {
     tasks.error = error instanceof Error ? error.message : String(error);
   }
