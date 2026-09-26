@@ -23,7 +23,7 @@ import type {
   TaskFollowupOutput,
   TaskGetOutput,
   TaskItem,
-  TaskQueueEditCancelOutput,
+  TaskQueueLockOutput,
   TaskQueueEditConfirmOutput,
   TaskQueueEditOutput,
   TaskQueueListOutput,
@@ -527,39 +527,57 @@ export class TaskService {
   // ------------------------------------------------ 队列面板（W10b，内核 inbox）
 
   /** 队列视图：live 不在册（daemon 重启后未 resume）返回空——重开对话
-   * （followup/面板操作触发 resume）时 inbox 由内核持久 splices 恢复。 */
+   * （followup/面板操作触发 resume）时 inbox 由内核持久 splices 恢复。
+   * held=锁定段条目（暂离内核 inbox，不会被消费）。 */
   queueView(user: UserRow, id: string): TaskQueueListOutput {
     const task = this.requireOwnedTask(user, id);
     if (!task.agent_session_id || !this.deps.sessions.isLive(task.agent_session_id)) {
-      return { items: [], editing: null };
+      return { items: [], lockBoundary: null };
     }
     const view = this.deps.sessions.queueView(task.agent_session_id);
     return {
-      items: view.items.map((i) => ({ message_id: i.messageId, mode: i.mode, text: i.text })),
-      editing: view.editing,
+      items: view.items.map((i) => ({
+        message_id: i.messageId,
+        mode: i.mode,
+        text: i.text,
+        held: i.held,
+      })),
+      lockBoundary: view.lockBoundary,
     };
   }
 
-  /** 进入编辑：冻结该条及其后的排队消息（暂离内核 inbox，不再自动开轮）。 */
+  /** 进入编辑（Owner 设计四轮）：目标未锁定时先锁定到该条（该条及其后暂离
+   * 内核 inbox 不再被消费），返回文本回填输入框。取消编辑=纯前端（锁定保持）。 */
   queueEdit(user: UserRow, id: string, messageId: string): TaskQueueEditOutput {
     const task = this.requireOwnedTask(user, id);
     this.requireLiveSession(task);
-    return { text: this.deps.sessions.queueFreeze(task.agent_session_id!, messageId) };
+    const sessionId = task.agent_session_id!;
+    // 未在锁定段：先锁定（编辑的冻结语义与锁定统一）。
+    if (!this.deps.sessions.queueView(sessionId).items.some((i) => i.messageId === messageId && i.held)) {
+      this.deps.sessions.queueLock(sessionId, messageId);
+    }
+    return { text: this.deps.sessions.queueHeldText(sessionId, messageId) };
   }
 
-  /** 确认编辑：首条按新文本重建，冻结段按原序放回（idle 时逐条唤醒开轮）。 */
-  queueEditConfirm(user: UserRow, id: string, text: string): TaskQueueEditConfirmOutput {
+  /** 确认编辑：锁定段内目标条按新文本重建（保持锁定，解锁时才放回生效）。 */
+  queueEditConfirm(
+    user: UserRow,
+    id: string,
+    messageId: string,
+    text: string,
+  ): TaskQueueEditConfirmOutput {
     const task = this.requireOwnedTask(user, id);
     this.requireLiveSession(task);
-    this.deps.sessions.queueUnfreeze(task.agent_session_id!, text);
+    this.deps.sessions.queueEditApply(task.agent_session_id!, messageId, text);
     return { accepted: true };
   }
 
-  /** 取消编辑：冻结段原样放回。 */
-  queueEditCancel(user: UserRow, id: string): TaskQueueEditCancelOutput {
+  /** 锁定/解锁（Owner 设计四轮）：锁定=边界条及其后暂离内核 inbox（不被
+   * 消费，可安全编辑/删除）；解锁=按原序放回继续跑。 */
+  queueLock(user: UserRow, id: string, messageId: string | null): TaskQueueLockOutput {
     const task = this.requireOwnedTask(user, id);
     this.requireLiveSession(task);
-    this.deps.sessions.queueUnfreeze(task.agent_session_id!, null);
+    this.deps.sessions.queueLock(task.agent_session_id!, messageId);
     return { accepted: true };
   }
 

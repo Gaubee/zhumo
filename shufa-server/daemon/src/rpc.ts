@@ -36,7 +36,7 @@ import {
   TaskQueueListInputSchema,
   TaskQueueEditInputSchema,
   TaskQueueEditConfirmInputSchema,
-  TaskQueueEditCancelInputSchema,
+  TaskQueueLockInputSchema,
   TaskQueueRemoveInputSchema,
   TaskQueueSetModeInputSchema,
   TaskQueueReorderInputSchema,
@@ -695,17 +695,26 @@ const tasksQueueEditConfirm = requireActiveUser
   .input(TaskQueueEditConfirmInputSchema)
   .handler(async ({ context, input }) => {
     try {
-      return await requireTaskService(context).queueEditConfirm(context.user as UserRow, input.id, input.text);
+      return await requireTaskService(context).queueEditConfirm(
+        context.user as UserRow,
+        input.id,
+        input.message_id,
+        input.text,
+      );
     } catch (error) {
       return taskOwnedException(error);
     }
   });
 
-const tasksQueueEditCancel = requireActiveUser
-  .input(TaskQueueEditCancelInputSchema)
+const tasksQueueLock = requireActiveUser
+  .input(TaskQueueLockInputSchema)
   .handler(async ({ context, input }) => {
     try {
-      return await requireTaskService(context).queueEditCancel(context.user as UserRow, input.id);
+      return await requireTaskService(context).queueLock(
+        context.user as UserRow,
+        input.id,
+        input.message_id,
+      );
     } catch (error) {
       return taskOwnedException(error);
     }
@@ -972,7 +981,7 @@ export const router = {
     queueList: tasksQueueList,
     queueEdit: tasksQueueEdit,
     queueEditConfirm: tasksQueueEditConfirm,
-    queueEditCancel: tasksQueueEditCancel,
+    queueLock: tasksQueueLock,
     queueRemove: tasksQueueRemove,
     queueSetMode: tasksQueueSetMode,
     queueReorder: tasksQueueReorder,

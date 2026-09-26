@@ -24,13 +24,13 @@ export const tasks = $state({
   error: null as string | null,
 });
 
-/** 队列抽屉（W10c，Owner 设计）：items 按生效序；editing=冻结中的条目 id；
- * locked=主动锁定（status 位点击切换，锁定行禁操作不可拖，重排保持原位）；
- * reordering=拖动进行中（全面板锁定：暂停帧驱动刷新防排序抖动）。 */
+/** 队列抽屉（W10c；W10h 锁定语义重做）：items 按生效序（held=锁定段条目，
+ * 暂离内核 inbox 不会被消费）；lockBoundary=锁定边界（daemon 单一事实源）；
+ * editingId=前端编辑目标（本地态）；reordering=拖动进行中（暂停刷新）。 */
 export const queue = $state({
   items: [] as TaskQueueItem[],
-  editing: null as string | null,
-  locked: {} as Record<string, boolean>,
+  lockBoundary: null as string | null,
+  editingId: null as string | null,
   reordering: false,
 });
 
@@ -58,8 +58,8 @@ export async function selectTask(taskId: string): Promise<void> {
   // 用户实测「导出结果不跟着任务走」——慢网下旧任务响应晚到覆盖新任务）。
   tasks.results = [];
   queue.items = [];
-  queue.editing = null;
-  queue.locked = {};
+  queue.lockBoundary = null;
+  queue.editingId = null;
   queue.reordering = false;
   const frames = await api.getTaskFrames(taskId);
   if (tasks.selectedId !== taskId) return; // 已切走：过期响应丢弃
@@ -90,7 +90,7 @@ export async function selectTask(taskId: string): Promise<void> {
     // 已变，重拉视图（不在编辑冻结中拉——冻结段不在内核 inbox，重拉会把
     // 悬置段从面板上抹掉）。
     if (frame.kind === "user-text" || frame.kind === "turn-end") {
-      if (queue.editing === null && !queue.reordering) void refreshQueue();
+      if (queue.editingId === null && !queue.reordering) void refreshQueue();
     }
   });
   if (tasks.selectedId !== taskId) {
@@ -221,25 +221,25 @@ export async function stopPrompt(): Promise<void> {
 export async function refreshQueue(): Promise<void> {
   const taskId = tasks.selectedId;
   if (taskId === null) return;
-  // 编辑冻结段不在内核 inbox / 拖动中的本地序不可被远端覆盖：两者期间不拉。
-  if (queue.editing !== null || queue.reordering) return;
+  // 拖动中的本地序不可被远端覆盖（锁定段在 daemon，重拉无碍）。
+  if (queue.reordering) return;
   try {
     const out = await api.taskQueue(taskId);
     queue.items = out.items;
-    queue.editing = out.editing;
+    queue.lockBoundary = out.lockBoundary;
   } catch {
     // 队列拉取失败不打断对话流；下次帧到达或操作后重试。
   }
 }
 
-/** 进入编辑（冻结该条及其后）：返回回填文本；失败（已有编辑中/条目已消费）
- * 返回 null 并置错误。 */
+/** 进入编辑（Owner 设计四轮）：daemon 侧目标未锁定会先锁定到该条（该条及
+ * 其后暂离内核 inbox 不再被消费）；返回回填文本。取消编辑=纯前端。 */
 export async function editQueueItem(messageId: string): Promise<string | null> {
   const taskId = tasks.selectedId;
   if (taskId === null) return null;
   try {
     const text = await api.taskQueueEdit(taskId, messageId);
-    queue.editing = messageId;
+    queue.editingId = messageId;
     await refreshQueue();
     return text;
   } catch (error) {
@@ -248,27 +248,34 @@ export async function editQueueItem(messageId: string): Promise<string | null> {
   }
 }
 
-/** 确认编辑（发送=确认按钮触发）：冻结段按原序放回，首条用新文本。 */
+/** 确认编辑：锁定段内目标条换新文本（保持锁定）。 */
 export async function confirmQueueEdit(text: string): Promise<void> {
   const taskId = tasks.selectedId;
-  if (taskId === null) return;
+  const messageId = queue.editingId;
+  if (taskId === null || messageId === null) return;
   try {
-    await api.taskQueueEditConfirm(taskId, text);
-    queue.editing = null;
+    await api.taskQueueEditConfirm(taskId, messageId, text);
+    queue.editingId = null;
     await refreshQueue();
+    toast("已修改（锁定段内生效，解锁后按序发送）");
   } catch (error) {
     tasks.error = error instanceof Error ? error.message : String(error);
   }
 }
 
-/** 取消编辑：冻结段原样放回。 */
-export async function cancelQueueEdit(): Promise<void> {
+/** 取消编辑（纯前端：清输入框由组件做；锁定保持——持续管理态）。 */
+export function cancelQueueEdit(): void {
+  queue.editingId = null;
+}
+
+/** 锁定/解锁（daemon 单一事实源）：null=解锁放回（按原序继续跑）。 */
+export async function lockQueue(messageId: string | null): Promise<void> {
   const taskId = tasks.selectedId;
   if (taskId === null) return;
   try {
-    await api.taskQueueEditCancel(taskId);
-    queue.editing = null;
+    await api.taskQueueLock(taskId, messageId);
     await refreshQueue();
+    toast(messageId === null ? "已解锁：锁定段按原序放回，继续发送" : "已锁定：该条及之后的消息暂停发送，可安全编辑");
   } catch (error) {
     tasks.error = error instanceof Error ? error.message : String(error);
   }
@@ -298,17 +305,6 @@ export async function setQueueItemMode(messageId: string, mode: TaskQueueMode): 
     else toast("已改回排队：本轮结束后按序逐条开轮");
   } catch (error) {
     tasks.error = error instanceof Error ? error.message : String(error);
-  }
-}
-
-/** 主动锁定一条（status 位点击）：锁定行及其后全部连带锁定（被动锁由
- * QueueDrawer 按生效序派生）。互斥模型（Owner 设计）：全队列只有一把主动
- * 锁——上锁即替换边界；解锁只解除该把。会话级 UI 态（内存），切任务复位。 */
-export function setQueueItemLocked(messageId: string, locked: boolean): void {
-  if (locked) queue.locked = { [messageId]: true };
-  else {
-    delete queue.locked[messageId];
-    queue.locked = { ...queue.locked };
   }
 }
 

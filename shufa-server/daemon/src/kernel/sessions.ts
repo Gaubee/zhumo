@@ -339,12 +339,12 @@ interface LiveTaskSession {
    * messageId 记模式（缺省 queue；条目被内核消费后自动失时效，map 只增不减
    * 无碍——id 全局唯一）。 */
   queueModes: Map<string, 'steer' | 'inject'>;
-  /** 编辑冻结段（Owner 设计 2026-09-27）：编辑某条排队消息时，该条及其后
-   * 全部暂离内核 inbox（当前轮结束后不再自动开轮），暂存于此；确认/取消
-   * 后按原序放回（放回走 followup 逐条投递——冻结段必为 next-turn 队尾
-   * 连续段，append 语义无损，idle 时首条即唤醒）。 */
-  frozenQueue: unknown[];
-  frozenEditingId: string | null;
+  /** 锁定段（Owner 设计 2026-09-27 四轮重定义）：边界条及其后的全部排队
+   * 消息暂离内核 inbox（不会被消费/发送）——稳定管理态（编辑/删除随时做），
+   * 暂存于此；解锁时按原序 followup 逐条放回（锁定段必为排队序队尾连续段，
+   * append 语义无损，idle 时首条即唤醒）。 */
+  lockedQueue: unknown[];
+  lockBoundaryId: string | null;
 }
 
 export function createTaskSessions(deps: TaskSessionDeps) {
@@ -829,8 +829,8 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       pending: new Map(),
       subscribers: new Set(),
       queueModes: new Map(),
-      frozenQueue: [],
-      frozenEditingId: null,
+      lockedQueue: [],
+      lockBoundaryId: null,
     };
     registerPanelAnswerer(entry);
     live.set(handle.agent.session.id, entry);
@@ -1069,11 +1069,14 @@ export function createTaskSessions(deps: TaskSessionDeps) {
 
   // ------------------------------------------------ 队列面板（W10b，内核 inbox）
 
-  /** 队列视图：next-turn（排队，逐条生效序）在前 + next-step（steer/inject
-   * 挂起项）在后；冻结段暂离 inbox 不在视图（editing 字段告知悬置）。 */
+  /** 队列视图：排队序（inbox 未锁段 + held 锁定段——锁定段仍按排队序展示
+   * 但内核不消费）+ next-step（steer/inject 挂起项）在后。 */
   queueView(
     sessionId: string,
-  ): { items: Array<{ messageId: string; mode: 'queue' | 'steer' | 'inject'; text: string }>; editing: string | null } {
+  ): {
+    items: Array<{ messageId: string; mode: 'queue' | 'steer' | 'inject'; text: string; held: boolean }>;
+    lockBoundary: string | null;
+  } {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
     const items = [
@@ -1081,6 +1084,13 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         messageId: inboxMessageId(m),
         mode: 'queue' as const,
         text: inboxMessageText(m),
+        held: false,
+      })),
+      ...entry.lockedQueue.map((m) => ({
+        messageId: inboxMessageId(m),
+        mode: 'queue' as const,
+        text: inboxMessageText(m),
+        held: true,
       })),
       ...entry.agent.inbox.nextStep.map((m) => {
         const id = inboxMessageId(m);
@@ -1088,49 +1098,84 @@ export function createTaskSessions(deps: TaskSessionDeps) {
           messageId: id,
           mode: entry.queueModes.get(id) ?? 'steer',
           text: inboxMessageText(m),
+          held: false,
         };
       }),
     ];
-    return { items, editing: entry.frozenEditingId };
+    return { items, lockBoundary: entry.lockBoundaryId };
   },
 
-  /** 冻结（进入编辑，Owner 设计）：该条及其后的排队消息暂离 inbox——当前轮
-   * 结束后不再自动开轮。返回编辑文本。仅 queue 模式条目（steer/inject 是
-   * step 边界挂起项，无逐条生效序，不参与冻结）。 */
-  queueFreeze(sessionId: string, messageId: string): string {
+  /**
+   * 锁定/解锁（Owner 设计 2026-09-27 四轮）：边界条及其后的排队消息暂离内核
+   * inbox（不会被消费——锁定段可安全编辑/删除）。messageId=null 解锁：锁定
+   * 段按原序 followup 逐条放回（idle 时首条即唤醒）；否则把边界设到该条——
+   * 全局排队序 = inbox 未锁段 + 锁定段，按目标位置全量重切（支持边界上移
+   * 纳入更多条 / 下移释放尾部）。挂起项（steer/inject）不可作边界。
+   */
+  queueLock(sessionId: string, messageId: string | null): void {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
-    if (entry.frozenEditingId !== null) throw new Error('已有编辑中的队列条目（先确认或取消）');
-    const turn = entry.agent.inbox.nextTurn;
-    const idx = turn.findIndex((m) => inboxMessageId(m) === messageId);
+    if (messageId === null) {
+      const locked = entry.lockedQueue;
+      entry.lockedQueue = [];
+      entry.lockBoundaryId = null;
+      for (const message of locked) {
+        entry.agent.followup(
+          createUserMessage({
+            source: { kind: 'user' },
+            content: [{ type: 'text', text: inboxMessageText(message) }],
+          }) as never,
+        );
+      }
+      return;
+    }
+    const inboxTurn = entry.agent.inbox.nextTurn;
+    const all = [...inboxTurn, ...entry.lockedQueue];
+    const idx = all.findIndex((m) => inboxMessageId(m) === messageId);
     if (idx < 0) throw new Error(`队列中没有该排队条目：${messageId}`);
-    entry.frozenQueue = entry.agent.inbox.splice('next-turn', idx, turn.length - idx, []);
-    entry.frozenEditingId = messageId;
-    return inboxMessageText(entry.frozenQueue[0]);
+    // 重切：目标之前回 inbox（原序），目标及其后进锁定段。
+    entry.agent.inbox.splice('next-turn', 0, inboxTurn.length, all.slice(0, idx));
+    entry.lockedQueue = all.slice(idx);
+    entry.lockBoundaryId = messageId;
   },
 
-  /** 放回冻结段（确认/取消共用）：按原序逐条 followup 投递——冻结段必为原
-   * next-turn 队尾连续段，append 语义无损还原位置；idle 时首条唤醒开轮、
-   * 其余排队。确认时首条文本换新（firstText=null 为取消，原样放回）。 */
-  queueUnfreeze(sessionId: string, firstText: string | null): void {
+  /** 编辑入口：锁定段内目标文本（调用方 service 负责先锁定未锁条目）。 */
+  queueHeldText(sessionId: string, messageId: string): string {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
-    const frozen = entry.frozenQueue;
-    entry.frozenQueue = [];
-    entry.frozenEditingId = null;
-    frozen.forEach((message, i) => {
-      const text = i === 0 && firstText !== null ? firstText : inboxMessageText(message);
-      entry.agent.followup(
-        createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] }) as never,
-      );
+    const message = entry.lockedQueue.find((m) => inboxMessageId(m) === messageId);
+    if (message === undefined) throw new Error(`该条目不在锁定段：${messageId}`);
+    return inboxMessageText(message);
+  },
+
+  /** 确认编辑：锁定段内目标条按新文本重建（保持锁定；解锁时放回生效）。 */
+  queueEditApply(sessionId: string, messageId: string, text: string): void {
+    const entry = live.get(sessionId);
+    if (!entry) throw new Error(`agent session not found: ${sessionId}`);
+    const idx = entry.lockedQueue.findIndex((m) => inboxMessageId(m) === messageId);
+    if (idx < 0) throw new Error(`该条目不在锁定段：${messageId}`);
+    entry.lockedQueue[idx] = createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text }],
     });
   },
 
-  /** 删除一条（排队/挂起皆可；不在队列幂等成功）。 */
+  /** 删除一条（inbox 两桶或锁定段皆可；不在队列幂等成功）。锁定段删空自动
+   * 解锁；边界条被删则边界移到剩余锁定段首条。 */
   queueRemove(sessionId: string, messageId: string): void {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
     entry.queueModes.delete(messageId);
+    const heldIdx = entry.lockedQueue.findIndex((m) => inboxMessageId(m) === messageId);
+    if (heldIdx >= 0) {
+      entry.lockedQueue.splice(heldIdx, 1);
+      if (entry.lockedQueue.length === 0) {
+        entry.lockBoundaryId = null;
+      } else if (entry.lockBoundaryId === messageId) {
+        entry.lockBoundaryId = inboxMessageId(entry.lockedQueue[0]);
+      }
+      return;
+    }
     entry.agent.inbox.remove(messageId);
   },
 
@@ -1142,7 +1187,12 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     const message = [...entry.agent.inbox.nextTurn, ...entry.agent.inbox.nextStep].find(
       (m) => inboxMessageId(m) === messageId,
     );
-    if (message === undefined) throw new Error(`队列中没有该条目：${messageId}`);
+    if (message === undefined) {
+      if (entry.lockedQueue.some((m) => inboxMessageId(m) === messageId)) {
+        throw new Error('锁定段内不支持改模式（先解锁再改）');
+      }
+      throw new Error(`队列中没有该条目：${messageId}`);
+    }
     entry.queueModes.delete(messageId);
     entry.agent.inbox.remove(messageId);
     const rebuilt = createUserMessage({
@@ -1167,7 +1217,12 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
     const turn = entry.agent.inbox.nextTurn;
     const idx = turn.findIndex((m) => inboxMessageId(m) === messageId);
-    if (idx < 0) throw new Error(`队列中没有该排队条目：${messageId}`);
+    if (idx < 0) {
+      if (entry.lockedQueue.some((m) => inboxMessageId(m) === messageId)) {
+        throw new Error('锁定段内不支持立刻发送（先解锁）');
+      }
+      throw new Error(`队列中没有该排队条目：${messageId}`);
+    }
     if (idx > 0) {
       const [message] = entry.agent.inbox.splice('next-turn', idx, 1, []);
       entry.agent.inbox.splice('next-turn', 0, 0, [message!]);

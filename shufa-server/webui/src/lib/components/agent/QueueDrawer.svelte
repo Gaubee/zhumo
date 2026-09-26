@@ -22,29 +22,31 @@
 
   let {
     items,
-    editing = null,
-    locked = {},
+    lockBoundary = null,
+    editingId = null,
     reordering = false,
     onedit,
     oncancel,
     onremove,
     onsetmode,
-    onsetlocked,
+    onlock,
     onreorder,
     onreordering,
     onsendnow,
   }: {
     items: TaskQueueItem[];
-    editing?: string | null;
-    /** 主动锁定表（messageId → true；会话级 UI 态，store 持有）。 */
-    locked?: Record<string, boolean>;
+    /** 锁定边界条目 id（daemon 单一事实源；null=未锁定）。 */
+    lockBoundary?: string | null;
+    /** 编辑目标（前端本地态；null=非编辑）。 */
+    editingId?: string | null;
     /** 拖动进行中（store 置位：帧驱动刷新暂停）。 */
     reordering?: boolean;
     onedit: (messageId: string) => void;
     oncancel: () => void;
     onremove: (messageId: string) => void;
     onsetmode: (messageId: string, mode: TaskQueueMode) => void;
-    onsetlocked: (messageId: string, locked: boolean) => void;
+    /** 锁定/解锁（null=解锁放回；daemon 持久化）。 */
+    onlock: (messageId: string | null) => void;
     onreorder: (orderedIds: string[]) => void;
     /** 拖动期面板锁（Svelte 5 props 不可反写——经回调置 store）。 */
     onreordering: (v: boolean) => void;
@@ -66,16 +68,17 @@
   let dragId = $state<string | null>(null);
 
   /**
-   * 三态锁（Owner 设计）：生效序中第一把主动锁之后的全部条目被动锁定
-   * （互斥连带——锁定即「从这里到队尾视为整体」）。返回每条的锁态。
+   * 三态锁（Owner 设计四轮重做）：held 条目=锁定段（daemon 持久化，内核不消
+   * 费——可安全编辑/删除）；lockBoundary=边界条（段内其余为被动锁定）。
    */
+  const isHeld = (id: string): boolean => items.find((i) => i.message_id === id)?.held === true;
   const lockStateOf = $derived.by(() => {
     const states = new Map<string, "unlocked" | "locked" | "passive">();
-    let frozen = false;
     for (const item of items) {
-      const active = locked[item.message_id] === true;
-      if (active) frozen = true;
-      states.set(item.message_id, active ? "locked" : frozen ? "passive" : "unlocked");
+      states.set(
+        item.message_id,
+        item.held ? (item.message_id === lockBoundary ? "locked" : "passive") : "unlocked",
+      );
     }
     return states;
   });
@@ -84,8 +87,8 @@
   const isLocked = (id: string): boolean => lockState(id) !== "unlocked";
 
   /** 两组视图（W10g 时序如实表达）：挂起组（引导/注入=当前轮下一 step 边界，
-   * 时序上先于排队）在前；排队组按生效序。拖动只作用于排队组（挂起项无
-   * 逐条生效序）。 */
+   * 时序上先于排队）在前；排队组按生效序（含 held 锁定段——仍按排队序展示
+   * 但内核不消费）。拖动只作用于未锁定的排队条（held/挂起项均不可拖）。 */
   const queueItems = $derived.by(() => {
     if (localOrder === null) return items.filter((i) => i.mode === "queue");
     const byId = new Map(items.map((i) => [i.message_id, i]));
@@ -130,7 +133,7 @@
   }
 
   function onDragStart(event: DragEvent, item: TaskQueueItem): void {
-    if (isLocked(item.message_id) || editing !== null) return;
+    if (isHeld(item.message_id) || editingId !== null) return;
     dragId = item.message_id;
     localOrder = queueItems.map((i) => i.message_id);
     onreordering(true); // store 置位：暂停帧驱动刷新（面板锁定）
@@ -147,8 +150,11 @@
 
   function onDragEnd(): void {
     if (dragId === null || localOrder === null) return;
-    const ordered = localOrder;
-    const original = queueItems.map((i) => i.message_id);
+    // 提交只含未锁条（held 条固定原位占位，后端 queueReorder 只认 inbox 段；
+    // 锁定段必为排队序队尾连续段，未锁段序还原即整序还原）。
+    const heldIds = new Set(items.filter((i) => i.held).map((i) => i.message_id));
+    const ordered = localOrder.filter((id) => !heldIds.has(id));
+    const original = queueItems.map((i) => i.message_id).filter((id) => !heldIds.has(id));
     dragId = null;
     localOrder = null;
     onreordering(false); // 先解锁刷新，提交后 refreshQueue 拉权威序
@@ -162,7 +168,7 @@
   }
 </script>
 
-{#if items.length > 0 || editing !== null}
+{#if items.length > 0 || editingId !== null}
   <div class="mb-1.5 overflow-hidden rounded-t-lg border border-b-0 border-border bg-muted/40">
     <!-- 手风琴头：收起=预览（条数 + 下一条文本）；展开=完整列表。 -->
     <button
@@ -173,8 +179,8 @@
     >
       <IconChevronDown class="h-3 w-3 shrink-0 transition-transform {open ? '' : '-rotate-90'}" aria-hidden="true" />
       <span>投递队列（{items.length}）</span>
-      {#if editing !== null}
-        <span class="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-600">编辑中（后续消息已冻结）</span>
+      {#if editingId !== null}
+        <span class="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-600">编辑中（锁定段内，Esc 取消不改锁）</span>
         <span class="flex-1"></span>
         <span
           role="button"
@@ -207,20 +213,20 @@
     {#if open}
       <div class="border-t border-border/60 px-2 py-1.5" transition:slide={{ duration: 140 }}>
         <p class="px-0.5 pb-1 text-[10px] text-muted-foreground/60">
-          点锁可固定一条（其后的消息连带锁定） · 拖动排序（拖动期间队列锁定）
+          点锁=该条起暂停发送进入管理态（编辑/删除安全） · 再点解锁放回 · 拖动排序（未锁定条）
         </p>
         {#snippet row(item: TaskQueueItem, index: number)}
           <li
             class="flex items-center gap-2 rounded border px-2 py-1 text-[12px] transition-colors {dragId === item.message_id
               ? 'border-primary/50 bg-primary/5 opacity-60'
-              : 'border-border/60 bg-card'} {isLocked(item.message_id) ? 'opacity-75' : ''}"
-            draggable={item.mode === "queue" && !isLocked(item.message_id) && editing === null && !reordering}
+              : 'border-border/60 bg-card'} {isHeld(item.message_id) ? 'opacity-75' : ''}"
+            draggable={item.mode === "queue" && !isHeld(item.message_id) && editingId === null && !reordering}
             ondragstart={(e) => onDragStart(e, item)}
             ondragover={(e) => onDragOver(e, index)}
             ondragend={onDragEnd}
-            class:cursor-grab={item.mode === "queue" && !isLocked(item.message_id) && editing === null}
+            class:cursor-grab={item.mode === "queue" && !isHeld(item.message_id) && editingId === null}
           >
-            <!-- status：三态锁定位（主动锁点击解锁；被动锁点击=主动锁上移到该行） -->
+            <!-- status：三态锁定位（边界锁点击=解锁放回；被动锁点击=边界上移到该行；未锁点击=锁定） -->
             <button
               type="button"
               class="shrink-0 rounded p-0.5 {lockState(item.message_id) === 'locked'
@@ -229,12 +235,13 @@
                   ? 'text-amber-600/45'
                   : 'text-muted-foreground/40 hover:text-muted-foreground'}"
               title={lockState(item.message_id) === 'locked'
-                ? "已主动锁定：本条及之后全部禁操作（点击解除）"
+                ? "锁定边界：本条及之后暂停发送（可编辑/删除）；点击解锁全部放回"
                 : lockState(item.message_id) === 'passive'
-                  ? "被动锁定（因本条之前有主动锁）；点击把锁定边界上移到本条"
-                  : "锁定：本条及之后全部视为整体（防误操作，排序时固定）"}
-              aria-label={lockState(item.message_id) === 'unlocked' ? "锁定" : "解锁"}
-              onclick={() => onsetlocked(item.message_id, lockState(item.message_id) !== 'locked')}
+                  ? "被动锁定（锁定段内）；点击把锁定边界上移到本条"
+                  : "锁定：本条及之后暂停发送，进入稳定管理态（编辑/删除随时做）"}
+              aria-label={lockState(item.message_id) === 'unlocked' ? "锁定" : "调整锁定"}
+              onclick={() =>
+                onlock(lockState(item.message_id) === 'locked' ? null : item.message_id)}
             >
               {#if lockState(item.message_id) === 'unlocked'}
                 <IconLockOpen class="h-3 w-3" />
@@ -259,9 +266,9 @@
               <button
                 type="button"
                 class="shrink-0 rounded p-1 text-muted-foreground hover:bg-primary/10 hover:text-primary disabled:opacity-30"
-                title="立刻发送：打断当前工作，以这条消息立即开始新一轮"
+                title={isHeld(item.message_id) ? "锁定段内不支持（先解锁）" : "立刻发送：打断当前工作，以这条消息立即开始新一轮"}
                 aria-label="立刻发送该消息"
-                disabled={isLocked(item.message_id) || editing !== null || reordering}
+                disabled={isHeld(item.message_id) || editingId !== null || reordering}
                 onclick={() => onsendnow(item.message_id)}
               >
                 <IconSend class="h-3 w-3" />
@@ -269,9 +276,9 @@
               <button
                 type="button"
                 class="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
-                title="编辑（该条及其后冻结，文本回输入框）"
+                title={isHeld(item.message_id) ? "编辑锁定段消息（安全，不影响发送）" : "编辑（该条及其后锁定，文本回输入框）"}
                 aria-label="编辑该消息"
-                disabled={isLocked(item.message_id) || editing !== null || reordering}
+                disabled={editingId !== null || reordering}
                 onclick={() => onedit(item.message_id)}
               >
                 <IconPencil class="h-3 w-3" />
@@ -284,9 +291,9 @@
                     type="button"
                     {...props}
                     class="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
-                    title="修改模式（排队 / 引导 / 注入）"
+                    title={isHeld(item.message_id) ? "锁定段内不支持改模式（先解锁）" : "修改模式（排队 / 引导 / 注入）"}
                     aria-label="修改投递模式"
-                    disabled={isLocked(item.message_id) || editing !== null || reordering}
+                    disabled={isHeld(item.message_id) || editingId !== null || reordering}
                   >
                     <IconRepeat class="h-3 w-3" />
                   </button>
@@ -313,9 +320,9 @@
             <button
               type="button"
               class="shrink-0 rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-30"
-              title="从队列删除"
+              title={isHeld(item.message_id) ? "从锁定段删除（安全，立即生效）" : "从队列删除"}
               aria-label="删除该消息"
-              disabled={isLocked(item.message_id) || reordering}
+              disabled={reordering}
               onclick={() => onremove(item.message_id)}
             >
               <IconTrash class="h-3 w-3" />

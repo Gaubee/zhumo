@@ -27,6 +27,7 @@
   import {
     cancelQueueEdit,
     confirmQueueEdit,
+    lockQueue,
     editQueueItem,
     getSelectedTask,
     lastUsage,
@@ -39,7 +40,6 @@
     selectTask,
     sendPrompt,
     sendQueueNow,
-    setQueueItemLocked,
     setQueueItemMode,
     setQueueReordering,
     stopPrompt,
@@ -320,14 +320,14 @@
              拖动排序）；选中任务变化或帧到达由 store 刷新（编辑/拖动期暂停）。 -->
         <QueueDrawer
           items={queue.items}
-          editing={queue.editing}
-          locked={queue.locked}
+          lockBoundary={queue.lockBoundary}
+          editingId={queue.editingId}
           reordering={queue.reordering}
           onedit={(messageId) => void beginQueueEdit(messageId)}
-          oncancel={() => void cancelQueueEdit()}
+          oncancel={() => cancelQueueEdit()}
           onremove={(messageId) => void removeQueueItem(messageId)}
           onsetmode={(messageId, mode) => void setQueueItemMode(messageId, mode)}
-          onsetlocked={(messageId, lock) => setQueueItemLocked(messageId, lock)}
+          onlock={(messageId) => void lockQueue(messageId)}
           onreorder={(orderedIds) => void reorderQueue(orderedIds)}
           onreordering={(v) => setQueueReordering(v)}
           onsendnow={(messageId) => void sendQueueNow(messageId)}
@@ -336,10 +336,10 @@
           bind:this={composerRef}
           onsend={(text) => void sendPrompt(text)}
           onstop={() => void stopPrompt()}
-          editingActive={queue.editing !== null}
+          editingActive={queue.editingId !== null}
           editingDraft={editingDraft}
           onconfirmedit={(text) => void confirmQueueEdit(text)}
-          oncanceledit={() => void cancelQueueEdit()}
+          oncanceledit={() => cancelQueueEdit()}
           sending={tasks.sending}
           videoName={selected.videoName}
           models={availableModels}

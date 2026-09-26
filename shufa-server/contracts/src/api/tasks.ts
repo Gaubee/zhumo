@@ -133,42 +133,44 @@ export type TaskFollowupInput = z.infer<typeof TaskFollowupInputSchema>;
 export const TaskQueueModeSchema = z.enum(['queue', 'steer', 'inject']);
 export type TaskQueueMode = z.infer<typeof TaskQueueModeSchema>;
 
-/** 队列条目（内核 inbox 消息的产品视图：id 稳定，跨编辑 replace 保持可寻址）。 */
+/** 队列条目（内核 inbox 消息的产品视图：id 稳定，跨编辑 replace 保持可寻址）。
+ * held=true：位于锁定段（已暂离内核 inbox，不会被消费——安全编辑/删除）。 */
 export const TaskQueueItemSchema = z.object({
   message_id: z.string(),
   mode: TaskQueueModeSchema,
   text: z.string(),
+  held: z.boolean().optional(),
 });
 export type TaskQueueItem = z.infer<typeof TaskQueueItemSchema>;
 
 export const TaskQueueListInputSchema = z.object({ id: IdSchema });
 export type TaskQueueListInput = z.infer<typeof TaskQueueListInputSchema>;
-/** items 按生效序（queue 在前逐条开轮；steer/inject 为 step 边界挂起项）；
- * editing=冻结中的条目 id（编辑会话期间该条及其后暂离队列）。 */
+/** items 按生效序（queue 在前逐条开轮；steer/inject 为 step 边界挂起项；
+ * held 条目为锁定段——仍按排队序展示但内核不消费）；lockBoundary=锁定边界
+ * 条目 id（null=未锁定；该条及其后的排队消息被锁定）。 */
 export const TaskQueueListOutputSchema = z.object({
   items: z.array(TaskQueueItemSchema),
-  editing: z.string().nullable(),
+  lockBoundary: z.string().nullable(),
 });
 export type TaskQueueListOutput = z.infer<typeof TaskQueueListOutputSchema>;
 
-/** 进入编辑（Owner 设计 2026-09-27）：该条及其后的排队消息冻结（暂离内核
- * inbox，当前轮结束后不再自动开轮）；文本回填输入框，确认/取消前队列尾部悬置。 */
+/** 进入编辑（Owner 设计 2026-09-27 二轮）：目标未锁定时先锁定到该条（该条
+ * 及其后暂离内核 inbox 不再被消费），返回文本回填输入框。取消编辑=纯前端
+ * （清空输入框即可，锁定保持——持续管理态）。 */
 export const TaskQueueEditInputSchema = z.object({ id: IdSchema, message_id: z.string() });
 export type TaskQueueEditInput = z.infer<typeof TaskQueueEditInputSchema>;
 export const TaskQueueEditOutputSchema = z.object({ text: z.string() });
 export type TaskQueueEditOutput = z.infer<typeof TaskQueueEditOutputSchema>;
 
-/** 确认编辑：冻结首条按新文本重建，整段按原序放回（idle 时逐条唤醒开轮）。 */
-export const TaskQueueEditConfirmInputSchema = z.object({ id: IdSchema, text: z.string().min(1).max(20000) });
+/** 确认编辑：锁定段内目标条按新文本重建（保持锁定，解锁时才放回生效）。 */
+export const TaskQueueEditConfirmInputSchema = z.object({
+  id: IdSchema,
+  message_id: z.string(),
+  text: z.string().min(1).max(20000),
+});
 export type TaskQueueEditConfirmInput = z.infer<typeof TaskQueueEditConfirmInputSchema>;
 export const TaskQueueEditConfirmOutputSchema = z.object({ accepted: z.literal(true) });
 export type TaskQueueEditConfirmOutput = z.infer<typeof TaskQueueEditConfirmOutputSchema>;
-
-/** 取消编辑：冻结段按原序原样放回。 */
-export const TaskQueueEditCancelInputSchema = z.object({ id: IdSchema });
-export type TaskQueueEditCancelInput = z.infer<typeof TaskQueueEditCancelInputSchema>;
-export const TaskQueueEditCancelOutputSchema = z.object({ accepted: z.literal(true) });
-export type TaskQueueEditCancelOutput = z.infer<typeof TaskQueueEditCancelOutputSchema>;
 
 /** 删除一条（含冻结段外/next-step 挂起项）；不在队列时幂等成功。 */
 export const TaskQueueRemoveInputSchema = z.object({ id: IdSchema, message_id: z.string() });
@@ -186,9 +188,18 @@ export type TaskQueueSetModeInput = z.infer<typeof TaskQueueSetModeInputSchema>;
 export const TaskQueueSetModeOutputSchema = z.object({ accepted: z.literal(true) });
 export type TaskQueueSetModeOutput = z.infer<typeof TaskQueueSetModeOutputSchema>;
 
+/** 锁定/解锁（Owner 设计 2026-09-27 四轮）：锁定=该条及其后的排队消息暂离
+ * 内核 inbox（不会被消费/发送），进入稳定管理态（编辑/删除随时做，解锁时
+ * 按原序放回继续跑）。message_id=null 解锁放回；传条目 id=把边界设到该条
+ * （支持上移/下移：全量重切排队序）。单一事实源在 daemon。 */
+export const TaskQueueLockInputSchema = z.object({ id: IdSchema, message_id: z.string().nullable() });
+export type TaskQueueLockInput = z.infer<typeof TaskQueueLockInputSchema>;
+export const TaskQueueLockOutputSchema = z.object({ accepted: z.literal(true) });
+export type TaskQueueLockOutput = z.infer<typeof TaskQueueLockOutputSchema>;
+
 /** 立刻发送（Owner 设计 2026-09-27 三轮）：打断当前轮 + 该排队消息提到
  * 队头——内核 cancel{kind:'user'}+keepInbox 在被打断轮收敛后自动开新一轮，
- * 消费队头即本条（DSH 原生语义，无自造机制）。 */
+ * 消费队头即本条（DSH 原生语义，无自造机制）。锁定段内不支持（先解锁）。 */
 export const TaskQueueSendNowInputSchema = z.object({ id: IdSchema, message_id: z.string() });
 export type TaskQueueSendNowInput = z.infer<typeof TaskQueueSendNowInputSchema>;
 export const TaskQueueSendNowOutputSchema = z.object({ accepted: z.literal(true) });

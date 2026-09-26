@@ -31,7 +31,7 @@ import type {
   TaskStopInput,
   TaskQueueEditInput,
   TaskQueueEditConfirmInput,
-  TaskQueueEditCancelInput,
+  TaskQueueLockInput,
   TaskQueueRemoveInput,
   TaskQueueSetModeInput,
   TaskQueueReorderInput,
@@ -185,7 +185,7 @@ interface ShufaRpc {
     queueList(input: { id: string }): Promise<TaskQueueListOutput>;
     queueEdit(input: TaskQueueEditInput): Promise<{ text: string }>;
     queueEditConfirm(input: TaskQueueEditConfirmInput): Promise<{ accepted: true }>;
-    queueEditCancel(input: TaskQueueEditCancelInput): Promise<{ accepted: true }>;
+    queueLock(input: TaskQueueLockInput): Promise<{ accepted: true }>;
     queueRemove(input: TaskQueueRemoveInput): Promise<{ accepted: true }>;
     queueSetMode(input: TaskQueueSetModeInput): Promise<{ accepted: true }>;
     queueReorder(input: TaskQueueReorderInput): Promise<{ accepted: true }>;
@@ -257,8 +257,9 @@ export interface ShufaApi {
   /** 队列面板（W10b）：视图/编辑（冻结）/确认/取消/删除/改模式。 */
   taskQueue(taskId: string): Promise<TaskQueueListOutput>;
   taskQueueEdit(taskId: string, messageId: string): Promise<string>;
-  taskQueueEditConfirm(taskId: string, text: string): Promise<void>;
-  taskQueueEditCancel(taskId: string): Promise<void>;
+  taskQueueEditConfirm(taskId: string, messageId: string, text: string): Promise<void>;
+  /** 锁定/解锁（null=解锁放回）：锁定段暂离内核 inbox 不被消费，可安全编辑/删除。 */
+  taskQueueLock(taskId: string, messageId: string | null): Promise<void>;
   taskQueueRemove(taskId: string, messageId: string): Promise<void>;
   taskQueueSetMode(taskId: string, messageId: string, mode: TaskQueueMode): Promise<void>;
   taskQueueReorder(taskId: string, orderedIds: string[]): Promise<void>;
@@ -627,7 +628,7 @@ class MockApi implements ShufaApi {
   }
 
   async taskQueue(): Promise<TaskQueueListOutput> {
-    return { items: [], editing: null };
+    return { items: [], lockBoundary: null };
   }
 
   async taskQueueEdit(): Promise<string> {
@@ -636,7 +637,7 @@ class MockApi implements ShufaApi {
 
   async taskQueueEditConfirm(): Promise<void> {}
 
-  async taskQueueEditCancel(): Promise<void> {}
+  async taskQueueLock(): Promise<void> {}
 
   async taskQueueRemove(): Promise<void> {}
 
@@ -1130,12 +1131,12 @@ class RpcApi implements ShufaApi {
     return out.text;
   }
 
-  async taskQueueEditConfirm(taskId: string, text: string): Promise<void> {
-    await rpc().tasks.queueEditConfirm({ id: taskId, text });
+  async taskQueueEditConfirm(taskId: string, messageId: string, text: string): Promise<void> {
+    await rpc().tasks.queueEditConfirm({ id: taskId, message_id: messageId, text });
   }
 
-  async taskQueueEditCancel(taskId: string): Promise<void> {
-    await rpc().tasks.queueEditCancel({ id: taskId });
+  async taskQueueLock(taskId: string, messageId: string | null): Promise<void> {
+    await rpc().tasks.queueLock({ id: taskId, message_id: messageId });
   }
 
   async taskQueueRemove(taskId: string, messageId: string): Promise<void> {

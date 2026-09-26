@@ -7,10 +7,18 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { createTaskSessions } from '../src/kernel/sessions.js';
+import { FrameStore } from '../src/kernel/frame-store.js';
 import { asKernelHandle, FakeAgent, FakeKernel } from './helpers-task.js';
+
+function inboxText(m: unknown): string {
+  return (m as { content?: Array<{ type?: string; text?: string }> }).content
+    ?.filter((b) => b.type === 'text')
+    .map((b) => b.text)
+    .join('\n') ?? '';
+}
 
 function messageText(m: { content?: Array<{ type?: string; text?: string }> }): string {
   return (m.content ?? [])
@@ -60,48 +68,83 @@ describe('sessions 队列面板（W10b，内核 inbox）', () => {
     const { sessionId, agent } = await seedQueue(['一', '二']);
     sessions.steer(sessionId, '引导一下');
     const view = sessions.queueView(sessionId);
-    expect(view.items.map((i) => [i.mode, i.text])).toEqual([
-      ['queue', '一'],
-      ['queue', '二'],
-      ['steer', '引导一下'],
+    expect(view.items.map((i) => [i.mode, i.text, i.held])).toEqual([
+      ['queue', '一', false],
+      ['queue', '二', false],
+      ['steer', '引导一下', false],
     ]);
-    expect(view.editing).toBeNull();
+    expect(view.lockBoundary).toBeNull();
     // 每条 messageId 均可寻址（inbox 消息 id 稳定）。
     for (const item of view.items) expect(item.messageId.length).toBeGreaterThan(0);
     void agent;
   });
 
-  it('queueFreeze：该条及其后暂离 next-turn（队首保留）；再次编辑被拒', async () => {
-    const { sessionId } = await seedQueue(['一', '二', '三']);
-    const before = sessions.queueView(sessionId);
-    const secondId = before.items[1]!.messageId;
-    const text = sessions.queueFreeze(sessionId, secondId);
-    expect(text).toBe('二');
-    // 冻结段（二、三）暂离；只剩「一」；editing 指向被编辑条。
+  it('queueLock（Owner 四轮）：边界条及其后暂离内核 inbox（内核不消费）但仍按排队序展示（held）', async () => {
+    const { sessionId, agent } = await seedQueue(['一', '二', '三']);
+    const secondId = sessions.queueView(sessionId).items[1]!.messageId;
+    sessions.queueLock(sessionId, secondId);
+    // 视图仍全量显示（锁定段标 held），但 inbox 只剩「一」——内核只可能消费未锁条。
     const view = sessions.queueView(sessionId);
-    expect(view.items.map((i) => i.text)).toEqual(['一']);
-    expect(view.editing).toBe(secondId);
-    expect(() => sessions.queueFreeze(sessionId, before.items[0]!.messageId)).toThrow('编辑');
+    expect(view.items.map((i) => [i.text, i.held])).toEqual([
+      ['一', false],
+      ['二', true],
+      ['三', true],
+    ]);
+    expect(view.lockBoundary).toBe(secondId);
+    expect(agent.inbox.nextTurn.map((m: unknown) => inboxText(m))).toEqual(['一']);
   });
 
-  it('queueUnfreeze（取消）：冻结段按原序原样放回', async () => {
-    const { sessionId } = await seedQueue(['一', '二', '三']);
-    const secondId = sessions.queueView(sessionId).items[1]!.messageId;
-    sessions.queueFreeze(sessionId, secondId);
-    sessions.queueUnfreeze(sessionId, null);
-    const view = sessions.queueView(sessionId);
-    expect(view.items.map((i) => i.text)).toEqual(['一', '二', '三']);
-    expect(view.editing).toBeNull();
+  it('queueLock 解锁：锁定段按原序放回 inbox（继续跑）；边界上移=纳入更多条', async () => {
+    const { sessionId, agent } = await seedQueue(['一', '二', '三']);
+    const ids = sessions.queueView(sessionId).items.map((i) => i.messageId);
+    sessions.queueLock(sessionId, ids[1]!);
+    // 边界上移到第一条：全部锁定。
+    sessions.queueLock(sessionId, ids[0]!);
+    expect(agent.inbox.nextTurn).toHaveLength(0);
+    // 解锁放回。
+    sessions.queueLock(sessionId, null);
+    expect(agent.inbox.nextTurn.map((m: unknown) => inboxText(m))).toEqual(['一', '二', '三']);
+    expect(sessions.queueView(sessionId).lockBoundary).toBeNull();
   });
 
-  it('queueUnfreeze（确认）：首条换新文本，整段原序放回', async () => {
+  it('queueHeldText/queueEditApply：锁定段内取文本与替换（保持锁定，解锁才生效）', async () => {
+    const { sessionId, agent } = await seedQueue(['一', '二', '三']);
+    const ids = sessions.queueView(sessionId).items.map((i) => i.messageId);
+    sessions.queueLock(sessionId, ids[1]!);
+    expect(sessions.queueHeldText(sessionId, ids[1]!)).toBe('二');
+    sessions.queueEditApply(sessionId, ids[1]!, '二（改）');
+    // 仍锁定：inbox 不变；视图文本已换。
+    expect(agent.inbox.nextTurn.map((m: unknown) => inboxText(m))).toEqual(['一']);
+    expect(sessions.queueView(sessionId).items[1]!.text).toBe('二（改）');
+    // 解锁放回的是改后文本。
+    sessions.queueLock(sessionId, null);
+    expect(agent.inbox.nextTurn.map((m: unknown) => inboxText(m))).toEqual(['一', '二（改）', '三']);
+    // 非锁定段条目取文本被拒。
+    expect(() => sessions.queueHeldText(sessionId, ids[0]!)).toThrow('不在锁定段');
+  });
+
+  it('queueRemove（锁定段）：安全删除；边界条被删→边界移到剩余首条；删空自动解锁', async () => {
     const { sessionId } = await seedQueue(['一', '二', '三']);
-    const secondId = sessions.queueView(sessionId).items[1]!.messageId;
-    sessions.queueFreeze(sessionId, secondId);
-    sessions.queueUnfreeze(sessionId, '二（改）');
-    const view = sessions.queueView(sessionId);
-    expect(view.items.map((i) => i.text)).toEqual(['一', '二（改）', '三']);
-    expect(view.editing).toBeNull();
+    const ids = sessions.queueView(sessionId).items.map((i) => i.messageId);
+    sessions.queueLock(sessionId, ids[1]!);
+    // 删边界条「二」：边界移到「三」，锁定段剩「三」。
+    sessions.queueRemove(sessionId, ids[1]!);
+    let view = sessions.queueView(sessionId);
+    expect(view.items.map((i) => [i.text, i.held])).toEqual([['一', false], ['三', true]]);
+    expect(view.lockBoundary).toBe(ids[2]);
+    // 再删「三」：锁定段空=自动解锁。
+    sessions.queueRemove(sessionId, ids[2]!);
+    view = sessions.queueView(sessionId);
+    expect(view.items.map((i) => [i.text, i.held])).toEqual([['一', false]]);
+    expect(view.lockBoundary).toBeNull();
+  });
+
+  it('锁定段内：改模式/立刻发送被拒（与冻结语义矛盾，先解锁）', async () => {
+    const { sessionId } = await seedQueue(['一', '二']);
+    const ids = sessions.queueView(sessionId).items.map((i) => i.messageId);
+    sessions.queueLock(sessionId, ids[0]!);
+    expect(() => sessions.queueSetMode(sessionId, ids[0]!, 'steer')).toThrow('先解锁');
+    expect(() => sessions.queueSendNow(sessionId, ids[0]!)).toThrow('先解锁');
   });
 
   it('queueRemove：按 id 删除（next-turn 与 next-step 皆可）', async () => {
@@ -188,8 +231,45 @@ describe('sessions 队列面板（W10b，内核 inbox）', () => {
     void sessions;
   });
 
+  it('W10h demo 场景：锁定段不被消费；解锁放回后 DemoAgent 定时自动续跑（真实定时器）', async () => {
+    vi.useRealTimers();
+    const sessions2 = createTaskSessions({
+      kernel: () => asKernelHandle(kernel),
+      modelSelection: async () => ({ provider: 'zhipu', model: 'glm-5.3-flash' }),
+      retention: 50,
+    });
+    sessions2.setDemoDelay(30);
+    const framesFile = path.join(root, 'frames-demo.jsonl');
+    const created = await sessions2.createTaskSession('task-demo', {
+      cwd: root,
+      framesFile,
+      prompt: '首条',
+    });
+    const sid = created.sessionId;
+    // 首条 30ms 后被消费。
+    await new Promise((r) => setTimeout(r, 80));
+    let view = sessions2.queueView(sid);
+    expect(view.items).toHaveLength(0);
+    // 排两条，锁第一条（连同其后全部）→ 等待远超消费周期，一条都不消费。
+    sessions2.followup(sid, '锁定段A');
+    sessions2.followup(sid, '锁定段B');
+    view = sessions2.queueView(sid);
+    sessions2.queueLock(sid, view.items[0]!.messageId);
+    await new Promise((r) => setTimeout(r, 120));
+    view = sessions2.queueView(sid);
+    expect(view.items.map((i) => [i.text, i.held])).toEqual([
+      ['锁定段A', true],
+      ['锁定段B', true],
+    ]);
+    // 解锁放回：30ms 周期自动逐条消费。
+    sessions2.queueLock(sid, null);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(sessions2.queueView(sid).items).toHaveLength(0);
+    void sessions;
+  });
+
   it('不在册：队列操作抛错（调用方引导重开对话）', async () => {
     expect(() => sessions.queueView('nope')).toThrow('not found');
-    expect(() => sessions.queueFreeze('nope', 'x')).toThrow('not found');
+    expect(() => sessions.queueLock('nope', 'x')).toThrow('not found');
   });
 });
