@@ -121,11 +121,21 @@
 
 /* markstream 组件根自带 font: 400 16px/1.72（简写声明，元素自身规则压过
    父容器继承——.msg-body 的 12px 因此从未生效，Owner 实测「正文过大」根因）。
-   特异性 .msg-body .markstream-svelte 覆盖之，字体族继承产品全局。 */
-.msg-body .markstream-svelte {
+   特异性覆盖之，字体族继承产品全局。2026-09-28 Owner 二轮：用户气泡
+   （.bubble-user，UserBubble）同样走 markstream——此前只修了 AI 侧
+   .msg-body，气泡文字仍 16px；一并覆盖。 */
+:is(.msg-body, .bubble-user) .markstream-svelte {
   font-family: inherit;
   font-size: 12px;
   line-height: 19px;
+  /* markstream 根自带虚拟化内禀尺寸提示（contain-intrinsic-size: auto 800px
+    auto 600px + contain: layout）——在静态终稿上被当作布局高度，内容 19px
+    根却 600px（Owner 实测「展开全文」短消息误常驻的根因）。静态气泡/正文
+    不参与虚拟化：重置内禀提示与包含关系，布局回归内容真实尺寸。 */
+  height: auto !important;
+  transition: none !important;
+  contain: none !important;
+  contain-intrinsic-size: none !important;
 }
 
 /* markstream 的 h1-h4 按 rem 放大（18-25px）在对话流里突兀——压回正文
