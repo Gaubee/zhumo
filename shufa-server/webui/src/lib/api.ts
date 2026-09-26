@@ -32,6 +32,7 @@ import type {
   TaskQueueEditInput,
   TaskQueueEditConfirmInput,
   TaskQueueLockInput,
+  TaskQueueSetReorderingInput,
   TaskQueueRemoveInput,
   TaskQueueSetModeInput,
   TaskQueueReorderInput,
@@ -186,6 +187,7 @@ interface ShufaRpc {
     queueEdit(input: TaskQueueEditInput): Promise<{ text: string }>;
     queueEditConfirm(input: TaskQueueEditConfirmInput): Promise<{ accepted: true }>;
     queueLock(input: TaskQueueLockInput): Promise<{ accepted: true }>;
+    queueSetReordering(input: TaskQueueSetReorderingInput): Promise<{ accepted: true }>;
     queueRemove(input: TaskQueueRemoveInput): Promise<{ accepted: true }>;
     queueSetMode(input: TaskQueueSetModeInput): Promise<{ accepted: true }>;
     queueReorder(input: TaskQueueReorderInput): Promise<{ accepted: true }>;
@@ -260,6 +262,8 @@ export interface ShufaApi {
   taskQueueEditConfirm(taskId: string, messageId: string, text: string): Promise<void>;
   /** 锁定/解锁（null=解锁放回）：锁定段暂离内核 inbox 不被消费，可安全编辑/删除。 */
   taskQueueLock(taskId: string, messageId: string | null): Promise<void>;
+  /** 拖动期暂停消费（拖动开始/结束各调一次）。 */
+  taskQueueSetReordering(taskId: string, paused: boolean): Promise<void>;
   taskQueueRemove(taskId: string, messageId: string): Promise<void>;
   taskQueueSetMode(taskId: string, messageId: string, mode: TaskQueueMode): Promise<void>;
   taskQueueReorder(taskId: string, orderedIds: string[]): Promise<void>;
@@ -638,6 +642,8 @@ class MockApi implements ShufaApi {
   async taskQueueEditConfirm(): Promise<void> {}
 
   async taskQueueLock(): Promise<void> {}
+
+  async taskQueueSetReordering(): Promise<void> {}
 
   async taskQueueRemove(): Promise<void> {}
 
@@ -1137,6 +1143,10 @@ class RpcApi implements ShufaApi {
 
   async taskQueueLock(taskId: string, messageId: string | null): Promise<void> {
     await rpc().tasks.queueLock({ id: taskId, message_id: messageId });
+  }
+
+  async taskQueueSetReordering(taskId: string, paused: boolean): Promise<void> {
+    await rpc().tasks.queueSetReordering({ id: taskId, paused });
   }
 
   async taskQueueRemove(taskId: string, messageId: string): Promise<void> {

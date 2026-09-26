@@ -316,6 +316,38 @@ describe('sessions 队列面板（W10b，内核 inbox）', () => {
     void sessions;
   });
 
+  it('W10i：拖动期暂停消费（setQueueReordering true→false）——队列稳定不抖，松手恢复', async () => {
+    vi.useRealTimers();
+    const sessions2 = createTaskSessions({
+      kernel: () => asKernelHandle(kernel),
+      modelSelection: async () => ({ provider: 'zhipu', model: 'glm-5.3-flash' }),
+      retention: 50,
+    });
+    sessions2.setDemoDelay(30);
+    const created = await sessions2.createTaskSession('task-drag', {
+      cwd: root,
+      framesFile: path.join(root, 'frames-drag.jsonl'),
+      prompt: '首条',
+    });
+    const sid = created.sessionId;
+    await new Promise((r) => setTimeout(r, 80));
+    // 排两条 + 开始拖动（暂停消费）。
+    sessions2.followup(sid, '拖动期A');
+    sessions2.followup(sid, '拖动期B');
+    sessions2.setQueueReordering(sid, true);
+    await new Promise((r) => setTimeout(r, 120));
+    // 远超消费周期：暂停中一条都不消费。
+    expect(sessions2.queueView(sid).items.filter((i) => !i.held)).toHaveLength(2);
+    // 重排（模拟拖动结果）。
+    const ids = sessions2.queueView(sid).items.map((i) => i.messageId);
+    sessions2.queueReorder(sid, [ids[1]!, ids[0]!]);
+    // 松手恢复：30ms 周期自动逐条消费（新序）。
+    sessions2.setQueueReordering(sid, false);
+    await new Promise((r) => setTimeout(r, 250));
+    expect(sessions2.queueView(sid).items.filter((i) => !i.held)).toHaveLength(0);
+    void sessions;
+  });
+
   it('不在册：队列操作抛错（调用方引导重开对话）', async () => {
     expect(() => sessions.queueView('nope')).toThrow('not found');
     expect(() => sessions.queueLock('nope', 'x')).toThrow('not found');

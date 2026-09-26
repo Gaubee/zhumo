@@ -309,9 +309,17 @@ export async function setQueueItemMode(messageId: string, mode: TaskQueueMode): 
   }
 }
 
-/** 拖动期面板锁（QueueDrawer dragstart/dragend 回调）：true 期间暂停帧驱动刷新。 */
-export function setQueueReordering(v: boolean): void {
+/** 拖动期面板锁（QueueDrawer 回调）：true 期间暂停帧驱动刷新 + 通知 daemon
+ * 暂停消费（Owner 设计：拖动时队列稳定，松手恢复）。 */
+export async function setQueueReordering(v: boolean): Promise<void> {
+  const taskId = tasks.selectedId;
   queue.reordering = v;
+  if (taskId === null) return;
+  try {
+    await api.taskQueueSetReordering(taskId, v);
+  } catch {
+    // 暂停失败不阻塞拖动（真实内核本就 no-op）。
+  }
 }
 
 /** 立刻发送（Owner 设计三轮）：打断当前轮 + 该条提到队头（内核收敛后自动

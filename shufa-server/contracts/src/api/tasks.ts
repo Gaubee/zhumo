@@ -188,6 +188,15 @@ export type TaskQueueSetModeInput = z.infer<typeof TaskQueueSetModeInputSchema>;
 export const TaskQueueSetModeOutputSchema = z.object({ accepted: z.literal(true) });
 export type TaskQueueSetModeOutput = z.infer<typeof TaskQueueSetModeOutputSchema>;
 
+/** 拖动排序期暂停消费（Owner 设计：拖动时队列稳定，松手恢复）。 */
+export const TaskQueueSetReorderingInputSchema = z.object({
+  id: IdSchema,
+  paused: z.boolean(),
+});
+export type TaskQueueSetReorderingInput = z.infer<typeof TaskQueueSetReorderingInputSchema>;
+export const TaskQueueSetReorderingOutputSchema = z.object({ accepted: z.literal(true) });
+export type TaskQueueSetReorderingOutput = z.infer<typeof TaskQueueSetReorderingOutputSchema>;
+
 /** 锁定/解锁（Owner 设计 2026-09-27 四轮）：锁定=该条及其后的排队消息暂离
  * 内核 inbox（不会被消费/发送），进入稳定管理态（编辑/删除随时做，解锁时
  * 按原序放回继续跑）。message_id=null 解锁放回；传条目 id=把边界设到该条

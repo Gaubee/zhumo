@@ -10,6 +10,7 @@
    * 帧驱动刷新防抖动），drop 一次性提交新序。
    */
   import { slide } from "svelte/transition";
+  import { dndzone } from "svelte-dnd-action";
   import IconChevronDown from "@lucide/svelte/icons/chevron-down";
   import IconPencil from "@lucide/svelte/icons/pencil";
   import IconTrash from "@lucide/svelte/icons/trash";
@@ -63,18 +64,11 @@
 
   let open = $state(false);
   let modeOpenId = $state<string | null>(null);
-  /** 拖动中的本地序（null=非拖动；displayItems 派生消费）。 */
-  let localOrder = $state<string[] | null>(null);
-  let dragId = $state<string | null>(null);
 
   /**
    * 三态锁（Owner 设计四轮重做）：held 条目=锁定段（daemon 持久化，内核不消
-   * 费——可安全编辑/删除）；lockBoundary=边界条（段内其余为被动锁定）。
+   * 费——可安全编辑/删除/拖动）；lockBoundary=边界条（段内其余为被动锁定）。
    */
-  const isHeld = (id: string): boolean => items.find((i) => i.message_id === id)?.held === true;
-  /** 可拖动 = 排队条（含锁定段——锁只管不自动发送，不管排序）。挂起项无逐条生效序不可拖。 */
-  const draggable = (item: TaskQueueItem): boolean =>
-    item.mode === "queue" && editingId === null && !reordering;
   const lockStateOf = $derived.by(() => {
     const states = new Map<string, "unlocked" | "locked" | "passive">();
     for (const item of items) {
@@ -93,85 +87,37 @@
   });
   const lockState = (id: string): "unlocked" | "locked" | "passive" =>
     lockStateOf.get(id) ?? "unlocked";
-  const isLocked = (id: string): boolean => lockState(id) !== "unlocked";
+  const isHeld = (id: string): boolean => items.find((i) => i.message_id === id)?.held === true;
 
   /** 两组视图（W10g 时序如实表达）：挂起组（引导/注入=当前轮下一 step 边界，
-   * 时序上先于排队）在前；排队组按生效序（含 held 锁定段——仍按排队序展示
-   * 但内核不消费）。拖动只作用于未锁定的排队条（held/挂起项均不可拖）。 */
-  const queueItems = $derived.by(() => {
-    if (localOrder === null) return items.filter((i) => i.mode === "queue");
-    const byId = new Map(items.map((i) => [i.message_id, i]));
-    return localOrder
-      .map((id) => byId.get(id))
-      .filter((i): i is TaskQueueItem => i !== undefined && i.mode === "queue");
-  });
+   * 时序上先于排队）在前；排队组按生效序（含 held 锁定段）。dnd 容器只装
+   * 排队组——挂起项无逐条生效序。 */
+  const queueItems = $derived(items.filter((i) => i.mode === "queue"));
   const pendingItems = $derived(items.filter((i) => i.mode !== "queue"));
 
-  /** 非锁定行滑动、锁定行原位（挖槽回填）。 */
-  function moveWithLocked(ids: string[], movingId: string, targetIndex: number): string[] {
-    const lockedSet = new Set(ids.filter((id) => isLocked(id)));
-    const free = ids.filter((id) => !lockedSet.has(id));
-    const from = free.indexOf(movingId);
-    if (from < 0) return ids;
-    free.splice(from, 1);
-    let insertAt = free.length;
-    if (targetIndex < ids.indexOf(movingId)) {
-      // 向上拖：插到第一个全局位置 ≥ 目标的 free 行之前。
-      for (let i = 0; i < free.length; i++) {
-        if (ids.indexOf(free[i]!) >= targetIndex) {
-          insertAt = i;
-          break;
-        }
-      }
-    } else {
-      // 向下拖：插到最后一个全局位置 ≤ 目标的 free 行之后。
-      for (let i = free.length - 1; i >= 0; i--) {
-        if (ids.indexOf(free[i]!) <= targetIndex) {
-          insertAt = i + 1;
-          break;
-        }
-      }
+  /** dnd-action 容器 items（库要求可变数组带 id；拖动中库实时回写=插入预览）。
+   * 与 props 同步：非拖动期以 props 为准（items 变化重灌），拖动期不动。 */
+  let dndItems = $state<Array<TaskQueueItem & { id: string }>>([]);
+  let syncing = false;
+  $effect(() => {
+    if (reordering) return;
+    const next = queueItems.map((i) => ({ ...i, id: i.message_id }));
+    if (JSON.stringify(next.map((n) => n.id)) !== JSON.stringify(dndItems.map((n) => n.id)) || syncing) {
+      syncing = false;
+      dndItems = next;
     }
-    free.splice(insertAt, 0, movingId);
-    const out = ids.slice();
-    let fi = 0;
-    for (let i = 0; i < out.length; i++) {
-      if (!lockedSet.has(ids[i]!)) out[i] = free[fi++]!;
-    }
-    return out;
+  });
+
+  function handleDndItems(newItems: Array<Record<string, unknown>>): void {
+    // 库 consider/finalize 回写：拖动中仅本地预览（防 props 回灌打断）。
+    syncing = true;
+    dndItems = newItems as Array<TaskQueueItem & { id: string }>;
   }
 
-  function onDragStart(event: DragEvent, item: TaskQueueItem): void {
-    if (item.mode !== "queue" || editingId !== null) return;
-    dragId = item.message_id;
-    localOrder = queueItems.map((i) => i.message_id);
-    onreordering(true); // store 置位：暂停帧驱动刷新（面板锁定）
-    event.dataTransfer?.setData("text/plain", item.message_id);
-    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
-  }
-
-  function onDragOver(event: DragEvent, index: number): void {
-    if (dragId === null || localOrder === null) return;
-    event.preventDefault();
-    const next = moveWithLocked(localOrder, dragId, index);
-    if (next.join("\n") !== localOrder.join("\n")) localOrder = next;
-  }
-
-  function onDragEnd(): void {
-    if (dragId === null || localOrder === null) return;
-    // 全量提交（含 held 条——锁只管不自动发送，排序照常；daemon 全局重切两段）。
-    const ordered = localOrder;
-    const original = items.map((i) => i.message_id);
-    dragId = null;
-    localOrder = null;
-    onreordering(false); // 先解锁刷新，提交后 refreshQueue 拉权威序
-    if (ordered.join("\n") !== original.join("\n")) onreorder(ordered);
-    else void onreorderRefreshOnly();
-  }
-
-  /** 原序拖回（取消）：无需提交，但仍要恢复一次远端视图。 */
-  async function onreorderRefreshOnly(): Promise<void> {
-    onreorder(queueItems.map((i) => i.message_id));
+  function onDndFinalize(newItems: Array<Record<string, unknown>>): void {
+    dndItems = newItems as Array<TaskQueueItem & { id: string }>;
+    onreordering(false); // 松手：恢复消费 + 帧驱动刷新
+    onreorder(newItems.map((n) => String(n.id))); // 原序拖回也走它——reorderQueue finally 恢复远端视图
   }
 </script>
 
@@ -222,16 +168,9 @@
         <p class="px-0.5 pb-1 text-[10px] text-muted-foreground/60">
           点锁=该条起暂停发送进入管理态（编辑/删除安全） · 再点解锁放回 · 拖动排序（未锁定条）
         </p>
-        {#snippet row(item: TaskQueueItem, index: number)}
+        {#snippet row(item: TaskQueueItem)}
           <li
-            class="flex items-center gap-2 rounded border px-2 py-1 text-[12px] transition-colors {dragId === item.message_id
-              ? 'border-primary/50 bg-primary/5 opacity-60'
-              : 'border-border/60 bg-card'} {isHeld(item.message_id) ? 'opacity-75' : ''}"
-            draggable={draggable(item)}
-            ondragstart={(e) => onDragStart(e, item)}
-            ondragover={(e) => onDragOver(e, index)}
-            ondragend={onDragEnd}
-            class:cursor-grab={draggable(item)}
+            class="flex items-center gap-2 rounded border border-border/60 bg-card px-2 py-1 text-[12px] transition-colors {isHeld(item.message_id) ? 'opacity-75' : ''}"
           >
             <!-- status：三态锁定位（边界锁点击=解锁放回；被动锁点击=边界上移到该行；未锁点击=锁定） -->
             <button
@@ -343,18 +282,24 @@
           </p>
           <ul class="mb-1.5 flex flex-col gap-1">
             {#each pendingItems as item (item.message_id)}
-              {@render row(item, -1)}
+              {@render row(item)}
             {/each}
           </ul>
         {/if}
         <p class="px-0.5 pb-1 text-[10px] font-medium text-primary" title="本轮结束后按序逐条开轮">
           排队 · 按序生效（{queueItems.length}）
         </p>
-        <ul class="flex flex-col gap-1">
-          {#each queueItems as item, index (item.message_id)}
-            {@render row(item, index)}
+        <!-- dnd 容器（svelte-dnd-action）：实时插入预览（占位动画），松手落定。 -->
+        <section
+          class="dnd-queue flex flex-col gap-1"
+          use:dndzone={{ items: dndItems, flipDurationMs: 120, dropTargetStyle: {}, dropSourceStyle: { opacity: 0.4 } } as never}
+          onconsider={(e) => handleDndItems(e.detail.items)}
+          onfinalize={(e) => onDndFinalize(e.detail.items)}
+        >
+          {#each dndItems as item (item.id)}
+            {@render row(item)}
           {/each}
-        </ul>
+        </section>
       </div>
     {/if}
   </div>

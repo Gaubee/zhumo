@@ -37,6 +37,7 @@ import {
   TaskQueueEditInputSchema,
   TaskQueueEditConfirmInputSchema,
   TaskQueueLockInputSchema,
+  TaskQueueSetReorderingInputSchema,
   TaskQueueRemoveInputSchema,
   TaskQueueSetModeInputSchema,
   TaskQueueReorderInputSchema,
@@ -706,6 +707,20 @@ const tasksQueueEditConfirm = requireActiveUser
     }
   });
 
+const tasksQueueSetReordering = requireActiveUser
+  .input(TaskQueueSetReorderingInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      return await requireTaskService(context).queueSetReordering(
+        context.user as UserRow,
+        input.id,
+        input.paused,
+      );
+    } catch (error) {
+      return taskOwnedException(error);
+    }
+  });
+
 const tasksQueueLock = requireActiveUser
   .input(TaskQueueLockInputSchema)
   .handler(async ({ context, input }) => {
@@ -982,6 +997,7 @@ export const router = {
     queueEdit: tasksQueueEdit,
     queueEditConfirm: tasksQueueEditConfirm,
     queueLock: tasksQueueLock,
+    queueSetReordering: tasksQueueSetReordering,
     queueRemove: tasksQueueRemove,
     queueSetMode: tasksQueueSetMode,
     queueReorder: tasksQueueReorder,

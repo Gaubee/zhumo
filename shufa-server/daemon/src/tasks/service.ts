@@ -24,6 +24,7 @@ import type {
   TaskGetOutput,
   TaskItem,
   TaskQueueLockOutput,
+  TaskQueueSetReorderingOutput,
   TaskQueueEditConfirmOutput,
   TaskQueueEditOutput,
   TaskQueueListOutput,
@@ -578,6 +579,14 @@ export class TaskService {
     const task = this.requireOwnedTask(user, id);
     this.requireLiveSession(task);
     this.deps.sessions.queueLock(task.agent_session_id!, messageId);
+    return { accepted: true };
+  }
+
+  /** 拖动排序期暂停消费（demo=真暂停；真实内核 no-op）。 */
+  queueSetReordering(user: UserRow, id: string, paused: boolean): TaskQueueSetReorderingOutput {
+    const task = this.requireOwnedTask(user, id);
+    this.requireLiveSession(task);
+    this.deps.sessions.setQueueReordering(task.agent_session_id!, paused);
     return { accepted: true };
   }
 

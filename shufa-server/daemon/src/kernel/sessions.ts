@@ -225,6 +225,7 @@ class DemoAgent implements AgentLike {
   /** makeEntry 的 registerPanelAnswerer 会挂审批监听——demo 无审批，no-op 订阅。 */
   ctx = { on: (): (() => void) => () => {} };
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private paused = false;
 
   constructor(
     sessionId: string,
@@ -260,12 +261,28 @@ class DemoAgent implements AgentLike {
 
   /** 入队/续跑统一调度：有队头且无在途定时器才起表。 */
   private schedule(): void {
-    if (this.timer !== null || this.inbox.nextTurn.length === 0) return;
+    if (this.paused || this.timer !== null || this.inbox.nextTurn.length === 0) return;
     this.status = 'running';
     this.timer = setTimeout(() => {
       this.timer = null;
       this.consumeHead();
     }, this.demoDelayMs);
+  }
+
+  /** 暂停消费（前端拖动排序期间——Owner 设计：拖动时队列稳定不抖，松手恢复）。 */
+  pause(): void {
+    this.paused = true;
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.status = 'idle';
+  }
+
+  /** 恢复消费（松手）。 */
+  resume(): void {
+    this.paused = false;
+    this.schedule();
   }
 
   private consumeHead(): void {
@@ -894,6 +911,17 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     /** 演示模式是否激活（tasks.create 门控豁免依据）。 */
     isDemoActive(): boolean {
       return demoDelayMs > 0;
+    },
+
+    /** 拖动排序期暂停消费（Owner 设计：拖动时队列稳定，松手恢复）。
+     * DemoAgent 支持真暂停；真实内核 agent 无暂停原语——no-op（drop 时
+     * queueReorder 集合校验兜底并发消费）。 */
+    setQueueReordering(sessionId: string, paused: boolean): void {
+      const entry = live.get(sessionId);
+      if (!entry) return;
+      const agent = entry.agent as unknown as { pause?: () => void; resume?: () => void };
+      if (paused && typeof agent.pause === 'function') agent.pause();
+      else if (!paused && typeof agent.resume === 'function') agent.resume();
     },
 
     /** / 与 $ 面板目录（DSH 官方一致性：命令/技能注册表出自内核，非产品硬编码）。 */
