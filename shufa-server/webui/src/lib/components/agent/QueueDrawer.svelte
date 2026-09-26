@@ -72,9 +72,9 @@
    * 费——可安全编辑/删除）；lockBoundary=边界条（段内其余为被动锁定）。
    */
   const isHeld = (id: string): boolean => items.find((i) => i.message_id === id)?.held === true;
-  /** 可拖动 = 未锁排队条（锁定段/挂起项固定）。 */
+  /** 可拖动 = 排队条（含锁定段——锁只管不自动发送，不管排序）。挂起项无逐条生效序不可拖。 */
   const draggable = (item: TaskQueueItem): boolean =>
-    item.mode === "queue" && !isHeld(item.message_id) && editingId === null && !reordering;
+    item.mode === "queue" && editingId === null && !reordering;
   const lockStateOf = $derived.by(() => {
     const states = new Map<string, "unlocked" | "locked" | "passive">();
     for (const item of items) {
@@ -142,7 +142,7 @@
   }
 
   function onDragStart(event: DragEvent, item: TaskQueueItem): void {
-    if (isHeld(item.message_id) || editingId !== null) return;
+    if (item.mode !== "queue" || editingId !== null) return;
     dragId = item.message_id;
     localOrder = queueItems.map((i) => i.message_id);
     onreordering(true); // store 置位：暂停帧驱动刷新（面板锁定）
@@ -159,11 +159,9 @@
 
   function onDragEnd(): void {
     if (dragId === null || localOrder === null) return;
-    // 提交只含未锁条（held 条固定原位占位，后端 queueReorder 只认 inbox 段；
-    // 锁定段必为排队序队尾连续段，未锁段序还原即整序还原）。
-    const heldIds = new Set(items.filter((i) => i.held).map((i) => i.message_id));
-    const ordered = localOrder.filter((id) => !heldIds.has(id));
-    const original = queueItems.map((i) => i.message_id).filter((id) => !heldIds.has(id));
+    // 全量提交（含 held 条——锁只管不自动发送，排序照常；daemon 全局重切两段）。
+    const ordered = localOrder;
+    const original = items.map((i) => i.message_id);
     dragId = null;
     localOrder = null;
     onreordering(false); // 先解锁刷新，提交后 refreshQueue 拉权威序

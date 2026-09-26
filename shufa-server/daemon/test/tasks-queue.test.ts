@@ -219,6 +219,25 @@ describe('sessions 队列面板（W10b，内核 inbox）', () => {
     expect(sessions.queueView(sessionId).items.map((i) => i.text)).toEqual(['三', '一', '二']);
   });
 
+  it('W10h 减法：锁定条可参与全局重排——跨段移动自动重切锁边界（边界随条目走）', async () => {
+    const { sessionId, agent } = await seedQueue(['一', '二', '三']);
+    const ids = sessions.queueView(sessionId).items.map((i) => i.messageId);
+    // 锁「二」（边界=二，段=[二,三]）；把「三」拖到「一」前面（跨段移动）。
+    sessions.queueLock(sessionId, ids[1]!);
+    sessions.queueReorder(sessionId, [ids[2]!, ids[0]!, ids[1]!]);
+    // 边界仍随「二」走：未锁段=[三]、锁定段=[一(新的段首=边界), 二]？——
+    // 重切规则：边界条之前的进 inbox、边界及其后进锁定段 → 三 在边界（二）前 → 未锁。
+    let view = sessions.queueView(sessionId);
+    expect(view.items.map((i) => [i.text, i.held])).toEqual([
+      ['三', false],
+      ['一', false],
+      ['二', true],
+    ]);
+    expect(view.lockBoundary).toBe(ids[1]);
+    // 边界随「二」走：「三」重排到边界前 → 自动脱离锁定（可发送）；inbox=[三,一]。
+    expect(agent.inbox.nextTurn.map((m: unknown) => inboxText(m))).toEqual(['三', '一']);
+  });
+
   it('queueSendNow：目标提到队头 + cancel{user}+keepInbox（内核收敛后自动消费队头）', async () => {
     const { sessionId, agent } = await seedQueue(['一', '二', '三']);
     agent.status = 'running';

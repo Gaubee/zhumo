@@ -1254,11 +1254,15 @@ export function createTaskSessions(deps: TaskSessionDeps) {
   /** 拖动排序（Owner 设计 2026-09-27 二轮）：next-turn 全量重排（splice 换入）。
    * orderedIds 必须与当前队列恰为同集合（队头被消费等并发变化即拒绝，前端
    * 刷新重试）；next-step（引导/注入挂起项）无逐条生效序，不参与排序。 */
+  /** 全局重排（W10h 减法：锁只管不自动发送，排序照常）——orderedIds 为
+   * 全局排队序（未锁段 + 锁定段全量），按「边界前的进 inbox、边界及其后
+   * 进锁定段」重切两段。锁定段内重排 = 直接重写数组（内核不感知）。 */
   queueReorder(sessionId: string, orderedIds: string[]): void {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
     const turn = entry.agent.inbox.nextTurn;
-    const currentIds = turn.map(inboxMessageId);
+    const all = [...turn, ...entry.lockedQueue];
+    const currentIds = all.map(inboxMessageId);
     if (
       orderedIds.length !== currentIds.length ||
       new Set(orderedIds).size !== orderedIds.length ||
@@ -1266,9 +1270,14 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     ) {
       throw new Error('队列已变化（可能有消息正在被消费），请刷新后重试');
     }
-    const byId = new Map(turn.map((m) => [inboxMessageId(m), m]));
+    const byId = new Map(all.map((m) => [inboxMessageId(m), m]));
     const ordered = orderedIds.map((id) => byId.get(id)!);
-    entry.agent.inbox.splice('next-turn', 0, turn.length, ordered);
+    const boundaryIdx = entry.lockBoundaryId === null ? ordered.length : ordered.indexOf(entry.lockBoundaryId);
+    const unlockPart = ordered.slice(0, boundaryIdx);
+    const lockPart = ordered.slice(boundaryIdx);
+    entry.agent.inbox.splice('next-turn', 0, turn.length, unlockPart);
+    entry.lockedQueue = lockPart;
+    entry.lockBoundaryId = lockPart.length > 0 ? entry.lockBoundaryId : null;
   },
 
     /** 回答一个待答请求（未知/已解决返回 false）。 */
