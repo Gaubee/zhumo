@@ -118,7 +118,7 @@ const sessions = createTaskSessions({
           text: row.text,
           kind: row.kind,
           ...(row.effect !== null ? { effect: row.effect } : {}),
-          state: 'queued' as const,
+          state: row.state,
         })),
       };
     },

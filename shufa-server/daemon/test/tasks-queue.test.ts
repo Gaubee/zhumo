@@ -401,6 +401,92 @@ describe('sessions 统一队列（W10k：单一序列 + 单航次投递）', () 
     expect(sessions2.queueView(sid).items.filter((i) => !i.held)).toHaveLength(0);
   });
 
+  it('Codex P1 回归：admitted A 在途时 sendNow B——A 撤回无残留、B 唯一在途', async () => {
+    const { sid, agent } = await seedIdle('task-p1-sendnow');
+    sessions.followup(sid, 'A');
+    sessions.followup(sid, 'B');
+    expect(agent.inbox.nextTurn).toHaveLength(1); // A admitted
+    const view = sessions.queueView(sid);
+    sessions.queueSendNow(sid, view.items[1]!.messageId); // 立刻发送 B
+    // A 撤回（nextTurn 无残留旧消息），B 唯一在途。
+    expect(agent.inbox.nextTurn).toHaveLength(1);
+    expect(
+      sessions.queueView(sid).items.map((i) => i.text),
+    ).toEqual(['B', 'A']);
+  });
+
+  it('Codex P1 回归：锁定边界覆盖多个 inflight attach——后缀全部撤回', async () => {
+    const { sid, agent, turnStart } = await seedIdle('task-p1-lock-suffix');
+    turnStart(); // 外生运行轮
+    sessions.steer(sid, '补充甲');
+    sessions.steer(sid, '补充乙');
+    expect(agent.inbox.nextStep).toHaveLength(2); // 均已投内核
+    const view = sessions.queueView(sid);
+    sessions.queueLock(sid, view.items[0]!.messageId); // 锁首条（后缀=两条）
+    expect(agent.inbox.nextStep).toHaveLength(0); // 全部撤回
+    expect(sessions.queueView(sid).items.every((i) => i.held)).toBe(true);
+  });
+
+  it('Codex P1 回归：删除 admitted anchor——游标清理且下一条立即续泵', async () => {
+    const { sid, agent } = await seedIdle('task-p1-remove-admitted');
+    sessions.followup(sid, 'A');
+    sessions.followup(sid, 'B');
+    expect(agent.inbox.nextTurn).toHaveLength(1); // A
+    const view = sessions.queueView(sid);
+    sessions.queueRemove(sid, view.items[0]!.messageId);
+    // A 撤回 + B 同步续泵承认：nextTurn 恰一条（=B，视图只剩 B 可证非 A 残留）。
+    expect(agent.inbox.nextTurn).toHaveLength(1);
+    expect(sessions.queueView(sid).items.map((i) => i.text)).toEqual(['B']);
+  });
+
+  it('Codex P1 回归：恢复只回填 queued 态（admitted/inflight 走内核收养，防双投）', async () => {
+    const sessions2 = createTaskSessions({
+      kernel: () => asKernelHandle(kernel),
+      modelSelection: async () => ({ provider: 'zhipu', model: 'glm-5.3-flash' }),
+      retention: 50,
+      onQueueRestore: () => ({
+        lockBoundaryId: null,
+        items: [
+          { id: 'db-queued', text: '留存的', kind: 'anchor', state: 'queued' },
+          { id: 'db-admitted', text: '在途的', kind: 'anchor', state: 'admitted' },
+          { id: 'db-inflight', text: '飞行中', kind: 'attach', effect: 'steer', state: 'inflight' },
+        ],
+      }),
+    });
+    const created = await sessions2.createTaskSession('task-p1-restore', {
+      cwd: root,
+      framesFile: path.join(root, 'frames-p1r.jsonl'),
+      prompt: '初始',
+    });
+    expect(
+      sessions2.queueView(created.sessionId).items.map((i) => i.text),
+    ).toEqual(['留存的']);
+  });
+
+  it('Codex P1 回归：anchor 开轮后持久化不再包含该 anchor（防重启复活）', async () => {
+    const persisted: string[][] = [];
+    const sessions2 = createTaskSessions({
+      kernel: () => asKernelHandle(kernel),
+      modelSelection: async () => ({ provider: 'zhipu', model: 'glm-5.3-flash' }),
+      retention: 50,
+      onQueuePersist: (_sid, _taskId, items) => {
+        persisted.push(items.map((i) => i.text));
+      },
+    });
+    const created = await sessions2.createTaskSession('task-p1-persist', {
+      cwd: root,
+      framesFile: path.join(root, 'frames-p1p.jsonl'),
+      prompt: '初始',
+    });
+    const sid = created.sessionId;
+    const agent = kernel.created.at(-1)!;
+    sessions2.followup(sid, '唯一');
+    agent.inbox.splice('next-turn', 0, agent.inbox.nextTurn.length, []);
+    kernel.emitSessionEvent(sid, { seq: 5, type: 'turn/start', data: {} });
+    const last = persisted.at(-1) ?? [];
+    expect(last.includes('唯一')).toBe(false);
+  });
+
   it('不在册：队列操作抛错（调用方引导重开对话）', async () => {
     expect(() => sessions.queueView('nope')).toThrow('not found');
     expect(() => sessions.queueLock('nope', null)).toThrow('not found');

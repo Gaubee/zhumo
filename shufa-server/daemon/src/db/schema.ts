@@ -140,4 +140,27 @@ CREATE INDEX IF NOT EXISTS idx_task_queue_task ON task_queue(task_id);
 ALTER TABLE tasks ADD COLUMN queue_lock_boundary TEXT;
 `,
   },
+  {
+    // W10k 二轮（Codex 复核 P1，2026-09-28）：task_queue 加 state 列（崩溃恢复
+    // 只回填 queued——admitted/inflight 由内核收养，防双重投递）；外键改
+    // ON DELETE CASCADE（删用户/任务不再被队列行阻断）。SQLite 改外键须重建表。
+    version: 7,
+    up: `
+CREATE TABLE task_queue_v7 (
+  task_id    TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL,
+  seq        INTEGER NOT NULL,
+  kind       TEXT NOT NULL CHECK(kind IN ('anchor', 'attach')),
+  effect     TEXT CHECK(effect IN ('steer', 'inject')),
+  text       TEXT NOT NULL,
+  state      TEXT NOT NULL DEFAULT 'queued' CHECK(state IN ('queued', 'admitted', 'inflight')),
+  PRIMARY KEY (task_id, message_id)
+);
+INSERT INTO task_queue_v7 (task_id, message_id, seq, kind, effect, text, state)
+  SELECT task_id, message_id, seq, kind, effect, text, 'queued' FROM task_queue;
+DROP TABLE task_queue;
+ALTER TABLE task_queue_v7 RENAME TO task_queue;
+CREATE INDEX IF NOT EXISTS idx_task_queue_task ON task_queue(task_id);
+`,
+  },
 ];

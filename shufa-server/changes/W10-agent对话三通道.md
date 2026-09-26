@@ -198,6 +198,17 @@ actions 禁用+暂停帧驱动刷新防抖动，drop 一次性提交新序）。
   （浮影/影子/consider/finalize 均工作但库输出原序——环境退化嫌疑，交
   Owner 真实浏览器复测）。
 
+- W10k 二轮（Codex 复核 NEEDS-WORK 6.4/10 → 六个 P1 全修，2026-09-28）：
+  ① 撤回统一 kernelId ?? id + remove 返回值检查（撤不回=已消费随轮移除）；
+  ② 锁定撤回整个后缀在途（不只边界条——inflight attach 锁定后仍会执行）；
+  ③ 删除 admitted 清游标 + 立即续泵；④ task_queue 加 state 列（恢复只回填
+  queued，admitted/inflight 走内核收养防双投）+ anchor 开轮消费无条件落库；
+  ⑤ 迁移 v7 重建 task_queue 外键 ON DELETE CASCADE（删任务/用户不再被阻断）；
+  ⑥ 前端 attach 行开放立刻发送/编辑（去掉仅排队条件）。附带修 pump 头部
+  attach 连续段跳过 inflight（多条引导不再被首条阻断）。回归 +5 用例
+  （sendNow 撤回无残留/锁后缀全撤/删 admitted 续泵/恢复跳过非 queued/
+  开轮不复活）+ DB 层 2 用例（state 读写/级联删除）。172/172 绿。
+
 ### 已定位待修（Owner 指示下一步处理）
 
 - 排队消息不出现在对话面板：内核只在消息被消费（开轮）时落 session log

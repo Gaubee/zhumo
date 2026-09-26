@@ -917,6 +917,8 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       handle.agent.inbox.splice('next-turn', 0, adoptedTurn.length, []);
       handle.agent.inbox.splice('next-step', 0, adoptedStep.length, []);
     }
+    // 恢复只回填 queued 态：admitted/inflight 崩溃前在内核 inbox，收养
+    // 已重新纳入（DB 行跳过——Codex P1：防同一消息双重投递）。
     entry.queue = [
       ...adoptedStep.map((m) => ({
         id: inboxMessageId(m),
@@ -931,7 +933,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         kind: 'anchor' as const,
         state: 'queued' as const,
       })),
-      ...(restored?.items ?? []),
+      ...(restored?.items ?? []).filter((i) => i.state === 'queued'),
     ];
     entry.lockBoundaryId = restored?.lockBoundaryId ?? null;
     persistQueueState(entry);
@@ -974,12 +976,23 @@ export function createTaskSessions(deps: TaskSessionDeps) {
    *    轮结束事件里 pump 续跑。 */
   function pumpQueue(entry: LiveTaskSession): void {
     let mutated = false;
-    while (entry.queue.length > 0) {
-      const head = entry.queue[0]!;
-      if (head.kind !== 'attach' || head.state !== 'queued' || isHeld(entry, head)) break;
-      if (!entry.turnRunning && head.effect === 'inject') break; // inject 不唤醒
-      deliverAttach(entry, head);
+    // 头部 attach 连续段：跳过 inflight（已交付不阻断同轮后续补充）与 held/
+    // idle-inject（保持 pending），其余投给当前轮；遇 anchor 停（绑定它，待其开轮）。
+    let idx = 0;
+    while (idx < entry.queue.length) {
+      const item = entry.queue[idx]!;
+      if (item.kind === 'anchor') break;
+      if (item.state === 'inflight' || isHeld(entry, item)) {
+        idx += 1;
+        continue;
+      }
+      if (!entry.turnRunning && item.effect === 'inject') {
+        idx += 1; // inject 不唤醒：保持 pending 等下一次活动轮
+        continue;
+      }
+      deliverAttach(entry, item);
       mutated = true;
+      idx += 1;
     }
     const head = entry.queue[0];
     if (
@@ -1013,7 +1026,10 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       entry.activeAnchorId = entry.admittedAnchorId;
       entry.admittedAnchorId = null;
       const idx = entry.queue.findIndex((q) => q.id === entry.activeAnchorId);
-      if (idx >= 0) entry.queue.splice(idx, 1);
+      if (idx >= 0) {
+        entry.queue.splice(idx, 1);
+        persistQueueState(entry); // 无条件：anchor 已消费必须即刻落库（防重启复活）
+      }
     }
     pumpQueue(entry);
   }
@@ -1053,15 +1069,37 @@ export function createTaskSessions(deps: TaskSessionDeps) {
 
   /** 撤回在途承认的 anchor（从内核 next-turn 取回、回 queued、清游标）——
    * setMode/sendNow/reorder 等重排类操作的前置，防 stale 游标阻断 pump 或
-   * 被外生轮 turn/start 假配对消费。 */
+   * 被外生轮 turn/start 假配对消费。撤不回（已被消费/开轮中）→ 条目随
+   * 该轮终结，从队列移除（Codex 复核 P1：内核寻址必须 kernelId ?? id）。 */
   function withdrawAdmitted(entry: LiveTaskSession): void {
     if (entry.admittedAnchorId === null) return;
-    const item = entry.queue.find((q) => q.id === entry.admittedAnchorId);
-    if (item !== undefined && item.state === 'admitted') {
-      entry.agent.inbox.remove(item.id);
-      item.state = 'queued';
-    }
+    const idx = entry.queue.findIndex((q) => q.id === entry.admittedAnchorId);
     entry.admittedAnchorId = null;
+    if (idx < 0) return;
+    const item = entry.queue[idx]!;
+    if (item.state !== 'admitted') return;
+    if (entry.agent.inbox.remove(item.kernelId ?? item.id)) {
+      item.state = 'queued';
+    } else {
+      entry.queue.splice(idx, 1); // 已被内核消费：随轮终结，不残留队列
+    }
+  }
+
+  /** 锁定前撤回后缀全部在途条目（Codex 复核 P1：只撤边界条会漏掉其后的
+   * inflight attach——锁定后仍会在 step 边界执行）。撤不回的=已消费，随轮
+   * 终结移除。 */
+  function withdrawSuffixInFlight(entry: LiveTaskSession, fromIndex: number): void {
+    for (let i = entry.queue.length - 1; i >= fromIndex; i -= 1) {
+      const item = entry.queue[i]!;
+      if (item.state === 'queued') continue;
+      if (entry.agent.inbox.remove(item.kernelId ?? item.id)) {
+        item.state = 'queued';
+        if (entry.admittedAnchorId === item.id) entry.admittedAnchorId = null;
+      } else {
+        entry.queue.splice(i, 1);
+        if (entry.admittedAnchorId === item.id) entry.admittedAnchorId = null;
+      }
+    }
   }
 
   /** 命令目录缓存（内核命令注册表静态——插件装载后不变；boot 探针一次）。 */
@@ -1355,16 +1393,12 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       persistQueueState(entry);
       return;
     }
-    const target = entry.queue.find((q) => q.id === messageId);
-    if (target === undefined) throw new Error(`队列中没有该条目：${messageId}`);
-    if (target.state !== 'queued') {
-      if (!entry.agent.inbox.remove(target.kernelId ?? messageId)) {
-        throw new Error('该条目已生效，无法锁定（请刷新）');
-      }
-      if (entry.admittedAnchorId === messageId) entry.admittedAnchorId = null;
-      target.state = 'queued';
-    }
-    entry.lockBoundaryId = messageId;
+    const idx = entry.queue.findIndex((q) => q.id === messageId);
+    if (idx < 0) throw new Error(`队列中没有该条目：${messageId}`);
+    // 撤回边界及其后全部在途（Codex P1：漏掉的 inflight 锁定后仍会执行）；
+    // 撤不回的（已消费）随轮终结移除——锁定的是剩余序列。
+    withdrawSuffixInFlight(entry, idx);
+    entry.lockBoundaryId = entry.queue[idx] !== undefined ? entry.queue[idx]!.id : null;
     persistQueueState(entry);
   },
 
@@ -1403,6 +1437,9 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     const [removed] = entry.queue.splice(idx, 1);
     if (removed !== undefined && removed.state !== 'queued') {
       entry.agent.inbox.remove(removed.kernelId ?? messageId);
+      // Codex P1：删除在途承认项必须清游标，否则 pump 被假阻断 + 后续
+      // turn/start 假配对已删条目。
+      if (entry.admittedAnchorId === messageId) entry.admittedAnchorId = null;
     }
     if (
       entry.lockBoundaryId !== null &&
@@ -1410,6 +1447,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     ) {
       entry.lockBoundaryId = entry.queue[idx]?.id ?? null;
     }
+    pumpQueue(entry);
     persistQueueState(entry);
   },
 

@@ -259,22 +259,30 @@ export interface TaskQueueRow {
   kind: 'anchor' | 'attach';
   effect: 'steer' | 'inject' | null;
   text: string;
+  state: 'queued' | 'admitted' | 'inflight';
 }
 
-/** 队列整体覆写（每次变更全量重写——条目数个位数级，无需增量）。 */
+/** 队列整体覆写（每次变更全量重写——条目数个位数级，无需增量）。state 一并
+ * 落库：崩溃恢复只回填 queued（admitted/inflight 在内核侧，收养重新纳入）。 */
 export function overwriteTaskQueue(
   db: SqliteDb,
   taskId: string,
-  items: Array<{ id: string; text: string; kind: 'anchor' | 'attach'; effect?: 'steer' | 'inject' }>,
+  items: Array<{
+    id: string;
+    text: string;
+    kind: 'anchor' | 'attach';
+    effect?: 'steer' | 'inject';
+    state?: 'queued' | 'admitted' | 'inflight';
+  }>,
   lockBoundaryId: string | null,
 ): void {
   const wipe = db.transaction(() => {
     db.prepare('DELETE FROM task_queue WHERE task_id = ?').run(taskId);
     const insert = db.prepare(
-      'INSERT INTO task_queue (task_id, message_id, seq, kind, effect, text) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO task_queue (task_id, message_id, seq, kind, effect, text, state) VALUES (?, ?, ?, ?, ?, ?, ?)',
     );
     items.forEach((item, i) => {
-      insert.run(taskId, item.id, i, item.kind, item.effect ?? null, item.text);
+      insert.run(taskId, item.id, i, item.kind, item.effect ?? null, item.text, item.state ?? 'queued');
     });
     db.prepare('UPDATE tasks SET queue_lock_boundary = ? WHERE id = ?').run(
       lockBoundaryId,
@@ -290,8 +298,8 @@ export function readTaskQueue(
   taskId: string,
 ): { items: TaskQueueRow[]; lockBoundaryId: string | null } | null {
   const rows = db
-    .prepare('SELECT message_id, seq, kind, effect, text FROM task_queue WHERE task_id = ? ORDER BY seq')
-    .all(taskId) as Array<{ message_id: string; seq: number; kind: string; effect: string | null; text: string }>;
+    .prepare('SELECT message_id, seq, kind, effect, text, state FROM task_queue WHERE task_id = ? ORDER BY seq')
+    .all(taskId) as Array<{ message_id: string; seq: number; kind: string; effect: string | null; text: string; state: string }>;
   const boundaryRow = db
     .prepare('SELECT queue_lock_boundary FROM tasks WHERE id = ?')
     .get(taskId) as { queue_lock_boundary: string | null } | undefined;
@@ -305,6 +313,7 @@ export function readTaskQueue(
       kind: row.kind as 'anchor' | 'attach',
       effect: row.effect as 'steer' | 'inject' | null,
       text: row.text,
+      state: row.state as 'queued' | 'admitted' | 'inflight',
     })),
     lockBoundaryId: boundaryRow?.queue_lock_boundary ?? null,
   };

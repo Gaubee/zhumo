@@ -247,29 +247,29 @@
               {MODE_LABEL[item.mode]}
             </span>
             <span class="min-w-0 flex-1 truncate" title={item.text}>{item.text}</span>
-            <!-- actions：立刻发送/编辑（仅排队条目）/改模式/删除；锁定或拖动中禁用 -->
-            {#if item.mode === "queue"}
-              <button
-                type="button"
-                class="shrink-0 rounded p-1 text-muted-foreground hover:bg-primary/10 hover:text-primary disabled:opacity-30"
-                title={isHeld(item.message_id) ? "立刻发送：先解锁放回，再打断当前工作以本条开新一轮" : "立刻发送：打断当前工作，以这条消息立即开始新一轮"}
-                aria-label="立刻发送该消息"
-                disabled={editingId !== null || reordering}
-                onclick={() => onsendnow(item.message_id)}
-              >
-                <IconSend class="h-3 w-3" />
-              </button>
-              <button
-                type="button"
-                class="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
-                title={isHeld(item.message_id) ? "编辑锁定段消息（安全：解锁前不会发送）" : "编辑（该条及其后锁定，文本回输入框）"}
-                aria-label="编辑该消息"
-                disabled={editingId !== null || reordering}
-                onclick={() => onedit(item.message_id)}
-              >
-                <IconPencil class="h-3 w-3" />
-              </button>
-            {/if}
+            <!-- actions：立刻发送/编辑/改模式/删除——全部条目开放（做减法；拖动中禁用） -->
+            <button
+              type="button"
+              class="shrink-0 rounded p-1 text-muted-foreground hover:bg-primary/10 hover:text-primary disabled:opacity-30"
+              title={item.mode === 'queue'
+                ? '立刻发送：打断当前工作，以这条消息立即开始新一轮（带其后的补充组）'
+                : '立刻发送：立即投给当前轮（idle 时引导会开新轮）'}
+              aria-label="立刻发送该消息"
+              disabled={editingId !== null || reordering}
+              onclick={() => onsendnow(item.message_id)}
+            >
+              <IconSend class="h-3 w-3" />
+            </button>
+            <button
+              type="button"
+              class="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+              title={isHeld(item.message_id) ? '编辑锁定段消息（安全：解锁前不会发送）' : '编辑（该条及其后锁定，文本回输入框）'}
+              aria-label="编辑该消息"
+              disabled={editingId !== null || reordering}
+              onclick={() => onedit(item.message_id)}
+            >
+              <IconPencil class="h-3 w-3" />
+            </button>
             <Popover.Root open={modeOpenId === item.message_id} onOpenChange={(o) => (modeOpenId = o ? item.message_id : null)}>
               <Popover.Trigger>
                 {#snippet child({ props })}
