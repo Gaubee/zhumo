@@ -260,6 +260,7 @@ export interface TaskQueueRow {
   effect: 'steer' | 'inject' | null;
   text: string;
   state: 'queued' | 'admitted' | 'inflight';
+  kernel_id: string | null;
 }
 
 /** 队列整体覆写（每次变更全量重写——条目数个位数级，无需增量）。state 一并
@@ -273,16 +274,17 @@ export function overwriteTaskQueue(
     kind: 'anchor' | 'attach';
     effect?: 'steer' | 'inject';
     state?: 'queued' | 'admitted' | 'inflight';
+    kernelId?: string;
   }>,
   lockBoundaryId: string | null,
 ): void {
   const wipe = db.transaction(() => {
     db.prepare('DELETE FROM task_queue WHERE task_id = ?').run(taskId);
     const insert = db.prepare(
-      'INSERT INTO task_queue (task_id, message_id, seq, kind, effect, text, state) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO task_queue (task_id, message_id, seq, kind, effect, text, state, kernel_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     );
     items.forEach((item, i) => {
-      insert.run(taskId, item.id, i, item.kind, item.effect ?? null, item.text, item.state ?? 'queued');
+      insert.run(taskId, item.id, i, item.kind, item.effect ?? null, item.text, item.state ?? 'queued', item.kernelId ?? null);
     });
     db.prepare('UPDATE tasks SET queue_lock_boundary = ? WHERE id = ?').run(
       lockBoundaryId,
@@ -298,8 +300,8 @@ export function readTaskQueue(
   taskId: string,
 ): { items: TaskQueueRow[]; lockBoundaryId: string | null } | null {
   const rows = db
-    .prepare('SELECT message_id, seq, kind, effect, text, state FROM task_queue WHERE task_id = ? ORDER BY seq')
-    .all(taskId) as Array<{ message_id: string; seq: number; kind: string; effect: string | null; text: string; state: string }>;
+    .prepare('SELECT message_id, seq, kind, effect, text, state, kernel_id FROM task_queue WHERE task_id = ? ORDER BY seq')
+    .all(taskId) as Array<{ message_id: string; seq: number; kind: string; effect: string | null; text: string; state: string; kernel_id: string | null }>;
   const boundaryRow = db
     .prepare('SELECT queue_lock_boundary FROM tasks WHERE id = ?')
     .get(taskId) as { queue_lock_boundary: string | null } | undefined;
@@ -314,6 +316,7 @@ export function readTaskQueue(
       effect: row.effect as 'steer' | 'inject' | null,
       text: row.text,
       state: row.state as 'queued' | 'admitted' | 'inflight',
+      kernel_id: row.kernel_id,
     })),
     lockBoundaryId: boundaryRow?.queue_lock_boundary ?? null,
   };

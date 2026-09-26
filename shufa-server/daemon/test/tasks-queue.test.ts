@@ -10,6 +10,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { createTaskSessions } from '../src/kernel/sessions.js';
 import { asKernelHandle, FakeKernel } from './helpers-task.js';
 
@@ -485,6 +486,62 @@ describe('sessions 统一队列（W10k：单一序列 + 单航次投递）', () 
     kernel.emitSessionEvent(sid, { seq: 5, type: 'turn/start', data: {} });
     const last = persisted.at(-1) ?? [];
     expect(last.includes('唯一')).toBe(false);
+  });
+
+  it('Codex 复评 P1-A：撤回失败（已消费）不重投——setMode/reorder/sendNow 全拒绝或剔除', async () => {
+    const { sid, agent, turnStart, turnEnd } = await seedIdle('task-p1a');
+    // setMode：admitted anchor 被内核消费（移出 inbox 模拟）→ 拒绝。
+    sessions.followup(sid, 'A');
+    const a = sessions.queueView(sid).items[0]!;
+    agent.inbox.splice('next-turn', 0, agent.inbox.nextTurn.length, []); // 模拟已消费
+    expect(() => sessions.queueSetMode(sid, a.messageId, 'inject')).toThrow('已生效');
+    // sendNow：attach inflight 被消费 → 目标已消费拒绝；组员已消费剔除。
+    kernel.emitSessionEvent(sid, { seq: 20, type: 'turn/start', data: {} });
+    sessions.steer(sid, '引导被消费');
+    const v2 = sessions.queueView(sid);
+    const steerItem = v2.items.find((i) => i.text === '引导被消费')!;
+    agent.inbox.splice('next-step', 0, agent.inbox.nextStep.length, []); // 模拟 step 已消费
+    expect(() => sessions.queueSendNow(sid, steerItem.messageId)).toThrow('已生效');
+    turnEnd();
+    // reorder：admitted 被消费 → 集合漂移自然拒绝。
+    sessions.followup(sid, 'B');
+    const b = sessions.queueView(sid).items.find((i) => i.text === 'B')!;
+    agent.inbox.splice('next-turn', 0, agent.inbox.nextTurn.length, []);
+    // 调用方视图含已消费的 B → 集合漂移，如实拒绝「队列已变化」；B 已随轮移除。
+    expect(() => sessions.queueReorder(sid, [b.messageId])).toThrow('队列已变化');
+    expect(sessions.queueView(sid).items.map((i) => i.text)).toEqual([]);
+  });
+
+  it('Codex 复评 P1-B：恢复去重——内核收养与 DB 行同条（kernelId 精确 + kind/text 兜底）不双投', async () => {
+    // 旧 v6 行（无 kernelId，state 缺省 queued）+ 内核 nextTurn 同文本 → 收养为准。
+    const sessions2 = createTaskSessions({
+      kernel: () => asKernelHandle(kernel),
+      modelSelection: async () => ({ provider: 'zhipu', model: 'glm-5.3-flash' }),
+      retention: 50,
+      onQueueRestore: () => ({
+        lockBoundaryId: null,
+        items: [
+          { id: 'db-1', text: '同文本锚点', kind: 'anchor', state: 'queued' },
+          { id: 'db-2', text: '纯 DB 锚点', kind: 'anchor', state: 'queued' },
+        ],
+      }),
+    });
+    const created = await sessions2.createTaskSession('task-p1b', {
+      cwd: root,
+      framesFile: path.join(root, 'frames-p1b.jsonl'),
+      prompt: '初始',
+    });
+    const agent = kernel.created.at(-1)!;
+    agent.followup(
+      createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '同文本锚点' }] }),
+    );
+    await sessions2.resumeTaskSession('task-p1b', {
+      sessionId: created.sessionId,
+      framesFile: path.join(root, 'frames-p1b.jsonl'),
+    });
+    const items = sessions2.queueView(created.sessionId).items;
+    expect(items.filter((i) => i.text === '同文本锚点')).toHaveLength(1); // 不双投
+    expect(items.filter((i) => i.text === '纯 DB 锚点')).toHaveLength(1); // 保留
   });
 
   it('不在册：队列操作抛错（调用方引导重开对话）', async () => {

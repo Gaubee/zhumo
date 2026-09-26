@@ -918,7 +918,12 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       handle.agent.inbox.splice('next-step', 0, adoptedStep.length, []);
     }
     // 恢复只回填 queued 态：admitted/inflight 崩溃前在内核 inbox，收养
-    // 已重新纳入（DB 行跳过——Codex P1：防同一消息双重投递）。
+    // 已重新纳入（DB 行跳过——Codex P1：防同一消息双重投递）。另按
+    // kernelId 精确去重 + kind/text 兜底（v6 旧行无 kernelId——迁移窗口
+    // 内核与 DB 同条并存时内核侧为真，DB 行剔除）。
+    const adoptedAnchorTexts = new Set(adoptedTurn.map((m) => inboxMessageText(m)));
+    const adoptedAttachTexts = new Set(adoptedStep.map((m) => inboxMessageText(m)));
+    const adoptedIds = new Set([...adoptedTurn, ...adoptedStep].map((m) => inboxMessageId(m)));
     entry.queue = [
       ...adoptedStep.map((m) => ({
         id: inboxMessageId(m),
@@ -933,7 +938,13 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         kind: 'anchor' as const,
         state: 'queued' as const,
       })),
-      ...(restored?.items ?? []).filter((i) => i.state === 'queued'),
+      ...(restored?.items ?? []).filter(
+        (i) =>
+          i.state === 'queued' &&
+          !(i.kernelId !== undefined && adoptedIds.has(i.kernelId)) &&
+          !(i.kind === 'anchor' && adoptedAnchorTexts.has(i.text)) &&
+          !(i.kind === 'attach' && adoptedAttachTexts.has(i.text)),
+      ),
     ];
     entry.lockBoundaryId = restored?.lockBoundaryId ?? null;
     persistQueueState(entry);
@@ -1085,6 +1096,20 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     }
   }
 
+  /** 统一撤回原语（Codex 复评 P1-A）：从内核取回在途条目。
+   * 'withdrawn' = 取回成功回 queued；'consumed' = 内核已消费（随轮终结，
+   * 从队列移除）。游标匹配即清。 */
+  function withdrawItem(entry: LiveTaskSession, item: W10kQueueItem): 'withdrawn' | 'consumed' {
+    if (entry.admittedAnchorId === item.id) entry.admittedAnchorId = null;
+    if (entry.agent.inbox.remove(item.kernelId ?? item.id)) {
+      item.state = 'queued';
+      return 'withdrawn';
+    }
+    const idx = entry.queue.indexOf(item);
+    if (idx >= 0) entry.queue.splice(idx, 1);
+    return 'consumed';
+  }
+
   /** 锁定前撤回后缀全部在途条目（Codex 复核 P1：只撤边界条会漏掉其后的
    * inflight attach——锁定后仍会在 step 边界执行）。撤不回的=已消费，随轮
    * 终结移除。 */
@@ -1092,13 +1117,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     for (let i = entry.queue.length - 1; i >= fromIndex; i -= 1) {
       const item = entry.queue[i]!;
       if (item.state === 'queued') continue;
-      if (entry.agent.inbox.remove(item.kernelId ?? item.id)) {
-        item.state = 'queued';
-        if (entry.admittedAnchorId === item.id) entry.admittedAnchorId = null;
-      } else {
-        entry.queue.splice(i, 1);
-        if (entry.admittedAnchorId === item.id) entry.admittedAnchorId = null;
-      }
+      withdrawItem(entry, item);
     }
   }
 
@@ -1460,9 +1479,9 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
     const item = entry.queue.find((q) => q.id === messageId);
     if (item === undefined) throw new Error(`队列中没有该条目：${messageId}`);
-    if (item.state !== 'queued') entry.agent.inbox.remove(item.kernelId ?? messageId);
-    if (entry.admittedAnchorId === messageId) entry.admittedAnchorId = null;
-    item.state = 'queued';
+    if (item.state !== 'queued' && withdrawItem(entry, item) === 'consumed') {
+      throw new Error('该条目已生效，无法修改模式（请刷新）');
+    }
     if (mode === 'queue') {
       item.kind = 'anchor';
       delete item.effect;
@@ -1501,12 +1520,19 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     }
     entry.queue.unshift(...group);
     // 撤回一切在途（组内 admitted 与组外 stale 承认——next-turn 必须让位给
-    // 新队首，否则内核会先跑旧承认项破坏组语义）。
+    // 新队首，否则内核会先跑旧承认项破坏组语义）。组员已消费=随轮终结，
+    // 从组中剔除（不重投）；目标自身已消费=拒绝本次操作。
     withdrawAdmitted(entry);
+    const consumedIds = new Set<string>();
     for (const member of group) {
-      if (member.state === 'inflight') entry.agent.inbox.remove(member.kernelId ?? member.id);
-      member.state = 'queued';
+      if (member.state !== 'queued' && withdrawItem(entry, member) === 'consumed') {
+        consumedIds.add(member.id);
+      }
     }
+    if (consumedIds.has(messageId)) {
+      throw new Error('该条目已生效，无法立刻发送（请刷新）');
+    }
+    group = group.filter((m) => !consumedIds.has(m.id));
     // 边界收敛：组来自锁定段时，原后继（旧序中组后第一条，必仍在锁定段）
     // 接班边界；组原本就是队尾则解锁。
     if (entry.lockBoundaryId !== null) {
@@ -1531,21 +1557,20 @@ export function createTaskSessions(deps: TaskSessionDeps) {
   queueReorder(sessionId: string, orderedIds: string[]): void {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
-    const reorderable = entry.queue.filter((q) => q.state !== 'inflight');
-    const reorderableIds = reorderable.map((q) => q.id);
+    // 先撤回在途承认（Codex 复评 P1-A：remove 失败=已消费，剔除后再校验——
+    // 集合漂移自然走「队列已变化」拒绝，不重投已消费消息）。
+    for (const item of entry.queue.filter((q) => q.state === 'admitted')) {
+      withdrawItem(entry, item);
+    }
+    const reorderableIds = entry.queue
+      .filter((q) => q.state !== 'inflight')
+      .map((q) => q.id);
     if (
       orderedIds.length !== reorderableIds.length ||
       new Set(orderedIds).size !== orderedIds.length ||
       orderedIds.some((id) => !reorderableIds.includes(id))
     ) {
       throw new Error('队列已变化（可能有消息正在被消费），请刷新后重试');
-    }
-    for (const item of reorderable) {
-      if (item.state === 'admitted') {
-        entry.agent.inbox.remove(item.kernelId ?? item.id);
-        if (entry.admittedAnchorId === item.id) entry.admittedAnchorId = null;
-        item.state = 'queued';
-      }
     }
     const byId = new Map(entry.queue.map((q) => [q.id, q]));
     const reordered = orderedIds.map((id) => byId.get(id)!);

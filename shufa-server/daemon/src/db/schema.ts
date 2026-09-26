@@ -163,4 +163,12 @@ ALTER TABLE task_queue_v7 RENAME TO task_queue;
 CREATE INDEX IF NOT EXISTS idx_task_queue_task ON task_queue(task_id);
 `,
   },
+  {
+    // W10k 三轮（Codex 复评 P1-B，2026-09-28）：kernel_id 落库——恢复时与
+    // 内核收养消息精确去重（防「内核已收、DB 未存 state」崩溃窗口双投）。
+    version: 8,
+    up: `
+ALTER TABLE task_queue ADD COLUMN kernel_id TEXT;
+`,
+  },
 ];

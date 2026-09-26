@@ -119,6 +119,7 @@ const sessions = createTaskSessions({
           kind: row.kind,
           ...(row.effect !== null ? { effect: row.effect } : {}),
           state: row.state,
+          ...(row.kernel_id !== null ? { kernelId: row.kernel_id } : {}),
         })),
       };
     },

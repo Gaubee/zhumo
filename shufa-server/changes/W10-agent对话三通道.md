@@ -209,6 +209,14 @@ actions 禁用+暂停帧驱动刷新防抖动，drop 一次性提交新序）。
   （sendNow 撤回无残留/锁后缀全撤/删 admitted 续泵/恢复跳过非 queued/
   开轮不复活）+ DB 层 2 用例（state 读写/级联删除）。172/172 绿。
 
+- W10k 三轮（Codex 复评 7.6/10 剩余两 P1 全修，2026-09-28）：A①统一撤回
+  原语 withdrawItem（remove 返回值检查：withdrawn=取回/consumed=随轮移除），
+  setMode/sendNow/reorder 三处全走原语——setMode 目标已消费拒绝、sendNow
+  组员已消费剔除（目标已消费拒绝）、reorder 先撤回再校验（漂移如实拒绝）；
+  B②迁移 v8 kernel_id 落库 + 恢复去重（kernelId 精确匹配 + v6 旧行
+  kind/text 兜底——内核收养为准，DB 行剔除防双投）。回归 +2 用例（撤回
+  失败三路径 / 恢复去重不双投）。174/174 绿。
+
 ### 已定位待修（Owner 指示下一步处理）
 
 - 排队消息不出现在对话面板：内核只在消息被消费（开轮）时落 session log
