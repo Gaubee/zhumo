@@ -334,7 +334,7 @@
         />
         <ComposerCard
           bind:this={composerRef}
-          onsend={(text) => void sendPrompt(text)}
+          onsend={(text, mode) => void sendPrompt(text, mode ?? "followup")}
           onstop={() => void stopPrompt()}
           editingActive={queue.editingId !== null}
           editingDraft={editingDraft}

@@ -20,7 +20,7 @@ import { loadConfig, volatileRootWarning } from './config.js';
 import { openDatabase } from './db/database.js';
 import { BlobStore } from './db/blobs.js';
 import { createUser, listUsers } from './db/store.js';
-import { getTaskById } from './db/tasks.js';
+import { getTaskById, overwriteTaskQueue, readTaskQueue } from './db/tasks.js';
 import { DaemonHttp } from './http.js';
 import { kernelDisabledByEnv, mountShufaKernel, type ShufaKernelHandle } from './kernel/boot.js';
 import { createTaskSessions } from './kernel/sessions.js';
@@ -104,6 +104,24 @@ const sessions = createTaskSessions({
     onSessionIdle: (sessionId) => tasks.markSessionIdle(sessionId),
     // 2026-09-25 三轮：内核 session/title 帧落任务行（列表标题告别 prompt 截断）。
     onSessionTitle: (sessionId, title) => tasks.applySessionTitle(sessionId, title),
+    // W10k 统一队列持久化（daemon 单一事实源；会话装配时读回）。
+    onQueuePersist: (sessionId, taskId, items, lockBoundaryId) => {
+      overwriteTaskQueue(db, taskId, items, lockBoundaryId);
+    },
+    onQueueRestore: (sessionId, taskId) => {
+      const restored = readTaskQueue(db, taskId);
+      if (restored === null) return null;
+      return {
+        lockBoundaryId: restored.lockBoundaryId,
+        items: restored.items.map((row) => ({
+          id: row.message_id,
+          text: row.text,
+          kind: row.kind,
+          ...(row.effect !== null ? { effect: row.effect } : {}),
+          state: 'queued' as const,
+        })),
+      };
+    },
   });
 
   const blobs = new BlobStore(config.dataRoot, db);

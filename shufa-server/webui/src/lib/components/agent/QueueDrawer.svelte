@@ -1,15 +1,16 @@
 <script lang="ts">
   /**
-   * 队列抽屉（W10c，Owner 设计 2026-09-27 二轮）：输入面板上方紧贴长出的
-   * 手风琴——收起=一行预览（条数 + 下一条文本），展开=完整队列列表。
-   * 行布局：status（三态锁，Owner 设计 2026-09-27）+ 单行文本（含模式微标）
-   * + actions（立刻发送/编辑/改模式/删除）。锁三态：解锁 / 主动锁定（点击
-   * 上锁）/ 被动锁定（生效序中位于主动锁之后的条目因互斥连带锁定，点击=
-   * 把主动锁上移到该行）。锁定（含被动）禁操作不可拖、重排固定原位。
-   * 整行可拖动排序（HTML5 DnD）：拖动开始即全面板锁定（actions 禁用、暂停
-   * 帧驱动刷新防抖动），drop 一次性提交新序。
+   * 队列抽屉（W10c→W10k 重做，Owner 语义 2026-09-28）：输入面板上方紧贴长出
+   * 的手风琴——收起=一行预览（条数 + 下一条），展开=完整投递序列。
+   * W10k 单一有序序列（Codex 讨论定稿）：queue=开轮锚点，steer/inject=补充
+   * （绑定前方最近锚点，头部=当前轮）——不再分「挂起/排队」两组；分组由
+   * 顺序派生，拖动重排即重新绑定。
+   * 行布局：status（三态锁）+ 模式微标 + 单行文本 + actions（立刻发送/编辑/
+   * 改模式/删除）。锁三态：解锁/主动锁定（边界条）/被动锁定（边界后缀，
+   * 位置派生）。锁=只是不自动投递，其余全开放（做减法定稿）。
+   * 整行可拖动排序（svelte-dnd-action 实时插入预览）：拖动开始即全面板锁定
+   * （actions 禁用、暂停帧驱动刷新防抖动），drop 一次性提交新序。
    */
-  import { slide } from "svelte/transition";
   import { dndzone } from "svelte-dnd-action";
   import IconChevronDown from "@lucide/svelte/icons/chevron-down";
   import IconPencil from "@lucide/svelte/icons/pencil";
@@ -56,7 +57,7 @@
   } = $props();
 
   const MODE_LABEL: Record<TaskQueueMode, string> = {
-    queue: "排队",
+    queue: "开轮",
     steer: "引导",
     inject: "注入",
   };
@@ -89,11 +90,22 @@
     lockStateOf.get(id) ?? "unlocked";
   const isHeld = (id: string): boolean => items.find((i) => i.message_id === id)?.held === true;
 
-  /** 两组视图（W10g 时序如实表达）：挂起组（引导/注入=当前轮下一 step 边界，
-   * 时序上先于排队）在前；排队组按生效序（含 held 锁定段）。dnd 容器只装
-   * 排队组——挂起项无逐条生效序。 */
-  const queueItems = $derived(items.filter((i) => i.mode === "queue"));
-  const pendingItems = $derived(items.filter((i) => i.mode !== "queue"));
+  /** W10k 单一序列（Owner 语义 2026-09-28）：不再分「挂起/排队」两组——
+   * queue=anchor（开轮锚点），steer/inject=attach（补充，绑定前方最近
+   * anchor；头部 attach=当前轮）。inflight（已交内核在途）只读不参与操作。
+   * 绑定与分组全部由顺序派生，拖动重排即重绑定。 */
+  const listItems = $derived(items.filter((i) => i.inflight !== true));
+  const inflightCount = $derived(items.length - listItems.length);
+  /** 收起态预览：队头下一条要生效的内容（本轮补充优先，否则下一轮）。 */
+  const previewText = $derived.by(() => {
+    const first = listItems[0];
+    if (first === undefined) return null;
+    return first.mode === 'queue'
+      ? `下一条（新开一轮）：${first.text}`
+      : first.mode === 'steer'
+        ? `即将生效（本轮下一步补充）：${first.text}`
+        : `即将注入（本轮上下文）：${first.text}`;
+  });
 
   /** dnd-action 容器 items（库要求可变数组带 id；拖动中库实时回写=插入预览）。
    * 与 props 同步：非拖动期以 props 为准（items 变化重灌），拖动期不动。 */
@@ -101,11 +113,26 @@
   let syncing = false;
   $effect(() => {
     if (reordering) return;
-    const next = queueItems.map((i) => ({ ...i, id: i.message_id }));
+    const next = listItems.map((i) => ({ ...i, id: i.message_id }));
     if (JSON.stringify(next.map((n) => n.id)) !== JSON.stringify(dndItems.map((n) => n.id)) || syncing) {
       syncing = false;
       dndItems = next;
     }
+  });
+
+  /** 行分组派生（dnd 容器版，与 rowGroups 同规则）。 */
+  const dndRows = $derived.by(() => {
+    const rows: Array<{ item: TaskQueueItem & { id: string }; bound: 'current' | 'anchor' }> = [];
+    let seenAnchor = false;
+    for (const item of dndItems) {
+      if (item.mode === 'queue') {
+        seenAnchor = true;
+        rows.push({ item, bound: 'anchor' });
+      } else {
+        rows.push({ item, bound: seenAnchor ? 'anchor' : 'current' });
+      }
+    }
+    return rows;
   });
 
   function handleDndItems(newItems: Array<Record<string, unknown>>): void {
@@ -133,7 +160,7 @@
       aria-expanded={open}
     >
       <IconChevronDown class="h-3 w-3 shrink-0 transition-transform {open ? '' : '-rotate-90'}" aria-hidden="true" />
-      <span>投递队列（{items.length}）</span>
+      <span>投递序列（{items.length}）</span>
       {#if editingId !== null}
         <span class="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-600">编辑中（锁定段内，Esc 取消不改锁）</span>
         <span class="flex-1"></span>
@@ -156,9 +183,7 @@
         </span>
       {:else if items.length > 0}
         <span class="min-w-0 flex-1 truncate text-muted-foreground/70">
-          {pendingItems.length > 0
-            ? `即将生效：${pendingItems[0]?.text}`
-            : `下一条：${queueItems[0]?.text}`}
+          {previewText ?? ''}{inflightCount > 0 ? ` · ${inflightCount} 条生效中` : ''}
         </span>
       {:else}
         <span class="flex-1"></span>
@@ -166,13 +191,18 @@
     </button>
 
     {#if open}
-      <div class="border-t border-border/60 px-2 py-1.5" transition:slide={{ duration: 140 }}>
+      <!-- 无过渡动画（W10k）：svelte slide 的 JS 过渡在标签页隐藏/动画节流时会冻结
+           在 0 高+0 透明态——内容与输入框重叠、拖拽失效（实测两次）。开合即时。 -->
+      <div class="border-t border-border/60 px-2 py-1.5">
         <p class="px-0.5 pb-1 text-[10px] text-muted-foreground/60">
-          点锁=该条起暂停发送进入管理态（编辑/删除安全） · 再点解锁放回 · 拖动排序（未锁定条）
+          开轮=新起一轮 · 引导/注入=补充给它上方最近的开轮条目（顶部无开轮条=补充当前轮） · 点锁=暂停自动发送 · 拖动排序
         </p>
-        {#snippet row(item: TaskQueueItem)}
+        {#snippet row(r: { item: TaskQueueItem; bound: 'current' | 'anchor' })}
+          {@const item = r.item}
           <li
-            class="flex items-center gap-2 rounded border border-border/60 bg-card px-2 py-1 text-[12px] transition-colors {isHeld(item.message_id) ? 'opacity-75' : ''}"
+            class="flex items-center gap-2 rounded border border-border/60 bg-card px-2 py-1 text-[12px] transition-colors {r.bound === 'anchor' && item.mode !== 'queue'
+              ? 'ml-4 border-l-2 border-l-primary/30'
+              : ''} {isHeld(item.message_id) ? 'opacity-75' : ''}"
           >
             <!-- status：三态锁定位（边界锁点击=解锁放回；被动锁点击=边界上移到该行；未锁点击=锁定）。
                  开/闭两个图标常驻 DOM 由 data-lock CSS 切换（不 {#if} 切换）——拖动库在起始帧
@@ -197,14 +227,22 @@
               <IconLockOpen class="h-3 w-3 lock-ico-open" />
               <IconLock class="h-3 w-3 lock-ico-closed" />
             </button>
-            <!-- 模式微标 + 单行文本 -->
+            <!-- 模式微标 + 单行文本：开轮=主色锚点；补充·当前轮=琥珀；补充·引导/注入=跟随色 -->
+            {#if r.bound === 'current' && item.mode !== 'queue'}
+              <span
+                class="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-600"
+                title="补充当前轮：下一 step 边界生效（idle 时引导会开新轮）"
+              >
+                本轮
+              </span>
+            {/if}
             <span
               class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] {item.mode === 'queue'
                 ? 'bg-primary/10 text-primary'
                 : item.mode === 'steer'
                   ? 'bg-amber-500/15 text-amber-600'
                   : 'bg-violet-500/15 text-violet-600'}"
-              title={item.mode === 'queue' ? '本轮结束后自动开轮' : item.mode === 'steer' ? '下一 step 边界影响当前轮' : '注入上下文（不作为对话轮）'}
+              title={item.mode === 'queue' ? '开轮：新起一轮逐条发送' : item.mode === 'steer' ? '引导：补充给它上方最近的开轮条目（下一 step 边界生效）' : '注入：作为上下文补充（不作为对话轮）'}
             >
               {MODE_LABEL[item.mode]}
             </span>
@@ -278,28 +316,19 @@
           </li>
         {/snippet}
 
-        {#if pendingItems.length > 0}
-          <p class="px-0.5 pb-1 pt-0.5 text-[10px] font-medium text-amber-600" title="当前轮的下一 step 边界立即消费——时序上先于全部排队消息">
-            即将生效 · 当前轮下一步（{pendingItems.length}）
-          </p>
-          <ul class="mb-1.5 flex flex-col gap-1">
-            {#each pendingItems as item (item.message_id)}
-              {@render row(item)}
-            {/each}
-          </ul>
-        {/if}
-        <p class="px-0.5 pb-1 text-[10px] font-medium text-primary" title="本轮结束后按序逐条开轮">
-          排队 · 按序生效（{queueItems.length}）
+        <p class="px-0.5 pb-1 text-[10px] font-medium text-primary" title="W10k 单一序列：开轮条目之间逐轮发送，引导/注入跟随各自的开轮条目">
+          投递序列（{listItems.length}）
         </p>
-        <!-- dnd 容器（svelte-dnd-action）：实时插入预览（占位动画），松手落定。 -->
+        <!-- dnd 容器（svelte-dnd-action）：整条序列一个容器——实时插入预览（占位
+             动画），松手落定；补充条目拖过开轮条目即重新绑定。 -->
         <section
           class="dnd-queue flex flex-col gap-1"
           use:dndzone={{ items: dndItems, flipDurationMs: 120, dropTargetStyle: {} } as never}
           onconsider={(e) => handleDndItems(e.detail.items)}
           onfinalize={(e) => onDndFinalize(e.detail.items)}
         >
-          {#each dndItems as item (item.id)}
-            {@render row(item)}
+          {#each dndRows as r (r.item.id)}
+            {@render row(r)}
           {/each}
         </section>
       </div>

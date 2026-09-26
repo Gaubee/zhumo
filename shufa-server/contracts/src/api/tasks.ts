@@ -133,13 +133,16 @@ export type TaskFollowupInput = z.infer<typeof TaskFollowupInputSchema>;
 export const TaskQueueModeSchema = z.enum(['queue', 'steer', 'inject']);
 export type TaskQueueMode = z.infer<typeof TaskQueueModeSchema>;
 
-/** 队列条目（内核 inbox 消息的产品视图：id 稳定，跨编辑 replace 保持可寻址）。
- * held=true：位于锁定段（已暂离内核 inbox，不会被消费——安全编辑/删除）。 */
+/** 队列条目（W10k daemon 单一事实源序列的产品视图：id 稳定，编辑原地改
+ * 文本）。held=true：位于锁定段（边界条及其后的连续后缀——不自动投递，
+ * 其余操作全开放）。inflight=true：attach 已交内核（下一 step 生效，轮终
+ * 清扫——前端只读呈现）。 */
 export const TaskQueueItemSchema = z.object({
   message_id: z.string(),
   mode: TaskQueueModeSchema,
   text: z.string(),
   held: z.boolean().optional(),
+  inflight: z.boolean().optional(),
 });
 export type TaskQueueItem = z.infer<typeof TaskQueueItemSchema>;
 

@@ -120,4 +120,24 @@ ALTER TABLE tasks ADD COLUMN model_effort TEXT;
 ALTER TABLE tasks ADD COLUMN title TEXT;
 `,
   },
+  {
+    // W10k 统一队列（Owner 语义 2026-09-28）：单一有序序列 daemon 单一事实源——
+    // anchor（开轮）/ attach（补充，effect=steer|inject）。内核 inbox 退化为瞬时
+    // 投递缓冲；队列本体落库（daemon 重启恢复）。tasks.queue_lock_boundary=
+    // 锁定边界 message_id（null=未锁）。
+    version: 6,
+    up: `
+CREATE TABLE IF NOT EXISTS task_queue (
+  task_id    TEXT NOT NULL REFERENCES tasks(id),
+  message_id TEXT NOT NULL,
+  seq        INTEGER NOT NULL,
+  kind       TEXT NOT NULL CHECK(kind IN ('anchor', 'attach')),
+  effect     TEXT CHECK(effect IN ('steer', 'inject')),
+  text       TEXT NOT NULL,
+  PRIMARY KEY (task_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_queue_task ON task_queue(task_id);
+ALTER TABLE tasks ADD COLUMN queue_lock_boundary TEXT;
+`,
+  },
 ];

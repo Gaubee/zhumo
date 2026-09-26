@@ -161,6 +161,43 @@ actions 禁用+暂停帧驱动刷新防抖动，drop 一次性提交新序）。
 - 走查注意：浏览器可能缓存旧 bundle（dropSourceStyle 警告为旧版指纹）
   ——复测前强刷/加 cache-bust 参数。
 
+### W10k 统一队列模型重做（Owner 指示「做减法」，ZCode×Codex 设计讨论定稿，2026-09-28）
+
+- Owner 指出 BUG：W10g 把引导（next-step 桶）与排队（next-turn 桶）分两组
+  展示/消费是错的——真实语义是交错单序列：引导1→队列2→引导3→队列4→
+  引导5，引导3 跟随队列2 一起发出（该轮补充）。要求：几条正交规则实现，
+  不堆定制能力。
+- Codex（gpt-6-sol xhigh，herdr workspace zcode-shufa-w10k-queue-model）讨论
+  收敛，与 ZCode 独立推演一致，定稿规则集：
+  1. 单一有序序列；每条 kind ∈ {anchor（开轮）/ attach（补充）}，inject 降
+     为 attach.effect（不再是第三类）
+  2. attach 绑定前方最近 anchor；序列头部 attach 绑定当前运行轮
+  3. 投递只有两个事件：轮内下一 step 边界（投当前轮 attach 组）、轮结束
+     （承认下一 anchor，turn/start 后其 attach 组随之 steer 进该轮）
+  4. daemon 单一事实源（统一序列 + SQLite task_queue 表落库，重启恢复+
+     装配时收养内核 inbox 遗留）；内核 inbox 退化为瞬时投递缓冲
+  5. 单航次投递（pump 游标）：一次最多一个 admitted anchor；忙期不承认
+  6. idle+steer attach 开新轮；idle+inject 不唤醒保持 pending
+  7. 锁=位置派生后缀（边界条及其后），只是不自动投递；编辑/删除/改模式/
+     拖动/立刻发送全开放且与锁正交（改模式不再越过锁）
+  8. 在途条目可锁/可排（撤回内核 inbox 再操作）；立刻发送 anchor=组语义
+     （带后续 attach 组越过锁定）；取消轮=已交付 attach 随轮终结不重放
+- 实现：sessions.ts 重写队列核心（W10kQueueItem/pumpQueue/onQueueTurnStart/
+  onQueueTurnEnd/withdrawAdmitted；条目 id 永稳+kernelId 旁车寻址内核）；
+  DemoAgent 对齐（idle steer 开轮、turn-start 批先行、nextStep 轮内吸收为
+  补充帧）；DB 迁移 v6（task_queue 表+tasks.queue_lock_boundary）；前端
+  QueueDrawer 单列表重做（attach 缩进+本轮徽标+绑定全由顺序派生，拖动重排
+  即重绑定）；修「引导当前轮」按钮 mode 丢失（ListDetailPage onsend 接线）；
+  删 slide 过渡（JS 过渡冻结在 0 高 0 透明态→内容与输入框重叠、拖拽失效，
+  实测两次）。
+- 验证：daemon 165/165（tasks-queue 重写 15 用例：交错序列核心场景/idle
+  steer 开轮+inject 不唤醒/锁定撤回在途/删锚重绑/改模式正交/组立刻发送/
+  重排撤回承认/持久化恢复/demo 引导同轮呈现/拖动暂停）+ tsc + svelte-check
+  + build 全绿；本机走查：交错序列渲染（引导跟随最近开轮条）、被动锁全员
+  琥珀、DB 持久化行实证。遗留：拖动松手提交在无头浏览器今日未复现成功
+  （浮影/影子/consider/finalize 均工作但库输出原序——环境退化嫌疑，交
+  Owner 真实浏览器复测）。
+
 ### 已定位待修（Owner 指示下一步处理）
 
 - 排队消息不出现在对话面板：内核只在消息被消费（开轮）时落 session log

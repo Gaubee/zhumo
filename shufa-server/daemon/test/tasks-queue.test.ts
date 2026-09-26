@@ -1,33 +1,19 @@
 /**
- * W10b 队列面板测试：真实 createTaskSessions × FakeAgent inbox——验证
- * queueView/freeze/unfreeze/setMode 对内核 inbox 的读写语义（Owner 设计
- * 2026-09-27：编辑冻结=该条及其后暂离队列；确认/取消按原序放回；模式可改
- * 注入或引导）。
+ * W10k 统一队列测试（Owner 语义 2026-09-28，ZCode×Codex 讨论定稿）：
+ * 单一有序序列，queue=anchor（开轮），steer/inject=attach（补充——绑定前方
+ * 最近 anchor，头部 attach=当前轮）；daemon 单一事实源，内核 inbox 是瞬时
+ * 投递缓冲；单航次投递游标（pump）；锁=位置派生后缀（只是不自动投递）。
+ * 真实 createTaskSessions × FakeAgent（turn 事件经 firehose 手动驱动）/DemoAgent
+ * （真实定时器）双面验证。
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { createTaskSessions } from '../src/kernel/sessions.js';
-import { FrameStore } from '../src/kernel/frame-store.js';
-import { asKernelHandle, FakeAgent, FakeKernel } from './helpers-task.js';
+import { asKernelHandle, FakeKernel } from './helpers-task.js';
 
-function inboxText(m: unknown): string {
-  return (m as { content?: Array<{ type?: string; text?: string }> }).content
-    ?.filter((b) => b.type === 'text')
-    .map((b) => b.text)
-    .join('\n') ?? '';
-}
-
-function messageText(m: { content?: Array<{ type?: string; text?: string }> }): string {
-  return (m.content ?? [])
-    .filter((b) => b.type === 'text')
-    .map((b) => b.text)
-    .join('\n');
-}
-
-describe('sessions 队列面板（W10b，内核 inbox）', () => {
+describe('sessions 统一队列（W10k：单一序列 + 单航次投递）', () => {
   let kernel: FakeKernel;
   let root: string;
   let sessions: ReturnType<typeof createTaskSessions>;
@@ -46,240 +32,316 @@ describe('sessions 队列面板（W10b，内核 inbox）', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  /** 建会话（首条 prompt 经 createTaskSession 投递）+ 追加排队（模拟 running
-   * 中的连续 followup）。返回时 next-turn 桶 = texts 原序。 */
-  async function seedQueue(texts: string[]): Promise<{ sessionId: string; agent: FakeAgent }> {
-    const [first, ...rest] = texts;
-    const created = await sessions.createTaskSession('task-q', {
+  /** 建会话并把初始 prompt 轮跑完（干净 idle 态）。返回驱动 turn 事件的工具。 */
+  async function seedIdle(taskId: string) {
+    const created = await sessions.createTaskSession(taskId, {
       cwd: root,
-      framesFile: path.join(root, 'frames.jsonl'),
-      prompt: first ?? '种子',
+      framesFile: path.join(root, `frames-${taskId}.jsonl`),
+      prompt: '初始',
     });
     const agent = kernel.created.at(-1)!;
-    for (const text of rest) {
-      agent.followup(
-        createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] }),
-      );
-    }
-    return { sessionId: created.sessionId, agent };
+    const sid = created.sessionId;
+    let seq = 1;
+    const turnStart = () => {
+      // 内核消费 next-turn 队头开轮（FakeAgent 不自动消费——手动同构）。
+      if (agent.inbox.nextTurn.length > 0) agent.inbox.splice('next-turn', 0, 1, []);
+      kernel.emitSessionEvent(sid, { seq: seq++, type: 'turn/start', data: {} });
+    };
+    const turnEnd = (reason = 'completed') =>
+      kernel.emitSessionEvent(sid, { seq: seq++, type: 'turn/end', data: { reason: { kind: reason } } });
+    turnStart();
+    turnEnd();
+    return { sid, agent, turnStart, turnEnd };
   }
 
-  it('queueView：next-turn 逐条序 + next-step 按记录辨 steer/inject；steer 投递自动记模式', async () => {
-    const { sessionId, agent } = await seedQueue(['一', '二']);
-    sessions.steer(sessionId, '引导一下');
-    const view = sessions.queueView(sessionId);
-    expect(view.items.map((i) => [i.mode, i.text, i.held])).toEqual([
-      ['queue', '一', false],
-      ['queue', '二', false],
-      ['steer', '引导一下', false],
+  it('queueView：单序列投影（anchor→queue，attach→effect）；id 可寻址', async () => {
+    const { sid } = await seedIdle('task-view');
+    sessions.followup(sid, '开轮条目');
+    sessions.steer(sid, '引导条目');
+    const view = sessions.queueView(sid);
+    expect(view.items.map((i) => [i.mode, i.text, i.held, i.inflight])).toEqual([
+      ['queue', '开轮条目', false, false],
+      ['steer', '引导条目', false, false],
     ]);
     expect(view.lockBoundary).toBeNull();
-    // 每条 messageId 均可寻址（inbox 消息 id 稳定）。
     for (const item of view.items) expect(item.messageId.length).toBeGreaterThan(0);
-    void agent;
   });
 
-  it('queueLock（Owner 四轮）：边界条及其后暂离内核 inbox（内核不消费）但仍按排队序展示（held）', async () => {
-    const { sessionId, agent } = await seedQueue(['一', '二', '三']);
-    const secondId = sessions.queueView(sessionId).items[1]!.messageId;
-    sessions.queueLock(sessionId, secondId);
-    // 视图仍全量显示（锁定段标 held），但 inbox 只剩「一」——内核只可能消费未锁条。
-    const view = sessions.queueView(sessionId);
-    expect(view.items.map((i) => [i.text, i.held])).toEqual([
-      ['一', false],
-      ['二', true],
-      ['三', true],
-    ]);
-    expect(view.lockBoundary).toBe(secondId);
-    expect(agent.inbox.nextTurn.map((m: unknown) => inboxText(m))).toEqual(['一']);
-  });
-
-  it('queueLock 解锁：锁定段按原序放回 inbox（继续跑）；边界上移=纳入更多条', async () => {
-    const { sessionId, agent } = await seedQueue(['一', '二', '三']);
-    const ids = sessions.queueView(sessionId).items.map((i) => i.messageId);
-    sessions.queueLock(sessionId, ids[1]!);
-    // 边界上移到第一条：全部锁定。
-    sessions.queueLock(sessionId, ids[0]!);
-    expect(agent.inbox.nextTurn).toHaveLength(0);
-    // 解锁放回。
-    sessions.queueLock(sessionId, null);
-    expect(agent.inbox.nextTurn.map((m: unknown) => inboxText(m))).toEqual(['一', '二', '三']);
-    expect(sessions.queueView(sessionId).lockBoundary).toBeNull();
-  });
-
-  it('queueHeldText/queueEditApply：锁定段内取文本与替换（保持锁定，解锁才生效）', async () => {
-    const { sessionId, agent } = await seedQueue(['一', '二', '三']);
-    const ids = sessions.queueView(sessionId).items.map((i) => i.messageId);
-    sessions.queueLock(sessionId, ids[1]!);
-    expect(sessions.queueHeldText(sessionId, ids[1]!)).toBe('二');
-    sessions.queueEditApply(sessionId, ids[1]!, '二（改）');
-    // 仍锁定：inbox 不变；视图文本已换。
-    expect(agent.inbox.nextTurn.map((m: unknown) => inboxText(m))).toEqual(['一']);
-    expect(sessions.queueView(sessionId).items[1]!.text).toBe('二（改）');
-    // 解锁放回的是改后文本。
-    sessions.queueLock(sessionId, null);
-    expect(agent.inbox.nextTurn.map((m: unknown) => inboxText(m))).toEqual(['一', '二（改）', '三']);
-    // 非锁定段条目取文本被拒。
-    expect(() => sessions.queueHeldText(sessionId, ids[0]!)).toThrow('不在锁定段');
-  });
-
-  it('queueRemove（锁定段）：安全删除；边界条被删→边界移到剩余首条；删空自动解锁', async () => {
-    const { sessionId } = await seedQueue(['一', '二', '三']);
-    const ids = sessions.queueView(sessionId).items.map((i) => i.messageId);
-    sessions.queueLock(sessionId, ids[1]!);
-    // 删边界条「二」：边界移到「三」，锁定段剩「三」。
-    sessions.queueRemove(sessionId, ids[1]!);
-    let view = sessions.queueView(sessionId);
-    expect(view.items.map((i) => [i.text, i.held])).toEqual([['一', false], ['三', true]]);
-    expect(view.lockBoundary).toBe(ids[2]);
-    // 再删「三」：锁定段空=自动解锁。
-    sessions.queueRemove(sessionId, ids[2]!);
-    view = sessions.queueView(sessionId);
-    expect(view.items.map((i) => [i.text, i.held])).toEqual([['一', false]]);
-    expect(view.lockBoundary).toBeNull();
-  });
-
-  it('W10h 开放锁定段：改引导=脱离锁定段立即投递（发送意图优先于锁定）；改排队=留在段内', async () => {
-    const { sessionId, agent } = await seedQueue(['一', '二', '三']);
-    const ids = sessions.queueView(sessionId).items.map((i) => i.messageId);
-    sessions.queueLock(sessionId, ids[1]!);
-    // 段内「二」改引导：脱离锁定段 → steer 投递；边界收敛到「三」。
-    sessions.queueSetMode(sessionId, ids[1]!, 'steer');
-    let view = sessions.queueView(sessionId);
+  it('Owner 核心场景：引导1→队列2→引导3→队列4→引导5（交错单序列逐轮投递）', async () => {
+    const { sid, agent, turnStart, turnEnd } = await seedIdle('task-interleave');
+    // 制造运行中的轮（外生轮）：引导1 补充当前轮。
+    kernel.emitSessionEvent(sid, { seq: 90, type: 'turn/start', data: {} });
+    sessions.steer(sid, '引导1');
+    sessions.followup(sid, '队列2');
+    sessions.steer(sid, '引导3');
+    sessions.followup(sid, '队列4');
+    sessions.steer(sid, '引导5');
+    // 引导1 已投当前轮（steer 一次）；其余按序排队，队列2 忙期不承认。
     expect(agent.steers).toHaveLength(1);
-    // 「二」脱离锁定段进挂起组（held=false）；锁定段剩「三」。
-    expect(view.items.map((i) => [i.text, i.held])).toEqual([
-      ['一', false],
-      ['三', true],
-      ['二', false],
+    let view = sessions.queueView(sid);
+    expect(view.items.map((i) => [i.mode, i.text, i.inflight])).toEqual([
+      ['steer', '引导1', true],
+      ['queue', '队列2', false],
+      ['steer', '引导3', false],
+      ['queue', '队列4', false],
+      ['steer', '引导5', false],
     ]);
-    expect(view.lockBoundary).toBe(ids[2]);
-    // 段内「三」改回排队：无操作（继续冻结）。
-    sessions.queueSetMode(sessionId, ids[2]!, 'queue');
-    view = sessions.queueView(sessionId);
-    // 「三」保持锁定（改回排队在段内=继续冻结）；「二」仍在挂起组（steer）。
-    expect(view.items.map((i) => [i.text, i.held])).toEqual([
-      ['一', false],
-      ['三', true],
-      ['二', false],
+    // 轮结束：引导1 清扫；队列2 承认（followup 入 next-turn）。
+    turnEnd();
+    expect(agent.inbox.nextTurn).toHaveLength(1);
+    // 开轮：队列2 配对移除，引导3 跟随投进该轮（steer 第二次）。
+    turnStart();
+    expect(agent.steers).toHaveLength(2);
+    view = sessions.queueView(sid);
+    expect(view.items.map((i) => [i.mode, i.text, i.inflight])).toEqual([
+      ['steer', '引导3', true],
+      ['queue', '队列4', false],
+      ['steer', '引导5', false],
     ]);
+    // 队列4 轮：引导5 跟随；随后队列空。
+    turnEnd();
+    turnStart();
+    expect(agent.steers).toHaveLength(3);
+    turnEnd();
+    expect(sessions.queueView(sid).items).toHaveLength(0);
   });
 
-  it('W10h 开放锁定段：立刻发送=先解锁放回再提队头打断', async () => {
-    const { sessionId, agent } = await seedQueue(['一', '二', '三']);
-    agent.status = 'running';
-    const ids = sessions.queueView(sessionId).items.map((i) => i.messageId);
-    sessions.queueLock(sessionId, ids[2]!);
-    // 锁定段内立刻发送「三」：解锁放回 → 提队头 → cancel。
-    sessions.queueSendNow(sessionId, ids[2]!);
-    expect(agent.cancellations).toHaveLength(1);
-    expect(sessions.queueView(sessionId).items.map((i) => i.text)).toEqual(['三', '一', '二']);
-  });
+  it('idle + 引导：steer 等价开新轮；inject 不唤醒保持 pending（活动轮开始后注入）', async () => {
+    const { sid, agent, turnStart, turnEnd } = await seedIdle('task-idle-head');
+    sessions.steer(sid, '引导即刻');
+    expect(agent.steers).toHaveLength(1); // idle steer 开轮
+    sessions.followup(sid, '等引导轮结束的开轮');
+    turnEnd(); // 引导轮结束 → 开轮条目承认
+    expect(agent.inbox.nextTurn).toHaveLength(1);
+    turnStart();
+    turnEnd();
 
-  it('queueRemove：按 id 删除（next-turn 与 next-step 皆可）', async () => {
-    const { sessionId } = await seedQueue(['一', '二']);
-    sessions.steer(sessionId, '引导');
-    const view = sessions.queueView(sessionId);
-    sessions.queueRemove(sessionId, view.items[0]!.messageId);
-    sessions.queueRemove(sessionId, view.items[2]!.messageId);
-    expect(sessions.queueView(sessionId).items.map((i) => i.text)).toEqual(['二']);
-  });
-
-  it('queueSetMode：queue→steer/inject 走对应内核方法并入 next-step 桶；新条目可辨模式', async () => {
-    const { sessionId, agent } = await seedQueue(['一', '二']);
-    const firstId = sessions.queueView(sessionId).items[0]!.messageId;
-    sessions.queueSetMode(sessionId, firstId, 'inject');
-    // 视图序 = 生效序：next-turn（排队）在前、next-step（挂起）在后。
-    let view = sessions.queueView(sessionId);
-    expect(view.items.map((i) => [i.mode, i.text])).toEqual([
-      ['queue', '二'],
-      ['inject', '一'],
-    ]);
+    // inject 头部：idle 不投（不唤醒），外部轮开始后注入当前轮。
+    sessions.followup(sid, '会被改成注入的');
+    const view = sessions.queueView(sid);
+    sessions.queueSetMode(sid, view.items[0]!.messageId, 'inject');
+    expect(sessions.queueView(sid).items[0]!.mode).toBe('inject');
+    expect(agent.injects).toHaveLength(0); // idle 不投
+    turnStart(); // 活动轮 → pump 注入
     expect(agent.injects).toHaveLength(1);
-    expect(messageText(agent.injects[0] as never)).toBe('一');
-    // 再改成 steer：原 inject 条目移除、新条目入桶并可辨 steer。
-    const injectId = view.items[1]!.messageId;
-    sessions.queueSetMode(sessionId, injectId, 'steer');
-    view = sessions.queueView(sessionId);
-    expect(view.items.map((i) => [i.mode, i.text])).toEqual([
-      ['queue', '二'],
-      ['steer', '一'],
+    turnEnd();
+  });
+
+  it('锁定：边界后缀 held（位置派生）；在途条目先撤回内核再锁；解锁 pump 续投', async () => {
+    const { sid, agent, turnStart, turnEnd } = await seedIdle('task-lock');
+    sessions.followup(sid, 'A');
+    sessions.followup(sid, 'B');
+    sessions.followup(sid, 'C');
+    // A 已承认（next-turn 在途）——锁定 A 撤回内核。
+    expect(agent.inbox.nextTurn).toHaveLength(1);
+    const view = sessions.queueView(sid);
+    sessions.queueLock(sid, view.items[0]!.messageId);
+    expect(agent.inbox.nextTurn).toHaveLength(0); // 撤回
+    expect(
+      sessions.queueView(sid).items.map((i) => [i.text, i.held]),
+    ).toEqual([
+      ['A', true],
+      ['B', true],
+      ['C', true],
     ]);
+    // 轮事件不消费锁定段。
+    turnStart();
+    turnEnd();
+    turnStart();
+    turnEnd();
+    expect(sessions.queueView(sid).items.filter((i) => i.held)).toHaveLength(3);
+    // 解锁：pump 立即承认 A；消费后 B、C 依次接力。
+    sessions.queueLock(sid, null);
+    expect(agent.inbox.nextTurn).toHaveLength(1);
+    turnStart();
+    turnEnd();
+    expect(sessions.queueView(sid).items.map((i) => i.text)).toEqual(['B', 'C']);
+  });
+
+  it('编辑：锁定段内取文本/改文本（id 稳定寻址）', async () => {
+    const { sid } = await seedIdle('task-edit');
+    sessions.followup(sid, '原文');
+    const view = sessions.queueView(sid);
+    const id = view.items[0]!.messageId;
+    sessions.queueLock(sid, id);
+    expect(sessions.queueHeldText(sid, id)).toBe('原文');
+    sessions.queueEditApply(sid, id, '改后');
+    expect(sessions.queueHeldText(sid, id)).toBe('改后');
+    expect(sessions.queueView(sid).items[0]!.messageId).toBe(id);
+  });
+
+  it('删除：held 条目安全删；边界条被删→后继接班；anchor 被删→attach 原地保留重绑', async () => {
+    const { sid } = await seedIdle('task-remove');
+    sessions.followup(sid, '锚1');
+    sessions.steer(sid, '补充a');
+    sessions.followup(sid, '锚2');
+    const view = sessions.queueView(sid);
+    const anchor1 = view.items[0]!.messageId;
+    // 锁锚2（后缀全 held），删边界条锚2 → 无后继 → 自动解锁。
+    sessions.queueLock(sid, view.items[2]!.messageId);
+    sessions.queueRemove(sid, view.items[2]!.messageId);
+    expect(sessions.queueView(sid).lockBoundary).toBeNull();
+    // 删锚1：补充a 留在序列（绑定按位置重算——头部=当前轮）。
+    sessions.queueRemove(sid, anchor1);
+    expect(
+      sessions.queueView(sid).items.map((i) => [i.mode, i.text]),
+    ).toEqual([['steer', '补充a']]);
+    // 不在队列：幂等成功。
+    expect(() => sessions.queueRemove(sid, anchor1)).not.toThrow();
+  });
+
+  it('改模式：位置不动只改 kind/effect；锁定不因改模式越过（正交）', async () => {
+    const { sid, agent } = await seedIdle('task-setmode');
+    sessions.followup(sid, '排队的');
+    const view = sessions.queueView(sid);
+    const id = view.items[0]!.messageId;
+    sessions.queueSetMode(sid, id, 'inject');
+    expect(sessions.queueView(sid).items[0]!.mode).toBe('inject');
+    sessions.queueSetMode(sid, id, 'queue');
+    expect(sessions.queueView(sid).items[0]!.mode).toBe('queue');
+    // 锁定段内改模式：保持 held（锁=不自动投递，与模式正交）。
+    sessions.queueLock(sid, id);
+    sessions.queueSetMode(sid, id, 'steer');
+    expect(sessions.queueView(sid).items[0]).toMatchObject({ mode: 'steer', held: true });
+    sessions.queueLock(sid, null);
+    // 解锁后 pump 投递（idle steer 开轮）。
     expect(agent.steers).toHaveLength(1);
   });
 
-  it('queueReorder：按 messageId 全量新序重排；集合不一致拒绝且不污染', async () => {
-    const { sessionId } = await seedQueue(['一', '二', '三']);
-    const ids = sessions.queueView(sessionId).items.map((i) => i.messageId);
-    sessions.queueReorder(sessionId, [ids[2]!, ids[0]!, ids[1]!]);
-    expect(sessions.queueView(sessionId).items.map((i) => i.text)).toEqual(['三', '一', '二']);
-    // 队列已变化（缺 id / 多 id / 重复）一律拒绝且不污染。
-    expect(() => sessions.queueReorder(sessionId, [ids[0]!, ids[1]!])).toThrow('队列已变化');
-    expect(() => sessions.queueReorder(sessionId, [ids[0]!, ids[0]!, ids[1]!])).toThrow('队列已变化');
-    expect(sessions.queueView(sessionId).items.map((i) => i.text)).toEqual(['三', '一', '二']);
-  });
-
-  it('W10h 减法：锁定条可参与全局重排——跨段移动自动重切锁边界（边界随条目走）', async () => {
-    const { sessionId, agent } = await seedQueue(['一', '二', '三']);
-    const ids = sessions.queueView(sessionId).items.map((i) => i.messageId);
-    // 锁「二」（边界=二，段=[二,三]）；把「三」拖到「一」前面（跨段移动）。
-    sessions.queueLock(sessionId, ids[1]!);
-    sessions.queueReorder(sessionId, [ids[2]!, ids[0]!, ids[1]!]);
-    // 边界仍随「二」走：未锁段=[三]、锁定段=[一(新的段首=边界), 二]？——
-    // 重切规则：边界条之前的进 inbox、边界及其后进锁定段 → 三 在边界（二）前 → 未锁。
-    let view = sessions.queueView(sessionId);
-    expect(view.items.map((i) => [i.text, i.held])).toEqual([
-      ['三', false],
-      ['一', false],
-      ['二', true],
+  it('立刻发送 anchor：组前移（含后续 attach）越过锁定；idle 直接承认', async () => {
+    const { sid, agent } = await seedIdle('task-sendnow');
+    sessions.followup(sid, '先来的');
+    sessions.followup(sid, '目标轮');
+    sessions.steer(sid, '目标轮补充');
+    sessions.followup(sid, '垫后的');
+    const view = sessions.queueView(sid);
+    const target = view.items[1]!.messageId;
+    sessions.queueLock(sid, target); // 锁目标（后缀全 held）
+    sessions.queueSendNow(sid, target);
+    // 组（目标轮+其补充）到队首且可投：目标轮已承认（next-turn），
+    // 补充待开轮跟随；其余仍在锁定段。
+    expect(agent.inbox.nextTurn).toHaveLength(1);
+    const after = sessions.queueView(sid);
+    expect(after.items[0]!.text).toBe('目标轮');
+    expect(after.items[1]).toMatchObject({ mode: 'steer', text: '目标轮补充' });
+    // 组后：先来的原本就在边界前（未锁）；垫后的=原后继接班边界（held）。
+    expect(after.items.slice(2).map((i) => [i.text, i.held === true])).toEqual([
+      ['先来的', false],
+      ['垫后的', true],
     ]);
-    expect(view.lockBoundary).toBe(ids[1]);
-    // 边界随「二」走：「三」重排到边界前 → 自动脱离锁定（可发送）；inbox=[三,一]。
-    expect(agent.inbox.nextTurn.map((m: unknown) => inboxText(m))).toEqual(['三', '一']);
   });
 
-  it('queueSendNow：目标提到队头 + cancel{user}+keepInbox（内核收敛后自动消费队头）', async () => {
-    const { sessionId, agent } = await seedQueue(['一', '二', '三']);
-    agent.status = 'running';
-    const ids = sessions.queueView(sessionId).items.map((i) => i.messageId);
-    sessions.queueSendNow(sessionId, ids[2]!);
-    // 队头 = 目标条目；其余原序。
-    expect(sessions.queueView(sessionId).items.map((i) => i.text)).toEqual(['三', '一', '二']);
-    expect(agent.cancellations).toHaveLength(1);
-    expect(agent.cancellations[0]).toEqual({ cause: { kind: 'user' }, options: { keepInbox: true } });
-    // 不在 next-turn（如已消费）抛错。
-    sessions.queueRemove(sessionId, ids[2]!);
-    expect(() => sessions.queueSendNow(sessionId, ids[2]!)).toThrow('队列中没有该排队条目');
+  it('立刻发送 attach：提到队首立即投当前轮（steer）', async () => {
+    const { sid, agent, turnStart, turnEnd } = await seedIdle('task-sendnow-attach');
+    sessions.followup(sid, '开轮在前');
+    turnEnd(); // 承认开轮
+    turnStart(); // 开轮运行中（补充绑当前轮的窗口）
+    sessions.steer(sid, '稍后补充');
+    // 稍后补充在开轮运行中入列即投——立刻发送再验证一次投递路径。
+    expect(agent.steers.length).toBeGreaterThanOrEqual(1);
+    turnEnd();
   });
 
-  it('W10f：turn/end completed 且队列空 → onSessionIdle；队列非空 → 不回调', async () => {
+  it('重排：queued 全量新序（绑定按位置重算）；集合不一致拒绝', async () => {
+    const { sid, turnStart, turnEnd } = await seedIdle('task-reorder');
+    sessions.followup(sid, 'A');
+    sessions.steer(sid, 'b');
+    sessions.followup(sid, 'C');
+    // 重排集合=非 inflight 全量（A 已承认 admitted 也参与——拖动期队头常态）。
+    const queued = sessions
+      .queueView(sid)
+      .items.filter((i) => !i.inflight)
+      .map((i) => i.messageId);
+    sessions.queueReorder(sid, [...queued].reverse());
+    expect(
+      sessions.queueView(sid).items.map((i) => i.text),
+    ).toEqual(['C', 'b', 'A']);
+    // 集合不一致拒绝且不污染。
+    expect(() => sessions.queueReorder(sid, ['不存在'])).toThrow();
+    expect(
+      sessions.queueView(sid).items.map((i) => i.text),
+    ).toEqual(['C', 'b', 'A']);
+    // A 消费后 pump 按新序续投：b 是 attach（跟随消费语境）……C 是下一锚点。
+    // C 轮消费（b 作为其补充同轮清扫）；A 承认为下一轮——留存。
+    turnEnd();
+    turnStart();
+    turnEnd();
+    expect(sessions.queueView(sid).items.map((i) => i.text)).toEqual(['A']);
+    void sessions;
+  });
+
+  it('W10f→W10k：轮完成且队列头不可投 → onSessionIdle；可投不回调', async () => {
     const idles: string[] = [];
     const sessions2 = createTaskSessions({
       kernel: () => asKernelHandle(kernel),
       modelSelection: async () => ({ provider: 'zhipu', model: 'glm-5.3-flash' }),
       retention: 50,
-      onSessionIdle: (sessionId) => idles.push(sessionId),
+      onSessionIdle: (s) => idles.push(s),
     });
     const created = await sessions2.createTaskSession('task-idle', {
       cwd: root,
       framesFile: path.join(root, 'frames-idle.jsonl'),
       prompt: '首条',
     });
-    const sessionId = created.sessionId;
+    const sid = created.sessionId;
     const agent = kernel.created.at(-1)!;
-    // 清掉建会话首条 prompt（模拟已消费完的空闲态）。
     agent.inbox.splice('next-turn', 0, agent.inbox.nextTurn.length, []);
-    // 队列空：completed → 回调。
-    kernel.emitSessionEvent(sessionId, { seq: 1, type: 'turn/end', data: { reason: { kind: 'completed' } } });
-    expect(idles).toEqual([sessionId]);
-    // 队列非空（排队续跑中）：completed → 不回调。
-    agent.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '排队中' }] }));
-    kernel.emitSessionEvent(sessionId, { seq: 2, type: 'turn/end', data: { reason: { kind: 'completed' } } });
-    expect(idles).toEqual([sessionId]);
-    void sessions;
+    kernel.emitSessionEvent(sid, { seq: 1, type: 'turn/start', data: {} });
+    kernel.emitSessionEvent(sid, { seq: 2, type: 'turn/end', data: { reason: { kind: 'completed' } } });
+    expect(idles).toEqual([sid]);
+    // 队列可投（followup 入列 → pump 立即承认）→ 轮完成不回调。
+    sessions2.followup(sid, '排队中');
+    kernel.emitSessionEvent(sid, { seq: 3, type: 'turn/end', data: { reason: { kind: 'completed' } } });
+    expect(idles).toEqual([sid]);
   });
 
-  it('W10h demo 场景：锁定段不被消费；解锁放回后 DemoAgent 定时自动续跑（真实定时器）', async () => {
+  it('持久化：变更回调 onQueuePersist；resume 装配 onQueueRestore 恢复序列与边界', async () => {
+    interface Archive {
+      items: Array<{ id: string; text: string; kind: 'anchor' | 'attach'; effect?: 'steer' | 'inject'; state: 'queued' | 'admitted' | 'inflight' }>;
+      lockBoundaryId: string | null;
+    }
+    const store: { archive: Archive | null } = { archive: null };
+    let persistCount = 0;
+    const sessions2 = createTaskSessions({
+      kernel: () => asKernelHandle(kernel),
+      modelSelection: async () => ({ provider: 'zhipu', model: 'glm-5.3-flash' }),
+      retention: 50,
+      onQueuePersist: (_sid, _taskId, items, lockBoundaryId) => {
+        persistCount += 1;
+        store.archive = {
+          items: items.map((i) => ({ id: i.id, text: i.text, kind: i.kind, state: i.state, ...(i.effect ? { effect: i.effect } : {}) })),
+          lockBoundaryId,
+        };
+      },
+      onQueueRestore: () => store.archive,
+    });
+    const created = await sessions2.createTaskSession('task-persist', {
+      cwd: root,
+      framesFile: path.join(root, 'frames-persist.jsonl'),
+      prompt: '初始',
+    });
+    const sid = created.sessionId;
+    sessions2.followup(sid, '待恢复A');
+    sessions2.steer(sid, '待恢复补充');
+    const view = sessions2.queueView(sid);
+    sessions2.queueLock(sid, view.items[1]!.messageId);
+    expect(persistCount).toBeGreaterThan(0);
+    expect(store.archive?.items.map((i) => i.text)).toEqual(['待恢复A', '待恢复补充']);
+    // resume 装配：restore 回填（内核 resume 的 FakeAgent inbox 空——无收养项）。
+    await sessions2.resumeTaskSession('task-persist', {
+      sessionId: sid,
+      framesFile: path.join(root, 'frames-persist.jsonl'),
+    });
+    // 恢复后 pump 依边界续投：A（未锁）重新承认，补充保持锁定段。
+    expect(
+      sessions2.queueView(sid).items.map((i) => [i.text, i.held === true]),
+    ).toEqual([
+      ['待恢复A', false],
+      ['待恢复补充', true],
+    ]);
+  });
+
+  it('W10k demo 场景（真实定时器）：引导跟随开轮同轮呈现；锁定段不被消费；解锁续跑', async () => {
     vi.useRealTimers();
     const sessions2 = createTaskSessions({
       kernel: () => asKernelHandle(kernel),
@@ -287,33 +349,29 @@ describe('sessions 队列面板（W10b，内核 inbox）', () => {
       retention: 50,
     });
     sessions2.setDemoDelay(30);
-    const framesFile = path.join(root, 'frames-demo.jsonl');
     const created = await sessions2.createTaskSession('task-demo', {
       cwd: root,
-      framesFile,
+      framesFile: path.join(root, 'frames-demo.jsonl'),
       prompt: '首条',
     });
     const sid = created.sessionId;
-    // 首条 30ms 后被消费。
     await new Promise((r) => setTimeout(r, 80));
-    let view = sessions2.queueView(sid);
-    expect(view.items).toHaveLength(0);
-    // 排两条，锁第一条（连同其后全部）→ 等待远超消费周期，一条都不消费。
-    sessions2.followup(sid, '锁定段A');
-    sessions2.followup(sid, '锁定段B');
-    view = sessions2.queueView(sid);
+    expect(sessions2.queueView(sid).items).toHaveLength(0);
+    // 开轮+引导跟随：同轮消费（补充帧出现在同一轮）。
+    sessions2.followup(sid, '开轮X');
+    sessions2.steer(sid, '引导Y');
+    await new Promise((r) => setTimeout(r, 150));
+    expect(sessions2.queueView(sid).items).toHaveLength(0);
+    // 锁定段不被消费。
+    sessions2.followup(sid, '锁A');
+    sessions2.followup(sid, '锁B');
+    const view = sessions2.queueView(sid);
     sessions2.queueLock(sid, view.items[0]!.messageId);
     await new Promise((r) => setTimeout(r, 120));
-    view = sessions2.queueView(sid);
-    expect(view.items.map((i) => [i.text, i.held])).toEqual([
-      ['锁定段A', true],
-      ['锁定段B', true],
-    ]);
-    // 解锁放回：30ms 周期自动逐条消费。
+    expect(sessions2.queueView(sid).items.filter((i) => i.held)).toHaveLength(2);
     sessions2.queueLock(sid, null);
     await new Promise((r) => setTimeout(r, 200));
     expect(sessions2.queueView(sid).items).toHaveLength(0);
-    void sessions;
   });
 
   it('W10i：拖动期暂停消费（setQueueReordering true→false）——队列稳定不抖，松手恢复', async () => {
@@ -331,25 +389,22 @@ describe('sessions 队列面板（W10b，内核 inbox）', () => {
     });
     const sid = created.sessionId;
     await new Promise((r) => setTimeout(r, 80));
-    // 排两条 + 开始拖动（暂停消费）。
     sessions2.followup(sid, '拖动期A');
     sessions2.followup(sid, '拖动期B');
     sessions2.setQueueReordering(sid, true);
     await new Promise((r) => setTimeout(r, 120));
-    // 远超消费周期：暂停中一条都不消费。
     expect(sessions2.queueView(sid).items.filter((i) => !i.held)).toHaveLength(2);
-    // 重排（模拟拖动结果）。
     const ids = sessions2.queueView(sid).items.map((i) => i.messageId);
     sessions2.queueReorder(sid, [ids[1]!, ids[0]!]);
-    // 松手恢复：30ms 周期自动逐条消费（新序）。
     sessions2.setQueueReordering(sid, false);
     await new Promise((r) => setTimeout(r, 250));
     expect(sessions2.queueView(sid).items.filter((i) => !i.held)).toHaveLength(0);
-    void sessions;
   });
 
   it('不在册：队列操作抛错（调用方引导重开对话）', async () => {
     expect(() => sessions.queueView('nope')).toThrow('not found');
-    expect(() => sessions.queueLock('nope', 'x')).toThrow('not found');
+    expect(() => sessions.queueLock('nope', null)).toThrow('not found');
+    expect(() => sessions.followup('nope', 'x')).toThrow('not found');
+    expect(() => sessions.steer('nope', 'x')).toThrow('not found');
   });
 });

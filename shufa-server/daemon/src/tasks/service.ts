@@ -542,6 +542,7 @@ export class TaskService {
         mode: i.mode,
         text: i.text,
         held: i.held,
+        inflight: i.inflight,
       })),
       lockBoundary: view.lockBoundary,
     };

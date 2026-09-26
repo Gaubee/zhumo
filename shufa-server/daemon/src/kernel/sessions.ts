@@ -92,6 +92,24 @@ function kernelSkills(ctx: Context): KernelSkillServiceLike | undefined {
   return (ctx as Context & { skills?: KernelSkillServiceLike }).skills;
 }
 
+/** W10k 统一队列条目（Owner 语义 2026-09-28，ZCode×Codex 讨论定稿）：
+ * 单一有序序列，每条只有 kind ∈ {anchor=开轮, attach=补充}；attach 的投递
+ * 效果 effect ∈ {steer, inject}（inject 降为 attach 属性，不再是第三类）。
+ * attach 隐式绑定前方最近的 anchor（无则=当前轮槽位），重排/删除/改 kind 后
+ * 绑定按序重算（派生不存储）。state：queued=待投（daemon 持有）；
+ * admitted=anchor 已 followup 交内核未开轮（单航次）；inflight=attach 已
+ * steer/inject 交内核（下一 step 边界生效，轮结束清扫）。 */
+export interface W10kQueueItem {
+  /** 条目 id（enqueue 生成，永不改写——UI/编辑/锁定寻址稳定）。 */
+  id: string;
+  /** 内核 inbox 里的真实消息 id（交付时生成；撤回 inbox.remove 用）。 */
+  kernelId?: string;
+  text: string;
+  kind: 'anchor' | 'attach';
+  effect?: 'steer' | 'inject';
+  state: 'queued' | 'admitted' | 'inflight';
+}
+
 export interface TaskSessionDeps {
   kernel: () => ShufaKernelHandle | null;
   /** 模型选择（null = 未配置，内核用缺省路由）。 */
@@ -104,9 +122,13 @@ export interface TaskSessionDeps {
   /** agent turn 以 error 终止时的失败回调（W7 联调：任务失败路径不悬挂）。 */
   onSessionFailure?: (sessionId: string, reason: string) => void;
   /** agent turn 以 completed 终止且队列无待投消息（W10f：agent 已空闲等待
-   * 输入——任务行回 done，「分析中」指示器不再在轮间空转）。队列非空时内核
+   * 输入——任务行回 done，「分析中」指示器不再在轮间空闲期空转）。队列非空时内核
    * 自动续跑下一轮，不回调。 */
   onSessionIdle?: (sessionId: string) => void;
+  /** W10k 统一队列持久化：队列每次变更后落库（daemon 单一事实源，重启恢复）。 */
+  onQueuePersist?: (sessionId: string, taskId: string, items: W10kQueueItem[], lockBoundaryId: string | null) => void;
+  /** W10k 队列恢复：会话装配时读回持久化序列（null=无存档）。 */
+  onQueueRestore?: (sessionId: string, taskId: string) => { items: W10kQueueItem[]; lockBoundaryId: string | null } | null;
   /** 内核 session/title 帧回调（2026-09-25 三轮：标题落任务行）。 */
   onSessionTitle?: (sessionId: string, title: string) => void;
 }
@@ -240,7 +262,14 @@ class DemoAgent implements AgentLike {
     this.schedule();
   }
 
+  /** W10k 对齐内核语义：idle 时 steer 等价开新轮（入 nextTurn 起表）；
+   * 运行中入 next-step 桶（consumeHead 轮起点吸收——demo 无独立 step 边界）。 */
   steer(message: unknown): void {
+    if (this.status !== 'running') {
+      this.inbox.nextTurn.push(message);
+      this.schedule();
+      return;
+    }
     this.inbox.nextStep.push(message);
   }
 
@@ -292,20 +321,31 @@ class DemoAgent implements AgentLike {
       this.onIdle?.();
       return;
     }
-    const text = inboxMessageText(head);
+    // W10k 两批投帧：批1 turn-start 单独先行——onFrames 提交后 daemon 的队列
+    // 钩子把该轮 attach 组 steer 进来；批2 吸收为本轮补充 + 轮体。
+    this.onFrames?.([{ at: Date.now(), seq: 0, kind: 'turn-start', text: '' }]);
+    const supplements = this.inbox.nextStep.splice(0);
     const frames: Frame[] = [
-      { at: Date.now(), seq: 0, kind: 'user-text', text },
+      { at: Date.now(), seq: 0, kind: 'user-text', text: inboxMessageText(head) },
+      ...supplements.map((m) => ({
+        at: Date.now(),
+        seq: 0,
+        kind: 'user-text' as const,
+        text: `${inboxMessageText(m)}（补充）`,
+      })),
       {
         at: Date.now(),
         seq: 0,
         kind: 'assistant-text',
-        text: `（演示回复，未调用真实模型）已收到：「${text.slice(0, 60)}」`,
+        text: `（演示回复，未调用真实模型）已收到：「${inboxMessageText(head).slice(0, 60)}」${supplements.length > 0 ? `（含补充 ${supplements.length} 条）` : ''}`,
       },
       { at: Date.now(), seq: 0, kind: 'turn-end', text: 'completed' },
     ];
     this.onFrames?.(frames);
-    if (this.inbox.nextTurn.length === 0 && this.inbox.nextStep.length === 0) this.onIdle?.();
-    else this.schedule();
+    if (this.inbox.nextTurn.length === 0 && this.inbox.nextStep.length === 0) {
+      this.status = 'idle';
+      this.onIdle?.();
+    } else this.schedule();
   }
 
   disposeOf(): void {
@@ -352,16 +392,19 @@ interface LiveTaskSession {
   deltaAt: number;
   pending: Map<number, { resolve: (answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> }) => void }>;
   subscribers: Set<(frame: Frame) => void>;
-  /** W10b 队列面板：next-step 桶内 steer/inject 同桶不可辨——投递时按
-   * messageId 记模式（缺省 queue；条目被内核消费后自动失时效，map 只增不减
-   * 无碍——id 全局唯一）。 */
-  queueModes: Map<string, 'steer' | 'inject'>;
-  /** 锁定段（Owner 设计 2026-09-27 四轮重定义）：边界条及其后的全部排队
-   * 消息暂离内核 inbox（不会被消费/发送）——稳定管理态（编辑/删除随时做），
-   * 暂存于此；解锁时按原序 followup 逐条放回（锁定段必为排队序队尾连续段，
-   * append 语义无损，idle 时首条即唤醒）。 */
-  lockedQueue: unknown[];
+  /** W10k 统一队列：单一有序序列（daemon 单一事实源）。内核 inbox 只是瞬时
+   * 投递缓冲（admitted anchor + inflight attach），不再作为队列事实源。
+   * 锁定段 = 序列中 lockBoundaryId 条及其后的连续后缀（held 由位置派生，
+   * 不逐条存储）；锁=只是不自动投递，编辑/删除/改模式/拖动/立刻发送全开放。 */
+  queue: W10kQueueItem[];
   lockBoundaryId: string | null;
+  /** 单航次投递游标：已 followup 交内核、尚未 turn/start 确认的 anchor。 */
+  admittedAnchorId: string | null;
+  /** 当前轮对应的 anchor（turn/start 配对；轮结束清除；null=当前轮非队列
+   * 起源，如任务初始 prompt）。 */
+  activeAnchorId: string | null;
+  /** 内核 turn 进行中（firehose turn/start~turn/end 维护；装配时 false）。 */
+  turnRunning: boolean;
 }
 
 export function createTaskSessions(deps: TaskSessionDeps) {
@@ -382,8 +425,19 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       const dated = frames.map((f, i) => ({ ...f, seq: entry.frameSeq + i }));
       entry.frameSeq += dated.length;
       commitFrames(entry, dated);
+      // W10k 队列钩子（demo 轮事件经帧流而非 firehose）：turn-start 批先行
+      // ——钩子里 pump 已把该轮 attach 组 steer 进 DemoAgent（consumeHead 批
+      // 间吸收为补充）；turn-end 清扫 inflight + pump 续跑。
+      for (const frame of frames) {
+        if (frame.kind === 'turn-start') onQueueTurnStart(entry);
+        if (frame.kind === 'turn-end') onQueueTurnEnd(entry);
+      }
     };
-    agent.onIdle = () => deps.onSessionIdle?.(sessionId);
+    // demo idle 与真实内核同守卫：队列头仍可投（如仅剩锁定段外的下一批）
+    // 时不报空闲——pump 在轮事件里已续跑，这里只兜底漏网。
+    agent.onIdle = () => {
+      if (!hasDeliverableHead(entry)) deps.onSessionIdle?.(sessionId);
+    };
   }
 
   /** `$name` 交付：命中 user-invocable 技能 → 官方双消息注入；否则原样回落。 */
@@ -442,12 +496,17 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     (kernel.ctx as FirehoseContext).on('session/event', (session, event) => {
       const entry = live.get(session.id);
       if (!entry) return;
+      // W10k 队列钩子：turn/start 配对承认 anchor + 投 attach 组；turn/end
+      // 清扫 inflight + pump 续跑（须先于 idle 判定——pump 可能已承认下一条）。
+      if (event.type === 'turn/start') onQueueTurnStart(entry);
       // turn/end reason.kind='error'：agent 运行失败（如 LLM 不可达）→ 失败回调。
       // 走查 R3：reason.error.message/code 一并提取（此前只传字面 "error"，
       // 用户「任务失败看不到任何异常」——404/网络错误等明文直达任务记录）。
       if (event.type === 'turn/end') {
         const checked = TurnEndEventSchema.safeParse(event.data);
-        if (checked.success && checked.data.reason?.kind === 'error') {
+        const failed = checked.success && checked.data.reason?.kind === 'error';
+        onQueueTurnEnd(entry, failed);
+        if (failed && checked.success) {
           const error = (checked.data.reason as { error?: { message?: string; code?: string } })
             .error;
           const detail =
@@ -455,18 +514,13 @@ export function createTaskSessions(deps: TaskSessionDeps) {
               ? error.code !== undefined
                 ? `${error.message}（${error.code}）`
                 : error.message
-              : checked.data.reason.kind;
+              : String(checked.data.reason?.kind ?? 'error');
           deps.onSessionFailure?.(session.id, detail);
         } else if (checked.data?.reason?.kind === 'completed') {
-          // W10f：轮完成且无待投消息（inbox 双桶皆空）= agent 空闲等待输入。
-          // 任务行回 done——「分析中」指示器不在轮间空闲期空转；排队消息存在
-          // 时内核自动续跑下一轮，保持 running。
-          const entry = live.get(session.id);
-          if (
-            entry !== undefined &&
-            entry.agent.inbox.nextTurn.length === 0 &&
-            entry.agent.inbox.nextStep.length === 0
-          ) {
+          // W10f→W10k：轮完成且队列头不可自动投递（空/全锁/仅 idle-inject）=
+          // agent 空闲等待输入，任务行回 done；队列可投时 pump 已承认下一条，
+          // 保持 running。
+          if (!hasDeliverableHead(entry)) {
             deps.onSessionIdle?.(session.id);
           }
         }
@@ -845,13 +899,169 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       deltaAt: Date.now(),
       pending: new Map(),
       subscribers: new Set(),
-      queueModes: new Map(),
-      lockedQueue: [],
+      queue: [],
       lockBoundaryId: null,
+      admittedAnchorId: null,
+      activeAnchorId: null,
+      turnRunning: false,
     };
     registerPanelAnswerer(entry);
     live.set(handle.agent.session.id, entry);
+    // W10k 装配即恢复：DB 存档回填 + 收养内核 inbox 遗留（旧模型/崩溃残留：
+    // nextTurn→anchor、nextStep→attach(steer 缺省)，drain 后内核 inbox 清空），
+    // pump 续跑（崩溃恢复语义：未投完的序列继续投）。
+    const restored = deps.onQueueRestore?.(handle.agent.session.id, taskId) ?? null;
+    const adoptedTurn = [...handle.agent.inbox.nextTurn];
+    const adoptedStep = [...handle.agent.inbox.nextStep];
+    if (adoptedTurn.length > 0 || adoptedStep.length > 0) {
+      handle.agent.inbox.splice('next-turn', 0, adoptedTurn.length, []);
+      handle.agent.inbox.splice('next-step', 0, adoptedStep.length, []);
+    }
+    entry.queue = [
+      ...adoptedStep.map((m) => ({
+        id: inboxMessageId(m),
+        text: inboxMessageText(m),
+        kind: 'attach' as const,
+        effect: 'steer' as const,
+        state: 'queued' as const,
+      })),
+      ...adoptedTurn.map((m) => ({
+        id: inboxMessageId(m),
+        text: inboxMessageText(m),
+        kind: 'anchor' as const,
+        state: 'queued' as const,
+      })),
+      ...(restored?.items ?? []),
+    ];
+    entry.lockBoundaryId = restored?.lockBoundaryId ?? null;
+    persistQueueState(entry);
+    pumpQueue(entry);
     return entry;
+  }
+
+  // ------------------------------------------------ W10k 统一队列核心
+
+  /** 锁定 = 序列中边界条及其后的连续后缀（位置派生）。 */
+  function isHeld(entry: LiveTaskSession, item: W10kQueueItem): boolean {
+    if (entry.lockBoundaryId === null) return false;
+    const boundary = entry.queue.findIndex((q) => q.id === entry.lockBoundaryId);
+    if (boundary < 0) return false;
+    return entry.queue.indexOf(item) >= boundary;
+  }
+
+  function queueMessage(text: string): unknown {
+    return createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] });
+  }
+
+  /** attach 交付（steer/inject 按效果；idle 时 steer 等价开新轮——内核语义，
+   * 乐观置位 turnRunning 防投递与轮事件间的双驱动窗口）。 */
+  function deliverAttach(entry: LiveTaskSession, item: W10kQueueItem): void {
+    const message = queueMessage(item.text);
+    item.kernelId = (message as { id?: string }).id ?? undefined;
+    if (item.effect === 'inject') entry.agent.inject(message as never);
+    else {
+      if (!entry.turnRunning) entry.turnRunning = true;
+      entry.agent.steer(message as never);
+    }
+    item.state = 'inflight';
+  }
+
+  /** 单一投递游标（W10k 唯一的自动消费入口）：
+   * 1) 队头连续 attach（未锁）：运行中→立即投当前轮；idle→steer 开新轮、
+   *    inject 不唤醒保持 pending（等下一次活动轮）；
+   * 2) 队头 anchor（未锁、无单航次在途、当前轮已结束）：followup 承认——
+   *    忙期不承认（Codex 单航次规则：anchor 未收到开轮确认前不投下一个），
+   *    轮结束事件里 pump 续跑。 */
+  function pumpQueue(entry: LiveTaskSession): void {
+    let mutated = false;
+    while (entry.queue.length > 0) {
+      const head = entry.queue[0]!;
+      if (head.kind !== 'attach' || head.state !== 'queued' || isHeld(entry, head)) break;
+      if (!entry.turnRunning && head.effect === 'inject') break; // inject 不唤醒
+      deliverAttach(entry, head);
+      mutated = true;
+    }
+    const head = entry.queue[0];
+    if (
+      head !== undefined &&
+      head.kind === 'anchor' &&
+      head.state === 'queued' &&
+      !isHeld(entry, head) &&
+      entry.admittedAnchorId === null &&
+      !entry.turnRunning &&
+      // 内核轮位空闲（next-turn 空=无在途轮/待开轮）——消除任务初始 prompt
+      // 异步开轮窗口内承认 anchor 的假配对。
+      entry.agent.inbox.nextTurn.length === 0
+    ) {
+      const message = queueMessage(head.text);
+      head.kernelId = (message as { id?: string }).id ?? undefined;
+      head.state = 'admitted';
+      entry.admittedAnchorId = head.id;
+      entry.agent.followup(message as never);
+      mutated = true;
+    }
+    if (mutated) persistQueueState(entry);
+  }
+
+  /** 轮开始（firehose/demo 帧）：承认的 anchor 配对为当前轮（从队列移除——
+   * 转录面板的 user-text 帧同期呈现），随后 pump 把它身后的 attach 组投进
+   * 该轮（下一 step 边界生效=「跟随开轮一起发出」）。非队列起源轮
+   * （初始 prompt 等）同样受益：队头 attach 绑定当前槽位立即投。 */
+  function onQueueTurnStart(entry: LiveTaskSession): void {
+    entry.turnRunning = true;
+    if (entry.admittedAnchorId !== null) {
+      entry.activeAnchorId = entry.admittedAnchorId;
+      entry.admittedAnchorId = null;
+      const idx = entry.queue.findIndex((q) => q.id === entry.activeAnchorId);
+      if (idx >= 0) entry.queue.splice(idx, 1);
+    }
+    pumpQueue(entry);
+  }
+
+  /** 轮结束：清扫 inflight attach（已交内核的随本轮终结——取消/完成同理，
+   * 不重放），游标复位，pump 续跑下一 anchor/attach。failed=true（LLM 错误
+   * 等）不 pump——队列冻结（任务失败，重试由用户触发）。admittedAnchorId
+   * 不清——它在途（内核 nextTurn 待开轮），turn/start 才是它的配对点。 */
+  function onQueueTurnEnd(entry: LiveTaskSession, failed = false): void {
+    entry.turnRunning = false;
+    entry.activeAnchorId = null;
+    const before = entry.queue.length;
+    entry.queue = entry.queue.filter((q) => q.state !== 'inflight');
+    if (!failed) pumpQueue(entry);
+    if (entry.queue.length !== before) persistQueueState(entry);
+  }
+
+  /** 队列头是否可自动投递（不可投=任务空闲：全空/全锁定/仅 idle-inject）。 */
+  function hasDeliverableHead(entry: LiveTaskSession): boolean {
+    if (entry.admittedAnchorId !== null) return true;
+    const head = entry.queue[0];
+    if (head === undefined) return false;
+    if (isHeld(entry, head)) return false;
+    if (head.kind === 'anchor') return head.state === 'queued';
+    return entry.turnRunning || head.effect === 'steer';
+  }
+
+  function persistQueueState(entry: LiveTaskSession): void {
+    deps.onQueuePersist?.(entry.agent.session.id, entry.taskId, entry.queue, entry.lockBoundaryId);
+  }
+
+  /** enqueue + pump（followup/steer 入口共用）。 */
+  function enqueue(entry: LiveTaskSession, item: W10kQueueItem): void {
+    entry.queue.push(item);
+    pumpQueue(entry);
+  }
+
+  /** 撤回在途承认的 anchor（从内核 next-turn 取回、回 queued、清游标）——
+   * setMode/sendNow/reorder 等重排类操作的前置，防 stale 游标阻断 pump 或
+   * 被外生轮 turn/start 假配对消费。 */
+  function withdrawAdmitted(entry: LiveTaskSession): void {
+    if (entry.admittedAnchorId === null) return;
+    const item = entry.queue.find((q) => q.id === entry.admittedAnchorId);
+    if (item !== undefined && item.state === 'admitted') {
+      entry.agent.inbox.remove(item.id);
+      item.state = 'queued';
+    }
+    entry.admittedAnchorId = null;
   }
 
   /** 命令目录缓存（内核命令注册表静态——插件装载后不变；boot 探针一次）。 */
@@ -1072,240 +1282,239 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         return;
       }
     }
-    entry.agent.followup(
-      createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] }) as never,
-    );
+    // W10k：非命令消息入统一队列（anchor=开轮）。slash/$skill 分流直投内核
+    // （命令/技能语义=立即执行，不占队列序）。
+    enqueue(entry, {
+      id: randomUUID(),
+      text,
+      kind: 'anchor',
+      state: 'queued',
+    });
   },
 
   /**
-   * 引导当前轮（W10，DSH 内核 steer）：运行中的 driver 在下一 step 边界消费，
-   * idle 时等价开新轮。与 followup 不同：不做 / 与 $ 分流——面板语义
-   * （命令执行/技能注入）属于整轮对话，引导是中途改口的裸文本。
+   * 引导当前轮（W10，DSH 内核 steer；W10k 入统一队列 attach）：运行中在下一
+   * step 边界生效，idle 等价开新轮。与 followup 不同：不做 / 与 $ 分流——
+   * 面板语义（命令执行/技能注入）属于整轮对话，引导是中途改口的裸文本。
    * 不在册时抛错（调用方复活后重试，与 followup 同约定）。
-   * 投递消息记 queueModes（W10b 队列面板按 id 辨 steer/inject）。
    */
   steer(sessionId: string, text: string): void {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
-    const message = createUserMessage({
-      source: { kind: 'user' },
-      content: [{ type: 'text', text }],
+    enqueue(entry, {
+      id: randomUUID(),
+      text,
+      kind: 'attach',
+      effect: 'steer',
+      state: 'queued',
     });
-    entry.queueModes.set((message as { id?: string }).id ?? '', 'steer');
-    entry.agent.steer(message as never);
   },
 
-  // ------------------------------------------------ 队列面板（W10b，内核 inbox）
+  // ------------------------------------------------ 队列面板（W10k 统一序列）
 
-  /** 队列视图：排队序（inbox 未锁段 + held 锁定段——锁定段仍按排队序展示
-   * 但内核不消费）+ next-step（steer/inject 挂起项）在后。 */
+  /** 队列视图（单一序列投影）：mode=anchor→queue / attach→effect；held=锁定
+   * 后缀（位置派生）；inflight=已交内核（下一 step 边界生效，轮终清扫——
+   * 前端只读呈现）。 */
   queueView(
     sessionId: string,
   ): {
-    items: Array<{ messageId: string; mode: 'queue' | 'steer' | 'inject'; text: string; held: boolean }>;
+    items: Array<{
+      messageId: string;
+      mode: 'queue' | 'steer' | 'inject';
+      text: string;
+      held: boolean;
+      inflight: boolean;
+    }>;
     lockBoundary: string | null;
   } {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
-    const items = [
-      ...entry.agent.inbox.nextTurn.map((m) => ({
-        messageId: inboxMessageId(m),
-        mode: 'queue' as const,
-        text: inboxMessageText(m),
-        held: false,
-      })),
-      ...entry.lockedQueue.map((m) => ({
-        messageId: inboxMessageId(m),
-        mode: 'queue' as const,
-        text: inboxMessageText(m),
-        held: true,
-      })),
-      ...entry.agent.inbox.nextStep.map((m) => {
-        const id = inboxMessageId(m);
-        return {
-          messageId: id,
-          mode: entry.queueModes.get(id) ?? 'steer',
-          text: inboxMessageText(m),
-          held: false,
-        };
-      }),
-    ];
+    const items = entry.queue.map((item) => ({
+      messageId: item.id,
+      mode: item.kind === 'anchor' ? ('queue' as const) : (item.effect ?? ('steer' as const)),
+      text: item.text,
+      held: isHeld(entry, item),
+      inflight: item.state === 'inflight',
+    }));
     return { items, lockBoundary: entry.lockBoundaryId };
   },
 
   /**
-   * 锁定/解锁（Owner 设计 2026-09-27 四轮）：边界条及其后的排队消息暂离内核
-   * inbox（不会被消费——锁定段可安全编辑/删除）。messageId=null 解锁：锁定
-   * 段按原序 followup 逐条放回（idle 时首条即唤醒）；否则把边界设到该条——
-   * 全局排队序 = inbox 未锁段 + 锁定段，按目标位置全量重切（支持边界上移
-   * 纳入更多条 / 下移释放尾部）。挂起项（steer/inject）不可作边界。
+   * 锁定/解锁（Owner 设计 2026-09-28 定稿：锁=只是不自动投递，其余全开放）：
+   * 边界条及其后的连续后缀 held（位置派生，条目不搬家）。null=解锁，pump
+   * 立即续投队头。在途条目（admitted anchor / inflight attach）先从内核
+   * inbox 撤回再锁（撤不回=已被消费/开轮——抛错，前端刷新重试）。
    */
   queueLock(sessionId: string, messageId: string | null): void {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
     if (messageId === null) {
-      const locked = entry.lockedQueue;
-      entry.lockedQueue = [];
+      if (entry.lockBoundaryId === null) return;
       entry.lockBoundaryId = null;
-      // 原对象直接放回（id 保留——解锁后旧 messageId 仍可寻址，前端
-      // 持有的 id 不会悬空）。
-      for (const message of locked) {
-        entry.agent.followup(message as never);
-      }
+      pumpQueue(entry);
+      persistQueueState(entry);
       return;
     }
-    const inboxTurn = entry.agent.inbox.nextTurn;
-    const all = [...inboxTurn, ...entry.lockedQueue];
-    const idx = all.findIndex((m) => inboxMessageId(m) === messageId);
-    if (idx < 0) throw new Error(`队列中没有该排队条目：${messageId}`);
-    // 重切：目标之前回 inbox（原序），目标及其后进锁定段。
-    entry.agent.inbox.splice('next-turn', 0, inboxTurn.length, all.slice(0, idx));
-    entry.lockedQueue = all.slice(idx);
+    const target = entry.queue.find((q) => q.id === messageId);
+    if (target === undefined) throw new Error(`队列中没有该条目：${messageId}`);
+    if (target.state !== 'queued') {
+      if (!entry.agent.inbox.remove(target.kernelId ?? messageId)) {
+        throw new Error('该条目已生效，无法锁定（请刷新）');
+      }
+      if (entry.admittedAnchorId === messageId) entry.admittedAnchorId = null;
+      target.state = 'queued';
+    }
     entry.lockBoundaryId = messageId;
+    persistQueueState(entry);
   },
 
   /** 编辑入口：锁定段内目标文本（调用方 service 负责先锁定未锁条目）。 */
   queueHeldText(sessionId: string, messageId: string): string {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
-    const message = entry.lockedQueue.find((m) => inboxMessageId(m) === messageId);
-    if (message === undefined) throw new Error(`该条目不在锁定段：${messageId}`);
-    return inboxMessageText(message);
+    const item = entry.queue.find((q) => q.id === messageId);
+    if (item === undefined || !isHeld(entry, item)) {
+      throw new Error(`该条目不在锁定段：${messageId}`);
+    }
+    return item.text;
   },
 
-  /** 确认编辑：锁定段内目标条按新文本重建（保持锁定；解锁时放回生效）。 */
+  /** 确认编辑：锁定段内目标条换文本（id 不变——寻址稳定）。 */
   queueEditApply(sessionId: string, messageId: string, text: string): void {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
-    const idx = entry.lockedQueue.findIndex((m) => inboxMessageId(m) === messageId);
-    if (idx < 0) throw new Error(`该条目不在锁定段：${messageId}`);
-    entry.lockedQueue[idx] = createUserMessage({
-      source: { kind: 'user' },
-      content: [{ type: 'text', text }],
-    });
+    const item = entry.queue.find((q) => q.id === messageId);
+    if (item === undefined || !isHeld(entry, item)) {
+      throw new Error(`该条目不在锁定段：${messageId}`);
+    }
+    item.text = text;
+    persistQueueState(entry);
   },
 
-  /** 删除一条（inbox 两桶或锁定段皆可；不在队列幂等成功）。锁定段删空自动
-   * 解锁；边界条被删则边界移到剩余锁定段首条。 */
+  /** 删除一条（inflight/admitted 需同时撤内核 inbox；不在队列幂等成功）。
+   * 边界条被删→边界移到其原后继（锁定后缀仍连续）；后缀删空自动解锁。
+   * attach 的 anchor 被删→attach 原地保留（绑定按序重算：前方最近 anchor
+   * 或当前轮槽位）。 */
   queueRemove(sessionId: string, messageId: string): void {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
-    entry.queueModes.delete(messageId);
-    const heldIdx = entry.lockedQueue.findIndex((m) => inboxMessageId(m) === messageId);
-    if (heldIdx >= 0) {
-      entry.lockedQueue.splice(heldIdx, 1);
-      if (entry.lockedQueue.length === 0) {
-        entry.lockBoundaryId = null;
-      } else if (entry.lockBoundaryId === messageId) {
-        entry.lockBoundaryId = inboxMessageId(entry.lockedQueue[0]);
-      }
-      return;
+    const idx = entry.queue.findIndex((q) => q.id === messageId);
+    if (idx < 0) return;
+    const [removed] = entry.queue.splice(idx, 1);
+    if (removed !== undefined && removed.state !== 'queued') {
+      entry.agent.inbox.remove(removed.kernelId ?? messageId);
     }
-    entry.agent.inbox.remove(messageId);
+    if (
+      entry.lockBoundaryId !== null &&
+      !entry.queue.some((q) => q.id === entry.lockBoundaryId)
+    ) {
+      entry.lockBoundaryId = entry.queue[idx]?.id ?? null;
+    }
+    persistQueueState(entry);
   },
 
-  /** 修改投递模式（Owner 设计：可改成注入或引导）：取出→按新模式重投。
-   * 三个高层方法各自处理桶归属与唤醒；新消息 id 记 queueModes 辨识。 */
-  /**
-   * 修改投递模式（W10h 开放锁定段）：锁定段内改 steer/inject = 该条脱离锁定
-   * 段按新模式立即投递（发送意图优先于锁定）；改回 queue = 留在锁定段尾部
-   * （继续冻结，解锁时放回）。锁定边界空段自动收敛（边界移到剩余首条）。
-   */
+  /** 修改投递模式（W10k 正交减法）：位置不动，只改 kind/effect——queue→
+   * anchor（开轮），steer/inject→attach（补充，效果为 mode）。绑定随位置
+   * 自动重算；锁定不因改模式越过（锁=不自动投递）。在途（inflight/
+   * admitted）先撤内核回 queued 再改。 */
   queueSetMode(sessionId: string, messageId: string, mode: 'queue' | 'steer' | 'inject'): void {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
-    const message = [...entry.agent.inbox.nextTurn, ...entry.agent.inbox.nextStep].find(
-      (m) => inboxMessageId(m) === messageId,
-    );
-    if (message === undefined) {
-      const heldIdx = entry.lockedQueue.findIndex((m) => inboxMessageId(m) === messageId);
-      if (heldIdx < 0) throw new Error(`队列中没有该条目：${messageId}`);
-      if (mode === 'queue') {
-        // 锁定段内保持排队模式：无操作（继续冻结）。
-        return;
-      }
-      // 脱离锁定段，按新模式立即投递（发送意图优先于锁定）。
-      const [held] = entry.lockedQueue.splice(heldIdx, 1);
-      if (entry.lockedQueue.length === 0) {
-        entry.lockBoundaryId = null;
-      } else if (entry.lockBoundaryId === messageId) {
-        entry.lockBoundaryId = inboxMessageId(entry.lockedQueue[0]);
-      }
-      const rebuilt = createUserMessage({
-        source: { kind: 'user' },
-        content: [{ type: 'text', text: inboxMessageText(held) }],
-      });
-      const rebuiltId = (rebuilt as { id?: string }).id ?? '';
-      entry.queueModes.set(rebuiltId, mode);
-      if (mode === 'steer') entry.agent.steer(rebuilt as never);
-      else entry.agent.inject(rebuilt as never);
-      return;
+    const item = entry.queue.find((q) => q.id === messageId);
+    if (item === undefined) throw new Error(`队列中没有该条目：${messageId}`);
+    if (item.state !== 'queued') entry.agent.inbox.remove(item.kernelId ?? messageId);
+    if (entry.admittedAnchorId === messageId) entry.admittedAnchorId = null;
+    item.state = 'queued';
+    if (mode === 'queue') {
+      item.kind = 'anchor';
+      delete item.effect;
+    } else {
+      item.kind = 'attach';
+      item.effect = mode;
     }
-    entry.queueModes.delete(messageId);
-    entry.agent.inbox.remove(messageId);
-    const rebuilt = createUserMessage({
-      source: { kind: 'user' },
-      content: [{ type: 'text', text: inboxMessageText(message) }],
-    });
-    const rebuiltId = (rebuilt as { id?: string }).id ?? '';
-    if (mode === 'queue') entry.agent.followup(rebuilt as never);
-    else {
-      entry.queueModes.set(rebuiltId, mode);
-      if (mode === 'steer') entry.agent.steer(rebuilt as never);
-      else entry.agent.inject(rebuilt as never);
-    }
+    pumpQueue(entry);
+    persistQueueState(entry);
   },
 
-  /** 立刻发送（Owner 设计 2026-09-27 三轮）：该排队消息提到队头 + 打断当前轮
-   * （keepInbox）——内核在被打断轮收敛后自动开新一轮消费队头。idle 时 cancel
-   * 是 no-op，消息保持队头由下次 drain 消费。目标不在 next-turn（挂起项/已
-   * 消费）抛错。 */
+  /** 立刻发送（发送意图越过锁定；组语义）：
+   * - anchor：它+其后连续 attach 组整体提到队首（组内序保持；移到边界前=
+   *   held 随位置解除）；运行中先 cancel{user,keepInbox}（轮收敛后 turn/end
+   *   →pump 承认新队首），idle 直接 pump 承认。
+   * - attach：提到队首（绑当前轮槽位）；pump 立即投——运行中入当前轮下一
+   *   step，idle 时 steer 开新轮（inject 不唤醒，等价入列 pending）。
+   * - 边界收敛：被移动项之后的原锁定段若失去边界参照，重算到剩余 held 后缀
+   *   首条或解锁。 */
   queueSendNow(sessionId: string, messageId: string): void {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
-    let turn = entry.agent.inbox.nextTurn;
-    let idx = turn.findIndex((m) => inboxMessageId(m) === messageId);
-    if (idx < 0 && entry.lockedQueue.some((m) => inboxMessageId(m) === messageId)) {
-      // 锁定段内立刻发送：发送意图优先于锁定——全部放回后再提队头。
-      this.queueLock(sessionId, null);
-      turn = entry.agent.inbox.nextTurn;
-      idx = turn.findIndex((m) => inboxMessageId(m) === messageId);
-    }
+    const idx = entry.queue.findIndex((q) => q.id === messageId);
     if (idx < 0) throw new Error(`队列中没有该排队条目：${messageId}`);
-    if (idx > 0) {
-      const [message] = entry.agent.inbox.splice('next-turn', idx, 1, []);
-      entry.agent.inbox.splice('next-turn', 0, 0, [message!]);
+    const item = entry.queue[idx]!;
+    let group: W10kQueueItem[];
+    let oldSuccessor: W10kQueueItem | undefined;
+    if (item.kind === 'anchor') {
+      let end = idx + 1;
+      while (end < entry.queue.length && entry.queue[end]!.kind === 'attach') end += 1;
+      group = entry.queue.splice(idx, end - idx);
+      oldSuccessor = entry.queue[idx];
+    } else {
+      group = entry.queue.splice(idx, 1);
+      oldSuccessor = entry.queue[idx];
     }
-    entry.agent.cancel({ kind: 'user' }, { keepInbox: true });
+    entry.queue.unshift(...group);
+    // 撤回一切在途（组内 admitted 与组外 stale 承认——next-turn 必须让位给
+    // 新队首，否则内核会先跑旧承认项破坏组语义）。
+    withdrawAdmitted(entry);
+    for (const member of group) {
+      if (member.state === 'inflight') entry.agent.inbox.remove(member.kernelId ?? member.id);
+      member.state = 'queued';
+    }
+    // 边界收敛：组来自锁定段时，原后继（旧序中组后第一条，必仍在锁定段）
+    // 接班边界；组原本就是队尾则解锁。
+    if (entry.lockBoundaryId !== null) {
+      const boundaryInGroup = group.some((m) => m.id === entry.lockBoundaryId);
+      const boundaryGone = !entry.queue.some((q) => q.id === entry.lockBoundaryId);
+      if (boundaryInGroup || boundaryGone) {
+        entry.lockBoundaryId = oldSuccessor?.id ?? null;
+      }
+    }
+    if (item.kind === 'anchor' && entry.turnRunning) {
+      entry.agent.cancel({ kind: 'user' }, { keepInbox: true });
+    } else {
+      pumpQueue(entry);
+    }
+    persistQueueState(entry);
   },
 
-  /** 拖动排序（Owner 设计 2026-09-27 二轮）：next-turn 全量重排（splice 换入）。
-   * orderedIds 必须与当前队列恰为同集合（队头被消费等并发变化即拒绝，前端
-   * 刷新重试）；next-step（引导/注入挂起项）无逐条生效序，不参与排序。 */
-  /** 全局重排（W10h 减法：锁只管不自动发送，排序照常）——orderedIds 为
-   * 全局排队序（未锁段 + 锁定段全量），按「边界前的进 inbox、边界及其后
-   * 进锁定段」重切两段。锁定段内重排 = 直接重写数组（内核不感知）。 */
+  /** 全局重排（拖动排序）：orderedIds 与当前非 inflight 条目恰为同集合
+   * （inflight 已交内核在途不参与——前端列表已过滤）。admitted（在途
+   * anchor，暂停消费时队头常态）先撤内核回 queued 再排——拖动期间一切
+   * 可见条目皆可排。重排后绑定按序重算；边界条 id 不变（held 后缀随排）。 */
   queueReorder(sessionId: string, orderedIds: string[]): void {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
-    const turn = entry.agent.inbox.nextTurn;
-    const all = [...turn, ...entry.lockedQueue];
-    const currentIds = all.map(inboxMessageId);
+    const reorderable = entry.queue.filter((q) => q.state !== 'inflight');
+    const reorderableIds = reorderable.map((q) => q.id);
     if (
-      orderedIds.length !== currentIds.length ||
+      orderedIds.length !== reorderableIds.length ||
       new Set(orderedIds).size !== orderedIds.length ||
-      orderedIds.some((id) => !currentIds.includes(id))
+      orderedIds.some((id) => !reorderableIds.includes(id))
     ) {
       throw new Error('队列已变化（可能有消息正在被消费），请刷新后重试');
     }
-    const byId = new Map(all.map((m) => [inboxMessageId(m), m]));
-    const ordered = orderedIds.map((id) => byId.get(id)!);
-    const boundaryIdx = entry.lockBoundaryId === null ? ordered.length : ordered.indexOf(entry.lockBoundaryId);
-    const unlockPart = ordered.slice(0, boundaryIdx);
-    const lockPart = ordered.slice(boundaryIdx);
-    entry.agent.inbox.splice('next-turn', 0, turn.length, unlockPart);
-    entry.lockedQueue = lockPart;
-    entry.lockBoundaryId = lockPart.length > 0 ? entry.lockBoundaryId : null;
+    for (const item of reorderable) {
+      if (item.state === 'admitted') {
+        entry.agent.inbox.remove(item.kernelId ?? item.id);
+        if (entry.admittedAnchorId === item.id) entry.admittedAnchorId = null;
+        item.state = 'queued';
+      }
+    }
+    const byId = new Map(entry.queue.map((q) => [q.id, q]));
+    const reordered = orderedIds.map((id) => byId.get(id)!);
+    const inFlight = entry.queue.filter((q) => q.state === 'inflight');
+    entry.queue = [...reordered, ...inFlight];
+    pumpQueue(entry);
+    persistQueueState(entry);
   },
 
     /** 回答一个待答请求（未知/已解决返回 false）。 */

@@ -250,3 +250,62 @@ export function parseResourceMeta(row: ResourceRow): Record<string, unknown> | n
     return null;
   }
 }
+
+// ---------------------------------------------------------------- W10k 统一队列
+
+export interface TaskQueueRow {
+  message_id: string;
+  seq: number;
+  kind: 'anchor' | 'attach';
+  effect: 'steer' | 'inject' | null;
+  text: string;
+}
+
+/** 队列整体覆写（每次变更全量重写——条目数个位数级，无需增量）。 */
+export function overwriteTaskQueue(
+  db: SqliteDb,
+  taskId: string,
+  items: Array<{ id: string; text: string; kind: 'anchor' | 'attach'; effect?: 'steer' | 'inject' }>,
+  lockBoundaryId: string | null,
+): void {
+  const wipe = db.transaction(() => {
+    db.prepare('DELETE FROM task_queue WHERE task_id = ?').run(taskId);
+    const insert = db.prepare(
+      'INSERT INTO task_queue (task_id, message_id, seq, kind, effect, text) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+    items.forEach((item, i) => {
+      insert.run(taskId, item.id, i, item.kind, item.effect ?? null, item.text);
+    });
+    db.prepare('UPDATE tasks SET queue_lock_boundary = ? WHERE id = ?').run(
+      lockBoundaryId,
+      taskId,
+    );
+  });
+  wipe();
+}
+
+/** 读回持久化队列（空存档返回 null；行序即 seq 序）。 */
+export function readTaskQueue(
+  db: SqliteDb,
+  taskId: string,
+): { items: TaskQueueRow[]; lockBoundaryId: string | null } | null {
+  const rows = db
+    .prepare('SELECT message_id, seq, kind, effect, text FROM task_queue WHERE task_id = ? ORDER BY seq')
+    .all(taskId) as Array<{ message_id: string; seq: number; kind: string; effect: string | null; text: string }>;
+  const boundaryRow = db
+    .prepare('SELECT queue_lock_boundary FROM tasks WHERE id = ?')
+    .get(taskId) as { queue_lock_boundary: string | null } | undefined;
+  if (rows.length === 0 && (boundaryRow === undefined || boundaryRow.queue_lock_boundary === null)) {
+    return null;
+  }
+  return {
+    items: rows.map((row) => ({
+      message_id: row.message_id,
+      seq: row.seq,
+      kind: row.kind as 'anchor' | 'attach',
+      effect: row.effect as 'steer' | 'inject' | null,
+      text: row.text,
+    })),
+    lockBoundaryId: boundaryRow?.queue_lock_boundary ?? null,
+  };
+}
