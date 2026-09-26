@@ -144,7 +144,16 @@
     {:else}
       {#each items as item (item.seq)}
         {#if item.kind === "user"}
-          <div class="flow-item ml-auto max-w-[85%]">
+          <div class="flow-item ml-auto max-w-[85%] {item.queued ? 'opacity-70' : ''}">
+            {#if item.queued}
+              <!-- W10l 待发气泡：排队/引导消息在转录流尾部可见（刷新不丢），
+                   消费后由真实气泡无缝接管。 -->
+              <div class="mb-0.5 flex justify-end">
+                <span class="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  {item.queued}
+                </span>
+              </div>
+            {/if}
             <UserBubble text={item.text} />
           </div>
         {:else if item.kind === "reasoning"}

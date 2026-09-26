@@ -250,7 +250,11 @@ export interface ShufaApi {
   getLanUrls(): Promise<string[]>;
   listTasks(): Promise<Task[]>;
   getTaskFrames(taskId: string): Promise<Frame[]>;
-  subscribeTaskFrames(taskId: string, onFrame: (frame: Frame) => void): () => void;
+  subscribeTaskFrames(
+    taskId: string,
+    onFrame: (frame: Frame) => void,
+    onReconnect?: () => void,
+  ): () => void;
   sendTaskPrompt(taskId: string, prompt: string, mode?: "followup" | "steer"): Promise<void>;
   /** WS 通道就绪（刷新后首 RPC 前调用——未 open 时发送会被静默丢弃）。 */
   ensureRpcReady(): Promise<void>;
@@ -616,7 +620,11 @@ class MockApi implements ShufaApi {
     return [...(mockDb.frames.get(taskId) ?? [])];
   }
 
-  subscribeTaskFrames(taskId: string, onFrame: (frame: Frame) => void): () => void {
+  subscribeTaskFrames(
+    taskId: string,
+    onFrame: (frame: Frame) => void,
+    _onReconnect?: () => void,
+  ): () => void {
     return onTaskFrame(taskId, onFrame);
   }
 
@@ -756,6 +764,8 @@ function setToken(token: string | null): void {
 
 let cachedRpc: ShufaRpc | null = null;
 let rpcReady: Promise<void> | null = null;
+/** rpc() 当前占用的底层 WS（close 时比对弃缓存，防误清新通道）。 */
+let cachedRpcClient: WebSocket | null = null;
 
 /**
  * 等 WS 通道就绪（W10g）：页面刷新后首个 RPC 若在 WebSocket open 之前发出
@@ -773,15 +783,30 @@ function rpc(): ShufaRpc {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const token = getToken();
   const ws = new WebSocket(
-    `${proto}//${location.host}/ws/rpc${token ? `?token=${encodeURIComponent(token)}` : ""}`,
+    `${proto}//${location.host}/ws/rpc${token ? `&token=${encodeURIComponent(token)}` : ""}`,
   );
-  rpcReady = new Promise<void>((resolve) => {
+  rpcReady = new Promise<void>((resolve, reject) => {
     ws.addEventListener("open", () => resolve(), { once: true });
-    // close/error 不 reject：错误路径由各 RPC 的既有 catch 呈现，避免未处理 rejection。
-    ws.addEventListener("close", () => resolve(), { once: true });
+    // 未 open 即 close（daemon 不在）→ reject：就绪门必须失败，调用方
+    // （boot 重试/ensureRpcReady 调用点）才能重试；open 后的 close 不影响
+    // 已 settle 的 promise。
+    ws.addEventListener(
+      "close",
+      () => reject(new Error("WebSocket is not open")),
+      { once: true },
+    );
+  });
+  // 断线弃缓存（W10l）：close 后下一次 rpc() 透明重建通道——否则 daemon
+  // 重启后所有 RPC 永久失败，只能刷新页面（Owner 痛点同帧流僵死）。
+  ws.addEventListener("close", () => {
+    if (cachedRpcClient === ws) {
+      cachedRpc = null;
+      rpcReady = null;
+    }
   });
   const link = new RPCLink({ websocket: ws });
   cachedRpc = createORPCClient(link) as unknown as ShufaRpc;
+  cachedRpcClient = ws;
   return cachedRpc;
 }
 
@@ -897,6 +922,7 @@ class RpcApi implements ShufaApi {
   private readonly frameCursor = new Map<string, number>();
 
   async getBootstrap(): Promise<BootstrapInfo> {
+    await ensureRpcReady(); // W10l：启动调用走就绪门——socket 未开/刚重建即调会 "not open" 崩成启动失败死屏
     const out = await rpc().bootstrap();
     return {
       needsSetup: out.needs_setup,
@@ -927,6 +953,7 @@ class RpcApi implements ShufaApi {
   }
 
   async me(): Promise<SessionInfo | null> {
+    await this.ensureRpcReady(); // W10l：启动就绪门（同 getBootstrap）
     const token = getToken();
     if (token === null) return null;
     try {
@@ -1094,24 +1121,53 @@ class RpcApi implements ShufaApi {
     return frames;
   }
 
-  /** /ws/tasks/{id}?token=&after_seq= 原生 WS 推送（daemon 现成实现）。 */
-  subscribeTaskFrames(taskId: string, onFrame: (frame: Frame) => void): () => void {
+  /** /ws/tasks/{id}?token=&after_seq= 原生 WS 推送（daemon 现成实现）。
+   * 断线自动重连（W10l，Owner 痛点「daemon 重启后页面静默僵死」）：指数
+   * 退避重订 + after_seq 断点续传——断线期间的帧由服务端补推，页面无感
+   * 恢复；主动退订（切任务）不再重连。 */
+  subscribeTaskFrames(
+    taskId: string,
+    onFrame: (frame: Frame) => void,
+    onReconnect?: () => void,
+  ): () => void {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const token = getToken();
-    const afterSeq = this.frameCursor.get(taskId) ?? 0;
-    const ws = new WebSocket(
-      `${proto}//${location.host}/ws/tasks/${encodeURIComponent(taskId)}?after_seq=${afterSeq}${token ? `&token=${encodeURIComponent(token)}` : ""}`,
-    );
-    ws.onmessage = (event) => {
-      try {
-        const frame = JSON.parse(event.data) as Frame;
-        this.frameCursor.set(taskId, Math.max(this.frameCursor.get(taskId) ?? 0, frame.seq));
-        onFrame(frame);
-      } catch {
-        // 畸形帧丢弃
-      }
+    let closed = false;
+    let attempt = 0;
+    let ws: WebSocket | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const connect = (): void => {
+      if (closed) return;
+      const token = getToken();
+      const afterSeq = this.frameCursor.get(taskId) ?? 0;
+      ws = new WebSocket(
+        `${proto}//${location.host}/ws/tasks/${encodeURIComponent(taskId)}?after_seq=${afterSeq}${token ? `&token=${encodeURIComponent(token)}` : ""}`,
+      );
+      ws.onopen = () => {
+        if (attempt > 0) onReconnect?.(); // 重连成功：catch-up 帧之外的状态主动拉
+        attempt = 0;
+      };
+      ws.onmessage = (event) => {
+        try {
+          const frame = JSON.parse(event.data) as Frame;
+          this.frameCursor.set(taskId, Math.max(this.frameCursor.get(taskId) ?? 0, frame.seq));
+          onFrame(frame);
+        } catch {
+          // 畸形帧丢弃
+        }
+      };
+      ws.onclose = () => {
+        if (closed) return;
+        attempt += 1;
+        const delay = Math.min(15000, 500 * 2 ** Math.min(attempt, 5));
+        retryTimer = setTimeout(connect, delay);
+      };
     };
-    return () => ws.close();
+    connect();
+    return () => {
+      closed = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+      ws?.close();
+    };
   }
 
   /** 前台续聊（W7b；W10 加 mode）：followup=排队（缺省）/ steer=引导当前轮。 */

@@ -33,6 +33,7 @@
     lastUsage,
     loadTasks,
     projectFrames,
+    pendingQueueItems,
     queue,
     refreshQueue,
     removeQueueItem,
@@ -146,7 +147,7 @@
   const lastUsageView = $derived(lastUsage());
 
   const selected = $derived(getSelectedTask());
-  const items = $derived(projectFrames(tasks.frames));
+  const items = $derived([...projectFrames(tasks.frames), ...pendingQueueItems()]);
   const detailRunning = $derived(selected?.status === "running" || tasks.sending);
 
   /** 走查演示模式激活（URL demoDelay 写入 sessionStorage 后生效）。 */

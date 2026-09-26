@@ -67,7 +67,9 @@ export async function selectTask(taskId: string): Promise<void> {
   const results = await api.getTaskResults(taskId);
   if (tasks.selectedId !== taskId) return;
   tasks.results = results;
-  const subscribe = api.subscribeTaskFrames(taskId, (frame) => {
+  const subscribe = api.subscribeTaskFrames(
+    taskId,
+    (frame) => {
     // 真实 user-text 帧到达 → 移除同文本的乐观帧（走查 R7：乐观显示去重）。
     if (frame.kind === "user-text") dropOptimistic(frame.text ?? "");
     if (tasks.selectedId === taskId) tasks.frames = [...tasks.frames, frame];
@@ -86,13 +88,20 @@ export async function selectTask(taskId: string): Promise<void> {
     }
     // 内核会话标题帧（2026-09-25 三轮）：行标题即时跟进（title 落库回读）。
     if (frame.kind === "session-title") void loadTaskRow(taskId);
-    // 队列面板（W10b）：队头被消费（user-text）或轮结束（turn-end）→ 队列
-    // 已变，重拉视图（不在编辑冻结中拉——冻结段不在内核 inbox，重拉会把
-    // 悬置段从面板上抹掉）。
-    if (frame.kind === "user-text" || frame.kind === "turn-end") {
+      // 队列面板（W10b）：队头被消费（user-text）或轮结束（turn-end）→ 队列
+      // 已变，重拉视图（不在编辑冻结中拉——冻结段不在内核 inbox，重拉会把
+      // 悬置段从面板上抹掉）。
+      if (frame.kind === "user-text" || frame.kind === "turn-end") {
+        if (queue.editingId === null && !queue.reordering) void refreshQueue();
+      }
+    },
+    () => {
+      // WS 重连成功（W10l）：断线期间的状态变化 catch-up 帧未必覆盖——队列
+      // 与任务行主动各拉一次。
       if (queue.editingId === null && !queue.reordering) void refreshQueue();
-    }
-  });
+      void loadTaskRow(taskId);
+    },
+  );
   if (tasks.selectedId !== taskId) {
     subscribe(); // 等待期间已切走：立即退订，不留悬挂订阅
     return;
@@ -227,6 +236,8 @@ export async function refreshQueue(): Promise<void> {
     const out = await api.taskQueue(taskId);
     queue.items = out.items;
     queue.lockBoundary = out.lockBoundary;
+    // 待发气泡接管排队消息的显示——清掉同文本乐观帧（防双泡）。
+    for (const item of out.items) dropOptimistic(item.text);
   } catch {
     // 队列拉取失败不打断对话流；下次帧到达或操作后重试。
   }
@@ -384,7 +395,8 @@ export async function createTask(
 // ---- 帧投影（TranscriptView 条目语法） ----
 
 export type TranscriptItem =
-  | { kind: "user"; seq: number; text: string }
+  | { kind: "user"; seq: number; text: string; /** 队列待发标记（W10l：排队/引导在转录流尾部的待发气泡）。 */
+      queued?: "排队中" | "引导待发" | "注入待发" }
   | { kind: "assistant"; seq: number; text: string; streaming: boolean }
   | { kind: "reasoning"; seq: number; text: string; streaming: boolean }
   | { kind: "tool"; seq: number; toolName: string; argsText: string; result: string | null }
@@ -546,6 +558,31 @@ export function projectFrames(frames: Frame[]): TranscriptItem[] {
     }
   }
   return items;
+}
+
+/** 队列待发气泡合并（W10l，Owner 痛点「发出去的消息不知道去哪了/刷新即
+ * 消失」）：queue.items 中尚未投递的消息追加到转录流尾部，按模式挂状态标
+ * 签——真实 user-text 帧到达时条目离开队列视图，待发气泡同步消失（无双
+ * 泡）。乐观帧已存在的同文本跳过（refreshQueue 落地时会清乐观帧，这里只
+ * 是兜底防闪）。 */
+export function pendingQueueItems(): TranscriptItem[] {
+  const optimisticTexts = new Set(
+    tasks.frames
+      .filter(
+        (f) =>
+          f.kind === "user-text" &&
+          (f.payload as { optimistic?: boolean } | undefined)?.optimistic === true,
+      )
+      .map((f) => f.text ?? ""),
+  );
+  return queue.items
+    .filter((i) => i.inflight !== true && !optimisticTexts.has(i.text))
+    .map((i, idx) => ({
+      kind: "user" as const,
+      seq: -1000 - idx,
+      text: i.text,
+      queued: i.mode === "steer" ? ("引导待发" as const) : i.mode === "inject" ? ("注入待发" as const) : ("排队中" as const),
+    }));
 }
 
 /** 选中任务（组件内以 $derived 调用；模块层不做导出派生）。 */

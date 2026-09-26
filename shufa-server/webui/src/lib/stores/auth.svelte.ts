@@ -21,19 +21,28 @@ export const auth = $state({
 export async function initAuth(opts: { quiet?: boolean } = {}): Promise<void> {
   if (!opts.quiet) auth.loading = true;
   auth.error = null;
-  try {
-    auth.bootstrap = await api.getBootstrap();
-    const existing = await api.me();
-    if (existing !== null) {
-      auth.session = existing;
-    } else if (auth.bootstrap.allowAnonymous) {
-      auth.session = await api.loginAnonymous();
+  // W10l：启动自愈——daemon 重启/短暂不在（部署窗口）不再直接死成「启动失败」
+  // 死屏（Owner 痛点：daemon 一重启页面就废），退避重试三轮后才报错。
+  const attempts = opts.quiet ? 1 : 5;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      auth.bootstrap = await api.getBootstrap();
+      const existing = await api.me();
+      if (existing !== null) {
+        auth.session = existing;
+      } else if (auth.bootstrap.allowAnonymous) {
+        auth.session = await api.loginAnonymous();
+      }
+      break;
+    } catch (error) {
+      if (attempt === attempts) {
+        auth.error = error instanceof Error ? error.message : String(error);
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+      }
     }
-  } catch (error) {
-    auth.error = error instanceof Error ? error.message : String(error);
-  } finally {
-    auth.loading = false;
   }
+  auth.loading = false;
 }
 
 export async function login(username: string, password: string): Promise<boolean> {
