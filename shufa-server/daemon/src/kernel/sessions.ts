@@ -921,9 +921,18 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     // 已重新纳入（DB 行跳过——Codex P1：防同一消息双重投递）。另按
     // kernelId 精确去重 + kind/text 兜底（v6 旧行无 kernelId——迁移窗口
     // 内核与 DB 同条并存时内核侧为真，DB 行剔除）。
-    const adoptedAnchorTexts = new Set(adoptedTurn.map((m) => inboxMessageText(m)));
-    const adoptedAttachTexts = new Set(adoptedStep.map((m) => inboxMessageText(m)));
     const adoptedIds = new Set([...adoptedTurn, ...adoptedStep].map((m) => inboxMessageId(m)));
+    // 文本兜底（仅 v6 旧行 kernelId 为空）：计数制——每条收养消息只抵扣一条
+    // 同文本旧行，多出的合法重复行保留（Codex 终审：防过度删除丢消息）。
+    const legacyTextBudget = new Map<string, number>();
+    for (const m of adoptedTurn) {
+      const key = `anchor:${inboxMessageText(m)}`;
+      legacyTextBudget.set(key, (legacyTextBudget.get(key) ?? 0) + 1);
+    }
+    for (const m of adoptedStep) {
+      const key = `attach:${inboxMessageText(m)}`;
+      legacyTextBudget.set(key, (legacyTextBudget.get(key) ?? 0) + 1);
+    }
     entry.queue = [
       ...adoptedStep.map((m) => ({
         id: inboxMessageId(m),
@@ -938,13 +947,17 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         kind: 'anchor' as const,
         state: 'queued' as const,
       })),
-      ...(restored?.items ?? []).filter(
-        (i) =>
-          i.state === 'queued' &&
-          !(i.kernelId !== undefined && adoptedIds.has(i.kernelId)) &&
-          !(i.kind === 'anchor' && adoptedAnchorTexts.has(i.text)) &&
-          !(i.kind === 'attach' && adoptedAttachTexts.has(i.text)),
-      ),
+      ...(restored?.items ?? []).filter((i) => {
+        if (i.state !== 'queued') return false;
+        if (i.kernelId !== undefined) return !adoptedIds.has(i.kernelId); // v8 行只精确匹配
+        const key = `${i.kind}:${i.text}`;
+        const budget = legacyTextBudget.get(key) ?? 0;
+        if (budget > 0) {
+          legacyTextBudget.set(key, budget - 1); // 抵扣一条
+          return false;
+        }
+        return true;
+      }),
     ];
     entry.lockBoundaryId = restored?.lockBoundaryId ?? null;
     persistQueueState(entry);
@@ -1480,6 +1493,8 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     const item = entry.queue.find((q) => q.id === messageId);
     if (item === undefined) throw new Error(`队列中没有该条目：${messageId}`);
     if (item.state !== 'queued' && withdrawItem(entry, item) === 'consumed') {
+      // 拒绝前先落库清理后的队列（Codex 终审：防重启从旧 DB 行复活已消费条目）。
+      persistQueueState(entry);
       throw new Error('该条目已生效，无法修改模式（请刷新）');
     }
     if (mode === 'queue') {
@@ -1530,6 +1545,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       }
     }
     if (consumedIds.has(messageId)) {
+      persistQueueState(entry); // 同上：拒绝前落库清理结果
       throw new Error('该条目已生效，无法立刻发送（请刷新）');
     }
     group = group.filter((m) => !consumedIds.has(m.id));
@@ -1570,6 +1586,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       new Set(orderedIds).size !== orderedIds.length ||
       orderedIds.some((id) => !reorderableIds.includes(id))
     ) {
+      persistQueueState(entry); // 撤回已改内存（含已消费剔除）——先落库再拒绝
       throw new Error('队列已变化（可能有消息正在被消费），请刷新后重试');
     }
     const byId = new Map(entry.queue.map((q) => [q.id, q]));

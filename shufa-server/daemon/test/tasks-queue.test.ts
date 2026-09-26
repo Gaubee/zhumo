@@ -544,6 +544,67 @@ describe('sessions 统一队列（W10k：单一序列 + 单航次投递）', () 
     expect(items.filter((i) => i.text === '纯 DB 锚点')).toHaveLength(1); // 保留
   });
 
+  it('Codex 终审 A：拒绝路径先落库——已消费条目不会从旧 DB 行复活', async () => {
+    const persisted: string[][] = [];
+    const sessions2 = createTaskSessions({
+      kernel: () => asKernelHandle(kernel),
+      modelSelection: async () => ({ provider: 'zhipu', model: 'glm-5.3-flash' }),
+      retention: 50,
+      onQueuePersist: (_sid, _taskId, items) => {
+        persisted.push(items.map((i) => i.text));
+      },
+    });
+    const created = await sessions2.createTaskSession('task-final-a', {
+      cwd: root,
+      framesFile: path.join(root, 'frames-fa.jsonl'),
+      prompt: '初始',
+    });
+    const sid = created.sessionId;
+    const agent = kernel.created.at(-1)!;
+    // 跑完初始轮（否则 anchor 承认被「next-turn 非空」门挡住）。
+    agent.inbox.splice('next-turn', 0, agent.inbox.nextTurn.length, []);
+    kernel.emitSessionEvent(sid, { seq: 1, type: 'turn/start', data: {} });
+    kernel.emitSessionEvent(sid, { seq: 2, type: 'turn/end', data: { reason: { kind: 'completed' } } });
+    sessions2.followup(sid, '被消费的');
+    agent.inbox.splice('next-turn', 0, agent.inbox.nextTurn.length, []); // 模拟已消费
+    const id = sessions2.queueView(sid).items[0]!.messageId;
+    expect(() => sessions2.queueSetMode(sid, id, 'inject')).toThrow('已生效');
+    expect(persisted.at(-1) ?? []).not.toContain('被消费的'); // 清理已落库
+  });
+
+  it('Codex 终审 B：文本兜底计数制——两条同文本旧行+一个收养恰剩一条；v8 行不同 kernelId 保留', async () => {
+    const sessions2 = createTaskSessions({
+      kernel: () => asKernelHandle(kernel),
+      modelSelection: async () => ({ provider: 'zhipu', model: 'glm-5.3-flash' }),
+      retention: 50,
+      onQueueRestore: () => ({
+        lockBoundaryId: null,
+        items: [
+          { id: 'db-1', text: '同文本', kind: 'anchor', state: 'queued' },
+          { id: 'db-2', text: '同文本', kind: 'anchor', state: 'queued' },
+          { id: 'db-3', text: '同文本', kind: 'anchor', state: 'queued', kernelId: '别的内核id' },
+        ],
+      }),
+    });
+    const created = await sessions2.createTaskSession('task-final-b', {
+      cwd: root,
+      framesFile: path.join(root, 'frames-fb.jsonl'),
+      prompt: '初始',
+    });
+    const agent = kernel.created.at(-1)!;
+    agent.followup(
+      createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '同文本' }] }),
+    );
+    await sessions2.resumeTaskSession('task-final-b', {
+      sessionId: created.sessionId,
+      framesFile: path.join(root, 'frames-fb.jsonl'),
+    });
+    const items = sessions2.queueView(created.sessionId).items;
+    // 收养 1 + 兜底抵扣 1 条旧行（另一条合法同文本旧行保留）+ kernelId 不同的
+    // v8 行保留 → 恰 3 条（不丢消息、不双投）。
+    expect(items.filter((i) => i.text === '同文本')).toHaveLength(3);
+  });
+
   it('不在册：队列操作抛错（调用方引导重开对话）', async () => {
     expect(() => sessions.queueView('nope')).toThrow('not found');
     expect(() => sessions.queueLock('nope', null)).toThrow('not found');
