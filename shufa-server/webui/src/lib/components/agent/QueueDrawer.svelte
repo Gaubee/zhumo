@@ -174,9 +174,12 @@
           <li
             class="flex items-center gap-2 rounded border border-border/60 bg-card px-2 py-1 text-[12px] transition-colors {isHeld(item.message_id) ? 'opacity-75' : ''}"
           >
-            <!-- status：三态锁定位（边界锁点击=解锁放回；被动锁点击=边界上移到该行；未锁点击=锁定） -->
+            <!-- status：三态锁定位（边界锁点击=解锁放回；被动锁点击=边界上移到该行；未锁点击=锁定）。
+                 开/闭两个图标常驻 DOM 由 data-lock CSS 切换（不 {#if} 切换）——拖动库在起始帧
+                 克隆行作为浮影，克隆体不随后续重渲染更新，双图标+CSS 才能让浮影正确呈被动锁。 -->
             <button
               type="button"
+              data-lock={lockState(item.message_id)}
               class="shrink-0 rounded p-0.5 {lockState(item.message_id) === 'locked'
                 ? 'text-amber-600'
                 : lockState(item.message_id) === 'passive'
@@ -191,11 +194,8 @@
               onclick={() =>
                 onlock(lockState(item.message_id) === 'locked' ? null : item.message_id)}
             >
-              {#if lockState(item.message_id) === 'unlocked'}
-                <IconLockOpen class="h-3 w-3" />
-              {:else}
-                <IconLock class="h-3 w-3" />
-              {/if}
+              <IconLockOpen class="h-3 w-3 lock-ico-open" />
+              <IconLock class="h-3 w-3 lock-ico-closed" />
             </button>
             <!-- 模式微标 + 单行文本 -->
             <span
@@ -306,3 +306,36 @@
     {/if}
   </div>
 {/if}
+
+<style>
+  /* 三态锁图标切换（data-lock 属性驱动；双图标常驻 DOM 的原因见上方模板注释）。
+   * 图标类在 lucide 子组件的 svg 上，本组件 hash class 不落在那里——图标类
+   * 一律 :global()（克隆体会原样复制这些类，规则对浮影同样生效）。 */
+  button[data-lock='unlocked'] :global(.lock-ico-closed) {
+    display: none;
+  }
+  button[data-lock='locked'] :global(.lock-ico-open),
+  button[data-lock='passive'] :global(.lock-ico-open) {
+    display: none;
+  }
+
+  /* 拖动浮影（svelte-dnd-action 克隆行、id=dnd-action-dragged-el、position:fixed）：
+   * 克隆发生在拖动起始帧——早于 reordering=true 的重渲染，冻结在未锁态。
+   * 拖动中全员被动锁定（Owner 设计），浮影同样以被动锁呈现：琥珀闭锁 +
+   * 操作按钮禁用观感 + 抓取浮层阴影。 */
+  :global(#dnd-action-dragged-el) {
+    box-shadow: 0 10px 24px rgb(0 0 0 / 0.14);
+  }
+  :global(#dnd-action-dragged-el) :global(.lock-ico-open) {
+    display: none;
+  }
+  :global(#dnd-action-dragged-el) :global(.lock-ico-closed) {
+    display: block;
+  }
+  :global(#dnd-action-dragged-el) button[data-lock] {
+    color: rgb(217 119 6 / 0.55);
+  }
+  :global(#dnd-action-dragged-el) button:not([data-lock]) {
+    opacity: 0.3;
+  }
+</style>

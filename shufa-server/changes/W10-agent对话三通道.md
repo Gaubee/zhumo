@@ -128,6 +128,39 @@ actions 禁用+暂停帧驱动刷新防抖动，drop 一次性提交新序）。
   原生层静默丢弃（demo.setDelay 从未到达）——api.ensureRpcReady() 就绪门，
   刷新后关键请求前置等待
 
+### W10h~i 锁定语义重做 + 专业 dnd（Owner 六/七轮，2026-09-27~28）
+
+- W10h 锁定四轮收敛（Owner「做减法」定稿）：锁=只是不再自动发送，其它
+  都能做。daemon 持久化锁定段（lockedQueue 暂离内核 inbox + 边界条
+  lockBoundaryId）；锁定段内全功能开放（编辑/删除/改模式/拖动/立刻发送
+  ——改 steer/inject=脱离段立即投递，立刻发送=先解锁放回再提队头打断
+  开轮）；跨段拖动全局重排按边界重切。单测 16 用例（含拖动期
+  DemoAgent 暂停消费零丢失）
+- W10i 引入 svelte-dnd-action（实时插入预览；HTML5 手写 DnD 弃用）：
+  根因=consider 回调未开拖动态，$effect 以 props 回灌 dndItems 当场抹掉
+  预览序——首次 consider 即 onreordering(true)（daemon 暂停消费+停止
+  回灌）；CDP 真实输入序列验证重排生效（合成 PointerEvent
+  isTrusted=false 对 dnd-action 无效）
+
+### W10j 拖动浮影被动锁（Owner 复测反馈「拖动中的元素没有上锁」，2026-09-28）
+
+- 根因：svelte-dnd-action 拖动时克隆被拖行（id=dnd-action-dragged-el、
+  position:fixed 跟随鼠标，原行 visibility:hidden 留位）。克隆发生在拖动
+  起始帧——早于 reordering=true 的重渲染，浮影永远冻结在「灰开锁+按钮
+  未禁用」的拖动前渲染；列表内静态行则已正确琥珀闭锁。视觉判读（像素
+  采样）实证：浮影锁灰开、按钮正常，其余行琥珀闭锁+禁用。
+- 修复（QueueDrawer.svelte）：锁图标改双渲染（开/闭 SVG 常驻 DOM，
+  data-lock 属性 CSS 切换——克隆体里两图标都在）；浮影 CSS 覆盖
+  （#dnd-action-dragged-el：闭锁图标+琥珀色+操作按钮禁用观感+抓取
+  浮层阴影）。图标类在 lucide 子组件 svg 上，作用域规则一律 :global()
+  （svelte-check「Unused CSS selector」教训）。
+- 验证：本机 8299 + 可见标签页（无头隐藏页 svelte css 过渡动画瞬间结束
+  在 0 态，slide 卡死属环境伪影非产品 BUG）CDP 真实拖动：浮影 DOM
+  computed=琥珀 rgba(217,119,6,.55)/闭锁显示/按钮 opacity .3/阴影；
+  像素判读三条全员琥珀闭锁（含浮影）；松手重排提交（下一条=浮影乙）。
+- 走查注意：浏览器可能缓存旧 bundle（dropSourceStyle 警告为旧版指纹）
+  ——复测前强刷/加 cache-bust 参数。
+
 ### 已定位待修（Owner 指示下一步处理）
 
 - 排队消息不出现在对话面板：内核只在消息被消费（开轮）时落 session log
