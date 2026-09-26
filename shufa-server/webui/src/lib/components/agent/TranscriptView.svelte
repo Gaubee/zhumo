@@ -13,8 +13,14 @@
   import IconTriangleAlert from "@lucide/svelte/icons/triangle-alert";
   import IconCheck from "@lucide/svelte/icons/check";
   import IconCopy from "@lucide/svelte/icons/copy";
-  import MarkdownRender from "markstream-svelte";
+  import MarkdownRender, { disableD2 } from "markstream-svelte";
   import "markstream-svelte/index.css";
+
+  // D2 图表是 markstream 的可选依赖——未安装时其终稿渲染链仍无条件探测
+  // （await import 抛桩错误，无 catch）：每条消息一次未捕获 rejection，且
+  // 中断该条后续渲染（Owner 实测 2026-09-28：消息气泡不显示 + console 刷
+  // 屏 d2 报错）。本产品不用 D2 图表，装配即显式关闭（模块级一次）。
+  disableD2();
   import AgentToolRow from "./AgentToolRow.svelte";
   import ReasoningRow from "./ReasoningRow.svelte";
   import UserBubble from "./UserBubble.svelte";
