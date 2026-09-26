@@ -139,12 +139,41 @@ describe('sessions 队列面板（W10b，内核 inbox）', () => {
     expect(view.lockBoundary).toBeNull();
   });
 
-  it('锁定段内：改模式/立刻发送被拒（与冻结语义矛盾，先解锁）', async () => {
-    const { sessionId } = await seedQueue(['一', '二']);
+  it('W10h 开放锁定段：改引导=脱离锁定段立即投递（发送意图优先于锁定）；改排队=留在段内', async () => {
+    const { sessionId, agent } = await seedQueue(['一', '二', '三']);
     const ids = sessions.queueView(sessionId).items.map((i) => i.messageId);
-    sessions.queueLock(sessionId, ids[0]!);
-    expect(() => sessions.queueSetMode(sessionId, ids[0]!, 'steer')).toThrow('先解锁');
-    expect(() => sessions.queueSendNow(sessionId, ids[0]!)).toThrow('先解锁');
+    sessions.queueLock(sessionId, ids[1]!);
+    // 段内「二」改引导：脱离锁定段 → steer 投递；边界收敛到「三」。
+    sessions.queueSetMode(sessionId, ids[1]!, 'steer');
+    let view = sessions.queueView(sessionId);
+    expect(agent.steers).toHaveLength(1);
+    // 「二」脱离锁定段进挂起组（held=false）；锁定段剩「三」。
+    expect(view.items.map((i) => [i.text, i.held])).toEqual([
+      ['一', false],
+      ['三', true],
+      ['二', false],
+    ]);
+    expect(view.lockBoundary).toBe(ids[2]);
+    // 段内「三」改回排队：无操作（继续冻结）。
+    sessions.queueSetMode(sessionId, ids[2]!, 'queue');
+    view = sessions.queueView(sessionId);
+    // 「三」保持锁定（改回排队在段内=继续冻结）；「二」仍在挂起组（steer）。
+    expect(view.items.map((i) => [i.text, i.held])).toEqual([
+      ['一', false],
+      ['三', true],
+      ['二', false],
+    ]);
+  });
+
+  it('W10h 开放锁定段：立刻发送=先解锁放回再提队头打断', async () => {
+    const { sessionId, agent } = await seedQueue(['一', '二', '三']);
+    agent.status = 'running';
+    const ids = sessions.queueView(sessionId).items.map((i) => i.messageId);
+    sessions.queueLock(sessionId, ids[2]!);
+    // 锁定段内立刻发送「三」：解锁放回 → 提队头 → cancel。
+    sessions.queueSendNow(sessionId, ids[2]!);
+    expect(agent.cancellations).toHaveLength(1);
+    expect(sessions.queueView(sessionId).items.map((i) => i.text)).toEqual(['三', '一', '二']);
   });
 
   it('queueRemove：按 id 删除（next-turn 与 next-step 皆可）', async () => {

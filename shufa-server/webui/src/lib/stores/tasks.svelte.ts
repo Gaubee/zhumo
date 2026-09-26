@@ -300,8 +300,9 @@ export async function setQueueItemMode(messageId: string, mode: TaskQueueMode): 
     await refreshQueue();
     // 时序语义提示（W10g）：改引导/注入会改变生效时点（先于排队消息），
     // 队列视图分组如实表达——这里同步告知，避免「顺序乱了」的误解。
-    if (mode === "steer") toast("已改为引导：当前轮下一步立即生效（先于排队消息）");
-    else if (mode === "inject") toast("已改为注入：随下一步注入上下文（不作为对话轮）");
+    const held = queue.items.find((i) => i.message_id === messageId)?.held === true;
+    if (mode === "steer") toast(held ? "已改为引导：脱离锁定段，当前轮下一步立即生效" : "已改为引导：当前轮下一步立即生效（先于排队消息）");
+    else if (mode === "inject") toast(held ? "已改为注入：脱离锁定段，随下一步注入上下文" : "已改为注入：随下一步注入上下文（不作为对话轮）");
     else toast("已改回排队：本轮结束后按序逐条开轮");
   } catch (error) {
     tasks.error = error instanceof Error ? error.message : String(error);

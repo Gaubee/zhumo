@@ -1119,13 +1119,10 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       const locked = entry.lockedQueue;
       entry.lockedQueue = [];
       entry.lockBoundaryId = null;
+      // 原对象直接放回（id 保留——解锁后旧 messageId 仍可寻址，前端
+      // 持有的 id 不会悬空）。
       for (const message of locked) {
-        entry.agent.followup(
-          createUserMessage({
-            source: { kind: 'user' },
-            content: [{ type: 'text', text: inboxMessageText(message) }],
-          }) as never,
-        );
+        entry.agent.followup(message as never);
       }
       return;
     }
@@ -1181,6 +1178,11 @@ export function createTaskSessions(deps: TaskSessionDeps) {
 
   /** 修改投递模式（Owner 设计：可改成注入或引导）：取出→按新模式重投。
    * 三个高层方法各自处理桶归属与唤醒；新消息 id 记 queueModes 辨识。 */
+  /**
+   * 修改投递模式（W10h 开放锁定段）：锁定段内改 steer/inject = 该条脱离锁定
+   * 段按新模式立即投递（发送意图优先于锁定）；改回 queue = 留在锁定段尾部
+   * （继续冻结，解锁时放回）。锁定边界空段自动收敛（边界移到剩余首条）。
+   */
   queueSetMode(sessionId: string, messageId: string, mode: 'queue' | 'steer' | 'inject'): void {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
@@ -1188,10 +1190,28 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       (m) => inboxMessageId(m) === messageId,
     );
     if (message === undefined) {
-      if (entry.lockedQueue.some((m) => inboxMessageId(m) === messageId)) {
-        throw new Error('锁定段内不支持改模式（先解锁再改）');
+      const heldIdx = entry.lockedQueue.findIndex((m) => inboxMessageId(m) === messageId);
+      if (heldIdx < 0) throw new Error(`队列中没有该条目：${messageId}`);
+      if (mode === 'queue') {
+        // 锁定段内保持排队模式：无操作（继续冻结）。
+        return;
       }
-      throw new Error(`队列中没有该条目：${messageId}`);
+      // 脱离锁定段，按新模式立即投递（发送意图优先于锁定）。
+      const [held] = entry.lockedQueue.splice(heldIdx, 1);
+      if (entry.lockedQueue.length === 0) {
+        entry.lockBoundaryId = null;
+      } else if (entry.lockBoundaryId === messageId) {
+        entry.lockBoundaryId = inboxMessageId(entry.lockedQueue[0]);
+      }
+      const rebuilt = createUserMessage({
+        source: { kind: 'user' },
+        content: [{ type: 'text', text: inboxMessageText(held) }],
+      });
+      const rebuiltId = (rebuilt as { id?: string }).id ?? '';
+      entry.queueModes.set(rebuiltId, mode);
+      if (mode === 'steer') entry.agent.steer(rebuilt as never);
+      else entry.agent.inject(rebuilt as never);
+      return;
     }
     entry.queueModes.delete(messageId);
     entry.agent.inbox.remove(messageId);
@@ -1215,14 +1235,15 @@ export function createTaskSessions(deps: TaskSessionDeps) {
   queueSendNow(sessionId: string, messageId: string): void {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
-    const turn = entry.agent.inbox.nextTurn;
-    const idx = turn.findIndex((m) => inboxMessageId(m) === messageId);
-    if (idx < 0) {
-      if (entry.lockedQueue.some((m) => inboxMessageId(m) === messageId)) {
-        throw new Error('锁定段内不支持立刻发送（先解锁）');
-      }
-      throw new Error(`队列中没有该排队条目：${messageId}`);
+    let turn = entry.agent.inbox.nextTurn;
+    let idx = turn.findIndex((m) => inboxMessageId(m) === messageId);
+    if (idx < 0 && entry.lockedQueue.some((m) => inboxMessageId(m) === messageId)) {
+      // 锁定段内立刻发送：发送意图优先于锁定——全部放回后再提队头。
+      this.queueLock(sessionId, null);
+      turn = entry.agent.inbox.nextTurn;
+      idx = turn.findIndex((m) => inboxMessageId(m) === messageId);
     }
+    if (idx < 0) throw new Error(`队列中没有该排队条目：${messageId}`);
     if (idx > 0) {
       const [message] = entry.agent.inbox.splice('next-turn', idx, 1, []);
       entry.agent.inbox.splice('next-turn', 0, 0, [message!]);
