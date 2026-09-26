@@ -111,6 +111,23 @@ actions 禁用+暂停帧驱动刷新防抖动，drop 一次性提交新序）。
 - 排队消息对话面板不可见（乐观帧刷新即消失）仍在待修清单——需 queued
   补帧或乐观帧保留至消费帧到达。
 
+### W10e~g 走查基建与实测反馈修复（Owner 三/四/五轮，2026-09-27）
+
+- W10e 立刻发送（actions 第四按钮）：排队条提队头 + cancel{user}+keepInbox
+  （内核收敛后自动消费队头）；URL ?demoDelay=<ms> 走查开关（daemon 内置
+  DemoAgent：同构内存 inbox + 定时消费产演示帧，零真实 LLM）；demo 豁免
+  模型路由门控；agent-browser 全流程走查通过
+- W10f 「分析中」轮间空转修复：turn-end completed 且 inbox 双桶空
+  → onSessionIdle → 任务回 done（等待输入）；队列非空保持 running
+- W10g Owner 三反馈：①通道提示改 toast（新增 ui/toast 零依赖组件）；
+  ②改引导「顺序乱」=视图掩盖时序——抽屉拆两组如实表达（即将生效 ·
+  当前轮下一步 / 排队 · 按序生效），预览条同步，改模式 toast 告知；
+  拖动收窄到排队组；③三态锁（解锁/主动/被动——主动锁后全部连带锁定，
+  被动锁点击=边界上移，store 单主动锁互斥）
+- WS 首发竞态根修（走查中抓到）：刷新后首个 RPC 在 WS open 前发出被
+  原生层静默丢弃（demo.setDelay 从未到达）——api.ensureRpcReady() 就绪门，
+  刷新后关键请求前置等待
+
 ### 已定位待修（Owner 指示下一步处理）
 
 - 排队消息不出现在对话面板：内核只在消息被消费（开轮）时落 session log

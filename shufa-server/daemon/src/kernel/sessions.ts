@@ -235,7 +235,6 @@ class DemoAgent implements AgentLike {
   }
 
   followup(message: unknown): void {
-    console.log(`[demo] DemoAgent.followup queue=${this.inbox.nextTurn.length + 1}`);
     this.inbox.nextTurn.push(message);
     this.schedule();
   }
@@ -270,7 +269,6 @@ class DemoAgent implements AgentLike {
   }
 
   private consumeHead(): void {
-    console.log(`[demo] consumeHead delay=${this.demoDelayMs} queue=${this.inbox.nextTurn.length}`);
     const head = this.inbox.nextTurn.shift();
     if (head === undefined) {
       this.status = 'idle';
