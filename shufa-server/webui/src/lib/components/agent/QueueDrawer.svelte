@@ -109,7 +109,9 @@
   });
 
   function handleDndItems(newItems: Array<Record<string, unknown>>): void {
-    // 库 consider/finalize 回写：拖动中仅本地预览（防 props 回灌打断）。
+    // 库 consider 回写（拖动开始的首次 consider 也走这里）：开启拖动态——
+    // 通知 daemon 暂停消费 + reordering 置位（$effect 停止回灌，预览序保得住）。
+    if (!reordering) onreordering(true);
     syncing = true;
     dndItems = newItems as Array<TaskQueueItem & { id: string }>;
   }
@@ -292,7 +294,7 @@
         <!-- dnd 容器（svelte-dnd-action）：实时插入预览（占位动画），松手落定。 -->
         <section
           class="dnd-queue flex flex-col gap-1"
-          use:dndzone={{ items: dndItems, flipDurationMs: 120, dropTargetStyle: {}, dropSourceStyle: { opacity: 0.4 } } as never}
+          use:dndzone={{ items: dndItems, flipDurationMs: 120, dropTargetStyle: {} } as never}
           onconsider={(e) => handleDndItems(e.detail.items)}
           onfinalize={(e) => onDndFinalize(e.detail.items)}
         >
