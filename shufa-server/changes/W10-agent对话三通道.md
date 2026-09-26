@@ -239,3 +239,42 @@ actions 禁用+暂停帧驱动刷新防抖动，drop 一次性提交新序）。
   + tsc + svelte-check + build 全绿
 - FakeAgent 扩 inbox 内存实现（followup/steer/inject 入桶+remove/replace/
   splice），与真实内核持久 inbox 同构
+
+## W10l 体验修复二轮（Codex 日曜三体验评审 3/10 → 批次落地，2026-09-29）
+
+### 评审结论（Codex 日曜三 32 分钟）
+
+- 现状做减法 3/10：语义能力完整，但同一件事多入口、低频能力占主行、状态藏
+  tooltip/toast/三态图标。按重设计清单预计 8/10。
+- P1×2：①队列操作错误对用户不可见（refreshQueue 静默 catch + tasks.error
+  不渲染）；②dndItems 只比 id——同 id 编辑/改模式后渲染旧文本（=Owner
+  「改了内容队列还是旧的」BUG 确切根因）。
+- P2×8 + 触屏专项 7 条 + 转录呈现决策（乐观帧 + queued 标记 ✓ 已做方向）。
+
+### 本轮修复（已全部浏览器复验）
+
+- 【根因·daemon】WS 帧流「连接开着却永不推送」：帧订阅绑在 live entry 上，
+  resume/makeEntry 替换条目即孤儿化订阅者；会话不在册时 subscribe 静默
+  no-op。修：订阅提升为 sessionId 键的模块级 Map（跨 entry 替换/不在册
+  窗口存活，WS 关闭退订，dispose 清空）。回归 +2（跨 resume 存活 /
+  disposeLive 后订阅→复活送达）。**这是 Owner「队列旧的/要手动刷新/
+  消息不出现」家族的共同根因**——178/178 绿。
+- 【P1①】编辑/撤回路径错误进 queue.error 内联错误条（原写 tasks.error
+  详情页不可见）；queueOpFailed 对「队列中没有该条目」（本地视图证实
+  过期）也自动刷新队列。
+- 【P1②】QueueDrawer 渲染源分离：rowItems（props 直派生，非拖动期渲染）
+  与 dndItems（拖动预览专用）——修同 id 旧文本渲染。
+- 【P2】停止按钮常驻（不与发送互斥，主操作位稳定）；toast 短文案
+  （已排队/已安排引导）；delayTouchStart: 120 触屏拖动保护。
+- 【自纠】重连改造时误写 `&token=`（带 token 启动即 RPC 死屏）→ `?token=`。
+
+### 复验记录（demo 10s，agent-browser）
+
+发送→排队气泡→10s 轮消费→气泡转真帧、抽屉即时清空（帧推送根因修复生效）；
+编辑流：点编辑→文本回填+编辑占位符+确认/取消按钮→改文→确认→行更新；
+错误条：「队列中没有该条目」内联可关闭。demo 全局开关已退（client+daemon）。
+
+### 待 Owner 拍板（重设计清单，删的是早期要的功能）
+
+删 Zap 直达 / 删行内「立刻发送」主图标 / 锁显式「从这里暂停」/ 紧凑列表 /
+状态流气泡（发送中→排队中→生效中→已送达/失败，id 去重，inflight=生效中）。

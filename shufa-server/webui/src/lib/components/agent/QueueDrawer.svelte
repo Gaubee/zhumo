@@ -108,17 +108,26 @@
   });
 
   /** dnd-action 容器 items（库要求可变数组带 id；拖动中库实时回写=插入预览）。
-   * 与 props 同步：非拖动期以 props 为准（items 变化重灌），拖动期不动。 */
+   * 拖动外不承担渲染职责（Codex UX P1：只比 id 回灌会漏同 id 的文本/模式
+   * 变更——「编辑后队列还是旧的」根因）：非拖动期渲染走 rowItems（props 直
+   * 派生），dndItems 仅拖动预览用，松手即被 items 重灌。 */
   let dndItems = $state<Array<TaskQueueItem & { id: string }>>([]);
-  let syncing = false;
   $effect(() => {
     if (reordering) return;
-    const next = listItems.map((i) => ({ ...i, id: i.message_id }));
-    if (JSON.stringify(next.map((n) => n.id)) !== JSON.stringify(dndItems.map((n) => n.id)) || syncing) {
-      syncing = false;
-      dndItems = next;
-    }
+    dndItems = listItems.map((i) => ({ ...i, id: i.message_id }));
   });
+  /** 非拖动期渲染源（props 直派生——内容变更即时反映）。 */
+  const rowItems = $derived(reordering ? null : listItems);
+
+  /** 行绑定（anchor/当前轮）——与 dndRows 同规则的单条版本。 */
+  function boundOf(item: TaskQueueItem): "current" | "anchor" {
+    if (item.mode === "queue") return "anchor";
+    const idx = listItems.indexOf(item);
+    for (let i = idx - 1; i >= 0; i -= 1) {
+      if (listItems[i]!.mode === "queue") return "anchor";
+    }
+    return "current";
+  }
 
   /** 行分组派生（dnd 容器版，与 rowGroups 同规则）。 */
   const dndRows = $derived.by(() => {
@@ -139,7 +148,6 @@
     // 库 consider 回写（拖动开始的首次 consider 也走这里）：开启拖动态——
     // 通知 daemon 暂停消费 + reordering 置位（$effect 停止回灌，预览序保得住）。
     if (!reordering) onreordering(true);
-    syncing = true;
     dndItems = newItems as Array<TaskQueueItem & { id: string }>;
   }
 
@@ -323,13 +331,19 @@
              动画），松手落定；补充条目拖过开轮条目即重新绑定。 -->
         <section
           class="dnd-queue flex flex-col gap-1"
-          use:dndzone={{ items: dndItems, flipDurationMs: 120, dropTargetStyle: {} } as never}
+          use:dndzone={{ items: dndItems, flipDurationMs: 120, delayTouchStart: 120 } as never}
           onconsider={(e) => handleDndItems(e.detail.items)}
           onfinalize={(e) => onDndFinalize(e.detail.items)}
         >
-          {#each dndRows as r (r.item.id)}
-            {@render row(r)}
-          {/each}
+          {#if rowItems !== null}
+            {#each rowItems as item (item.message_id)}
+              {@render row({ item, bound: boundOf(item) })}
+            {/each}
+          {:else}
+            {#each dndRows as r (r.item.id)}
+              {@render row(r)}
+            {/each}
+          {/if}
         </section>
       </div>
     {/if}

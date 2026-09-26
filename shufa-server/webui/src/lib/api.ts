@@ -783,7 +783,7 @@ function rpc(): ShufaRpc {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const token = getToken();
   const ws = new WebSocket(
-    `${proto}//${location.host}/ws/rpc${token ? `&token=${encodeURIComponent(token)}` : ""}`,
+    `${proto}//${location.host}/ws/rpc${token ? `?token=${encodeURIComponent(token)}` : ""}`,
   );
   rpcReady = new Promise<void>((resolve, reject) => {
     ws.addEventListener("open", () => resolve(), { once: true });

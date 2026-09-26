@@ -163,7 +163,7 @@
 
   async function beginQueueEdit(messageId: string): Promise<void> {
     if (composerRef !== null && composerRef.draftLength() > 0) {
-      tasks.error = "输入框有未发送内容，清空后再编辑队列消息";
+      queue.error = "输入框有未发送内容，清空后再编辑队列消息";
       return;
     }
     const text = await editQueueItem(messageId);
@@ -319,6 +319,20 @@
       <div class="border-t border-border p-3">
         <!-- W10c 队列抽屉：输入面板上方长出的手风琴（收起=预览，展开=列表+
              拖动排序）；选中任务变化或帧到达由 store 刷新（编辑/拖动期暂停）。 -->
+        {#if queue.error !== null}
+          <!-- W10l/Codex P1：队列操作错误内联可见（不再静默/藏 toast），可关闭。 -->
+          <div class="mb-1.5 flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-[11px] text-destructive" role="alert">
+            <span class="min-w-0 flex-1">{queue.error}</span>
+            <button
+              type="button"
+              class="shrink-0 rounded p-0.5 hover:bg-destructive/15"
+              aria-label="关闭错误提示"
+              onclick={() => (queue.error = null)}
+            >
+              <IconX class="h-3 w-3" />
+            </button>
+          </div>
+        {/if}
         <QueueDrawer
           items={queue.items}
           lockBoundary={queue.lockBoundary}

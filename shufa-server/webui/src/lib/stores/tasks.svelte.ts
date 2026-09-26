@@ -32,6 +32,8 @@ export const queue = $state({
   lockBoundary: null as string | null,
   editingId: null as string | null,
   reordering: false,
+  /** 队列操作错误（W10l/Codex P1：不再静默——详情内联呈现，可关闭）。 */
+  error: null as string | null,
 });
 
 let unsubscribe: (() => void) | null = null;
@@ -254,7 +256,7 @@ export async function editQueueItem(messageId: string): Promise<string | null> {
     await refreshQueue();
     return text;
   } catch (error) {
-    tasks.error = error instanceof Error ? error.message : String(error);
+    queueOpFailed(error);
     return null;
   }
 }
@@ -270,7 +272,7 @@ export async function confirmQueueEdit(text: string): Promise<void> {
     await refreshQueue();
     toast("已修改（锁定段内生效，解锁后按序发送）");
   } catch (error) {
-    tasks.error = error instanceof Error ? error.message : String(error);
+    queueOpFailed(error);
   }
 }
 
@@ -288,7 +290,7 @@ export async function lockQueue(messageId: string | null): Promise<void> {
     await refreshQueue();
     toast(messageId === null ? "已解锁：锁定段按原序放回，继续发送" : "已锁定：该条及之后的消息暂停发送，可安全编辑");
   } catch (error) {
-    tasks.error = error instanceof Error ? error.message : String(error);
+    queueOpFailed(error);
   }
 }
 
@@ -299,7 +301,7 @@ export async function removeQueueItem(messageId: string): Promise<void> {
     await api.taskQueueRemove(taskId, messageId);
     await refreshQueue();
   } catch (error) {
-    tasks.error = error instanceof Error ? error.message : String(error);
+    queueOpFailed(error);
   }
 }
 
@@ -315,7 +317,7 @@ export async function setQueueItemMode(messageId: string, mode: TaskQueueMode): 
     else if (mode === "inject") toast("已改为注入：作为上下文补充（不作为对话轮）");
     else toast("已改为开轮：新起一轮发送，其后的引导/注入跟随它");
   } catch (error) {
-    tasks.error = error instanceof Error ? error.message : String(error);
+    queueOpFailed(error);
   }
 }
 
@@ -348,18 +350,31 @@ export async function sendQueueNow(messageId: string): Promise<void> {
     );
     void refreshQueue();
   } catch (error) {
-    tasks.error = error instanceof Error ? error.message : String(error);
+    queueOpFailed(error);
   }
 }
 
 /** 拖动排序提交（拖动结束一次性调用；拖动期间面板已由 reordering 锁定）。 */
+/** 队列操作统一错误处理（W10l/Codex P1）：内联可见；冲突类自动重拉权威
+ * 视图（不要求手动刷新），操作失败不留下中间态。 */
+function queueOpFailed(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  queue.error = message.includes("队列已变化") ? "队列刚有变化，已为你刷新到最新" : message;
+  // 队列已变化/条目已生效/本地持有条目 daemon 不认识（已被消费）——本地视图
+  // 均已证实过期，自动拉取最新，不要求用户手动刷新。
+  if (message.includes("队列已变化") || message.includes("已生效") || message.includes("队列中没有该条目")) {
+    void refreshQueue();
+  }
+}
+
 export async function reorderQueue(orderedIds: string[]): Promise<void> {
   const taskId = tasks.selectedId;
   if (taskId === null) return;
+  queue.error = null;
   try {
     await api.taskQueueReorder(taskId, orderedIds);
   } catch (error) {
-    tasks.error = error instanceof Error ? error.message : String(error);
+    queueOpFailed(error);
   } finally {
     await refreshQueue();
   }

@@ -391,7 +391,6 @@ interface LiveTaskSession {
   turnUsage: TurnUsageAccumulator | undefined;
   deltaAt: number;
   pending: Map<number, { resolve: (answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> }) => void }>;
-  subscribers: Set<(frame: Frame) => void>;
   /** W10k 统一队列：单一有序序列（daemon 单一事实源）。内核 inbox 只是瞬时
    * 投递缓冲（admitted anchor + inflight attach），不再作为队列事实源。
    * 锁定段 = 序列中 lockBoundaryId 条及其后的连续后缀（held 由位置派生，
@@ -410,6 +409,11 @@ interface LiveTaskSession {
 export function createTaskSessions(deps: TaskSessionDeps) {
   const retention = deps.retention ?? DEFAULT_RETENTION;
   const live = new Map<string, LiveTaskSession>();
+  /** 帧订阅按 sessionId 挂（不随 entry 生灭）：resume/makeEntry 替换 live 条目、
+   * 或会话暂不在册（idle 后）时订阅依旧存活——否则 WS 帧流静默失联（socket
+   * 开着但永远收不到推送，前端无从自愈）。订阅随 WS 关闭退订；daemon 停机
+   * dispose 时整体清空。 */
+  const frameSubscribers = new Map<string, Set<(frame: Frame) => void>>();
   let firehoseBound = false;
   /** 演示延迟（Owner 走查开关，URL query 经 rpc demo.setDelay 设置；0=关闭）。
    * >0 时新建/复活会话用 DemoAgent（不调真实 LLM）。 */
@@ -656,11 +660,14 @@ export function createTaskSessions(deps: TaskSessionDeps) {
           console.warn('[sessions] 会话标题回写失败：', error instanceof Error ? error.message : error);
         }
       }
-      for (const subscriber of entry.subscribers) {
-        try {
-          subscriber(frame);
-        } catch {
-          // 单订阅者异常不拖垮投影。
+      const subscribers = frameSubscribers.get(entry.agent.session.id);
+      if (subscribers !== undefined) {
+        for (const subscriber of subscribers) {
+          try {
+            subscriber(frame);
+          } catch {
+            // 单订阅者异常不拖垮投影。
+          }
         }
       }
     }
@@ -898,7 +905,6 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       turnUsage: undefined,
       deltaAt: Date.now(),
       pending: new Map(),
-      subscribers: new Set(),
       queue: [],
       lockBoundaryId: null,
       admittedAnchorId: null,
@@ -1641,10 +1647,16 @@ export function createTaskSessions(deps: TaskSessionDeps) {
 
     /** 订阅 live 帧（WS 推送用）；返回退订函数。 */
     subscribe(sessionId: string, cb: (frame: Frame) => void): () => void {
-      const entry = live.get(sessionId);
-      if (!entry) return () => {};
-      entry.subscribers.add(cb);
-      return () => entry.subscribers.delete(cb);
+      // 不查 live：会话不在册（idle 后/重启后）同样登记——下一次 makeEntry
+      // （resume/续聊复活）后帧照常送达。此前 not-live 静默 no-op 是 WS 帧流
+      // 「连接开着却永不推送」的根因之一。
+      const set = frameSubscribers.get(sessionId) ?? new Set<(frame: Frame) => void>();
+      frameSubscribers.set(sessionId, set);
+      set.add(cb);
+      return () => {
+        set.delete(cb);
+        if (set.size === 0) frameSubscribers.delete(sessionId);
+      };
     },
 
     /** 会话是否在册（live）。 */
@@ -1660,6 +1672,8 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       }
       await Promise.allSettled([...live.values()].map((entry) => entry.dispose()));
       live.clear();
+      for (const set of frameSubscribers.values()) set.clear();
+      frameSubscribers.clear();
     },
   };
 }

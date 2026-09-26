@@ -265,7 +265,7 @@
       .join("\n");
     onsend(attachLines.length > 0 ? `${trimmed}\n${attachLines}` : trimmed, mode);
     // W10 通道反馈：运行中发送走内核 inbox/steer，等待被消费——即时告知去向。
-    if (running) notice(mode === "steer" ? "已引导当前轮（下一步即生效）" : "已排队，本轮结束后自动送达");
+    if (running) notice(mode === "steer" ? "已安排引导" : "已排队");
     text = "";
     attachments = [];
   }
@@ -588,6 +588,19 @@
         <IconSquare class="h-3.5 w-3.5 fill-current" />
       </Button>
     {:else}
+      {#if running && onstop !== null}
+        <!-- 停止常驻（Codex UX P2：不与发送互斥——主操作位稳定，随时可停）。 -->
+        <Button
+          size="sm"
+          class="h-8 w-8 rounded-full p-0 hover:bg-destructive/10 hover:text-destructive"
+          disabled={disabled}
+          onclick={stop}
+          aria-label="停止生成"
+          title="停止生成（已排队的消息保留）"
+        >
+          <IconSquare class="h-3.5 w-3.5 fill-current" />
+        </Button>
+      {/if}
       {#if running && text.trim().length > 0}
         <!-- W10：运行中有输入 → 引导（steer，下一 step 边界消费，影响当前轮）。 -->
         <Button

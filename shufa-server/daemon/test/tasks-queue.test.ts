@@ -611,4 +611,42 @@ describe('sessions 统一队列（W10k：单一序列 + 单航次投递）', () 
     expect(() => sessions.followup('nope', 'x')).toThrow('not found');
     expect(() => sessions.steer('nope', 'x')).toThrow('not found');
   });
+
+  // W10l 帧推送根因回归：订阅曾绑在 live entry 上——resume/makeEntry 替换条目
+  // 或会话暂不在册（disposeLive/重启后）时订阅被孤儿化/静默丢弃，WS「连接
+  // 开着却永不推送」（前端无从自愈）。订阅必须按 sessionId 存活。
+  it('帧订阅跨 resume 存活：订阅后 resume 替换 entry，后续帧仍送达', async () => {
+    const { sid } = await seedIdle('task-subs-resume');
+    const got: string[] = [];
+    sessions.subscribe(sid, (frame) => got.push(frame.kind));
+    // 续聊复活：resumeTaskSession 重建 live 条目（旧 entry 对象身份整体废弃）。
+    await sessions.resumeTaskSession('task-subs-resume', {
+      sessionId: sid,
+      framesFile: path.join(root, 'frames-task-subs-resume.jsonl'),
+    });
+    sessions.followup(sid, '复活后消息');
+    const agent = kernel.created.at(-1)!;
+    agent.inbox.splice('next-turn', 0, 1, []);
+    kernel.emitSessionEvent(sid, { seq: 90, type: 'turn/start', data: {} });
+    kernel.emitSessionEvent(sid, { seq: 91, type: 'turn/end', data: { reason: { kind: 'completed' } } });
+    expect(got).toContain('turn-start');
+  });
+
+  it('帧订阅在会话不在册时登记：disposeLive 后订阅，resume 复活后帧送达', async () => {
+    const { sid } = await seedIdle('task-subs-ghost');
+    await sessions.disposeLive(sid); // 条目下线（daemon 重启/换模型同构）
+    const got: string[] = [];
+    const off = sessions.subscribe(sid, (frame) => got.push(frame.kind));
+    await sessions.resumeTaskSession('task-subs-ghost', {
+      sessionId: sid,
+      framesFile: path.join(root, 'frames-task-subs-ghost.jsonl'),
+    });
+    sessions.followup(sid, '复活后消息');
+    const agent = kernel.created.at(-1)!;
+    agent.inbox.splice('next-turn', 0, 1, []);
+    kernel.emitSessionEvent(sid, { seq: 1, type: 'turn/start', data: {} });
+    kernel.emitSessionEvent(sid, { seq: 2, type: 'turn/end', data: { reason: { kind: 'completed' } } });
+    expect(got).toContain('turn-start');
+    off();
+  });
 });
