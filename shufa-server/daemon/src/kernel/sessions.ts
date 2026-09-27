@@ -976,15 +976,10 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     return store.readAfter(0).slice(-retention);
   }
 
-  async function makeEntry(
-    handle: { agent: AgentLike; dispose(): Promise<void> },
-    taskId: string,
-    store: FrameStore,
-    seeded: Frame[],
-  ): Promise<LiveTaskSession> {
-    // 替换链（Codex 六轮 P1）：同会话替换串行——并发 resume 的第二个装配
-    // 等第一个完成，其 prev 捕获到的是第一个的新条目（正确 dispose 链）。
-    const sid = handle.agent.session.id;
+  /** 会话替换串行段（Codex 六/七轮 P1）：fn 整段按 sessionId 互斥——并发
+   * resume 排队执行（第二个的 prev 捕获到第一个的新条目，dispose 链正确）；
+   * whenSettled/isReplacing 的窗口=fn 全程（含准备段 await）。 */
+  async function withSessionGate<T>(sid: string, fn: () => Promise<T>): Promise<T> {
     const prevGate = sessionGates.get(sid) ?? Promise.resolve();
     let releaseGate!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -993,19 +988,22 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     sessionGates.set(sid, gate);
     await prevGate.catch(() => {});
     try {
-    return await makeEntryInner(handle, taskId, store, seeded);
+      return await fn();
     } finally {
       releaseGate();
       if (sessionGates.get(sid) === gate) sessionGates.delete(sid);
     }
   }
 
-  async function makeEntryInner(
+  async function makeEntry(
     handle: { agent: AgentLike; dispose(): Promise<void> },
     taskId: string,
     store: FrameStore,
     seeded: Frame[],
   ): Promise<LiveTaskSession> {
+    // 闸门在 resumeTaskSession 顶部获取（Codex 七轮 P1 补全：准备段——
+    // modelSelection/agents.resume 的 await 期间旧条目仍在册且 gate 尚未
+    // 登记，whenSettled 盲区；整段替换从函数入口即串行）。
     const entry: LiveTaskSession = {
       agent: handle.agent,
       dispose: handle.dispose,
@@ -1402,6 +1400,10 @@ export function createTaskSessions(deps: TaskSessionDeps) {
 
     /** 复活持久会话（内核 session log 重建 LLM 历史；帧环由 jsonl 末尾 seed）。 */
     async resumeTaskSession(taskId: string, input: TaskSessionResumeInput): Promise<{ sessionId: string }> {
+      // 替换串行段从函数入口起（Codex 七轮 P1）：准备段（modelSelection/
+      // agents.resume 的 await）期间旧条目仍在册且 gate 未登记——whenSettled
+      // 曾有盲区，窗口内投递照丢。整段（准备→dispose→restore）互斥。
+      return withSessionGate(input.sessionId, async () => {
       // 演示模式：daemon 重启后的 demo 会话续聊——空 inbox 重建，历史帧回放。
       if (demoDelayMs > 0) {
         await makeDemoEntry(input.sessionId, taskId, new FrameStore(input.framesFile), entryFramesFromDisk(new FrameStore(input.framesFile)));
@@ -1427,6 +1429,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       const store = new FrameStore(input.framesFile);
       await makeEntry(handle, taskId, store, entryFramesFromDisk(store));
       return { sessionId: handle.agent.session.id };
+      });
     },
 
     /** 取消当前活动（幂等；排队消息存活）。 */

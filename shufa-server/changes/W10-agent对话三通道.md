@@ -459,3 +459,21 @@ live 复验深挖出三个真实缺陷（全部帧级证据定位+修复+回归�
 
 门禁：daemon 190/190 + tsc 0 + svelte-check 0 错 + build ✓；live 冒烟
 （demo 探针先行，双发送消费、队列清空）。
+
+## W10n 七轮修复（Codex 7.6/10——上轮 followup 门未真接入等，2026-09-29）
+
+- 【自省】上轮 followup 的 whenSettled 门在批量 python 编辑中锚点未匹配
+  静默未落盘（脚本无断言）——「批量脚本先写后验」法则违例的现行版。本轮
+  全部用 Edit 工具 + rg 落盘验证（service.ts:480）。
+- 【P1·门接入】followup 投递前 await whenSettled 真正接入。
+- 【P1·准备段窗口】闸门从 makeEntry 前移到 resumeTaskSession 函数入口
+  （withSessionGate 包整段：准备 await（modelSelection/agents.resume）期间
+  旧条目仍在册且 gate 未登记——whenSettled 曾有盲区，窗口内投递照丢）。
+- 【P2·发送/停止错误可见】tasks.error 此前详情页无渲染——与 queue.error
+  同位内联呈现（可关闭）。
+- 【测试补强】串行断言改可控 deferred（二换等一换：r1 create-dispose 挂起
+  期间 r2 不得进入替换段；放行后事件序恰为 create:start/end → resume:
+  start/end）。
+
+门禁：daemon 190/190 + tsc 0 + svelte-check 0 错 + build ✓；live 冒烟
+（双发送消费、队列清空）。

@@ -474,6 +474,10 @@ export class TaskService {
           ? this.deps.sessions.steer(sessionId, input.text)
           : this.deps.sessions.followup(sessionId, input.text) ?? undefined;
     };
+    // 替换窗口门（Codex 六/七轮 P1）：在途 resume 的整段（准备→dispose→
+    // restore）期间 live 指旧条目，直接投递会被 restore 覆盖且不抛错（丢单
+    // 无从触发重试）。等替换完成再投——七轮实证此前此门未真正接入。
+    await this.deps.sessions.whenSettled?.(sessionId);
 
     try {
       deliver();

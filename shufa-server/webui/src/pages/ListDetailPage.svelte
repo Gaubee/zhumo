@@ -336,6 +336,20 @@
               <IconX class="h-3 w-3" />
             </button>
           </div>
+        {:else if tasks.error !== null}
+          <!-- W10n 七轮 P2：发送/停止失败此前只写 tasks.error，详情页无渲染
+               （用户点停止遇冲突/发送失败后看不到原因）——同一位置内联呈现。 -->
+          <div class="mb-1.5 flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-[11px] text-destructive" role="alert">
+            <span class="min-w-0 flex-1">{tasks.error}</span>
+            <button
+              type="button"
+              class="shrink-0 rounded p-0.5 hover:bg-destructive/15"
+              aria-label="关闭错误提示"
+              onclick={() => (tasks.error = null)}
+            >
+              <IconX class="h-3 w-3" />
+            </button>
+          </div>
         {/if}
         <QueueDrawer
           items={queue.items}

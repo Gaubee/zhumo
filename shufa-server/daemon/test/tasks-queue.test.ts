@@ -911,19 +911,36 @@ describe('sessions 统一队列（W10k：单一序列 + 单航次投递）', () 
 
   // Codex 六轮 P1 回归：替换窗口（await dispose~restore）RPC 不得落在旧条目
   // 上被 restore 覆盖；并发 resume 串行（互绕 dispose 会泄漏句柄/pending）。
-  // 注意：被 await 的是「旧条目」的 dispose——窗口由 create 句柄的延迟
-  // dispose 制造（resume 句柄的 dispose 属下一轮替换）。
-  it('替换闸门：isReplacing 窗口为真；并发 resume 串行不互绕 dispose', async () => {
-    // create 句柄延迟 dispose：resume 替换时 await 它 → 窗口 ~15ms。
+  // 七轮补强：可控 deferred dispose 断言「二换等一换」（Codex 指出
+  // createDisposes>=1 不能证明串行）。注意：被 await 的是「旧条目」的
+  // dispose——窗口由 create 句柄的延迟 dispose 制造。
+  it('替换闸门：isReplacing 窗口为真；并发 resume 串行（二换等一换）', async () => {
+    const events: string[] = [];
+    let releaseCreateDispose!: () => void;
+    const createDisposeGate = new Promise<void>((r) => {
+      releaseCreateDispose = r;
+    });
     const origCreate = kernel.agents.create.bind(kernel.agents);
-    let createDisposes = 0;
     kernel.agents.create = async (options: { sessionId: string }) => {
       const handle = await origCreate(options);
       return {
         agent: handle.agent,
         dispose: async () => {
-          await new Promise((r) => setTimeout(r, 15));
-          createDisposes += 1;
+          events.push('create-dispose:start');
+          await createDisposeGate; // 挂起直到测试放行——精确控窗
+          events.push('create-dispose:end');
+        },
+      };
+    };
+    const origResume = kernel.agents.resume.bind(kernel.agents);
+    kernel.agents.resume = async (options: { resumeSessionId: string }) => {
+      const handle = await origResume(options);
+      return {
+        agent: handle.agent,
+        dispose: async () => {
+          events.push('resume-dispose:start');
+          await new Promise((r) => setTimeout(r, 5));
+          events.push('resume-dispose:end');
         },
       };
     };
@@ -936,13 +953,23 @@ describe('sessions 统一队列（W10k：单一序列 + 单航次投递）', () 
     await new Promise((r) => setTimeout(r, 80)); // 首轮完成
     expect(sessions.isReplacing(sid)).toBe(false);
     const r1 = sessions.resumeTaskSession('task-gate', { sessionId: sid, framesFile: path.join(root, 'frames-gate.jsonl') });
-    await new Promise((r) => setTimeout(r, 5)); // 替换窗口内（旧句柄 dispose 未完成）
-    expect(sessions.isReplacing(sid)).toBe(true);
+    await new Promise((r) => setTimeout(r, 5)); // r1 进入挂起的 create-dispose
+    expect(events).toContain('create-dispose:start');
+    expect(sessions.isReplacing(sid)).toBe(true); // 窗口为真（整段含准备）
     const r2 = sessions.resumeTaskSession('task-gate', { sessionId: sid, framesFile: path.join(root, 'frames-gate.jsonl') });
+    await new Promise((r) => setTimeout(r, 8));
+    // 串行证明：r1 的 create-dispose 未放行前，r2 不得进入替换段（无
+    // resume-dispose:start——那是 r2 处置 r1 新条目的动作）。
+    expect(events).not.toContain('resume-dispose:start');
+    releaseCreateDispose(); // 放行 r1
     await Promise.all([r1, r2]);
+    expect(events).toEqual([
+      'create-dispose:start',
+      'create-dispose:end',
+      'resume-dispose:start',
+      'resume-dispose:end',
+    ]);
     expect(sessions.isReplacing(sid)).toBe(false);
-    // 串行：r2 排队到 r1 之后（窗口内第二个请求不并行进入替换段）。
-    expect(createDisposes).toBeGreaterThanOrEqual(1);
   });
 
   it('steer 返回条目 id（attach 寻址）', async () => {
