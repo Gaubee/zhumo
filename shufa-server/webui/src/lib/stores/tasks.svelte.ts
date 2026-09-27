@@ -463,7 +463,7 @@ export async function reorderQueue(orderedIds: string[]): Promise<void> {
   } catch (error) {
     queue.reordering = false;
     queueOpFailed(error);
-    void refreshQueue();
+    await refreshQueue(); // Codex 六轮非阻塞：等待而非 fire-and-forget——刷新失败可见（内部 catch 呈错）
     return;
   }
   try {

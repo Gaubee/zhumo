@@ -370,8 +370,10 @@ class DemoAgent implements AgentLike {
       { at: Date.now(), seq: 0, kind: 'turn-end', text: 'completed' },
     ];
     // Codex 五轮 P2：重入 cancel（订阅者在 turn-start 回调内同步 cancel）已
-    // 发 cancelled turn-end 时，本轮不再发 completed（双「本轮完成」）；批后
-    // 才复位 turnOpen（批内 cancel 仍能正确识别本轮在途）。
+    // 发 cancelled turn-end 时，本轮不再发 completed（双「本轮完成」）。
+    // turnOpen 在批2投帧前复位（非注释曾写的批后）：投帧前复位使批2回调内
+    // 的再次 cancel 不再视本轮在途（cancelled 已终帧）；批1回调内的首cancel
+    // 恰在复位前——正确识别。
     if (this.cancelRequested) {
       this.cancelRequested = false;
       this.turnOpen = false;
@@ -462,6 +464,11 @@ export function createTaskSessions(deps: TaskSessionDeps) {
    * 开着但永远收不到推送，前端无从自愈）。订阅随 WS 关闭退订；daemon 停机
    * dispose 时整体清空。 */
   const frameSubscribers = new Map<string, Set<(frame: Frame) => void>>();
+  /** 会话替换链（Codex 六轮 P1）：makeEntry 的整段替换（释放 pending →
+   * await dispose → restore → pump）按 sessionId 串行——并发 resume 不会
+   * 互绕对方的 dispose（句柄/pending 泄漏）；RPC 入口经 whenSettled 等待
+   * 在途替换完成再取条目（窗口内落在旧条目上的操作会被 restore 覆盖丢单）。 */
+  const sessionGates = new Map<string, Promise<unknown>>();
   let firehoseBound = false;
   /** 演示延迟（Owner 走查开关，URL query 经 rpc demo.setDelay 设置；0=关闭）。
    * >0 时新建/复活会话用 DemoAgent（不调真实 LLM）。 */
@@ -970,6 +977,30 @@ export function createTaskSessions(deps: TaskSessionDeps) {
   }
 
   async function makeEntry(
+    handle: { agent: AgentLike; dispose(): Promise<void> },
+    taskId: string,
+    store: FrameStore,
+    seeded: Frame[],
+  ): Promise<LiveTaskSession> {
+    // 替换链（Codex 六轮 P1）：同会话替换串行——并发 resume 的第二个装配
+    // 等第一个完成，其 prev 捕获到的是第一个的新条目（正确 dispose 链）。
+    const sid = handle.agent.session.id;
+    const prevGate = sessionGates.get(sid) ?? Promise.resolve();
+    let releaseGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    sessionGates.set(sid, gate);
+    await prevGate.catch(() => {});
+    try {
+    return await makeEntryInner(handle, taskId, store, seeded);
+    } finally {
+      releaseGate();
+      if (sessionGates.get(sid) === gate) sessionGates.delete(sid);
+    }
+  }
+
+  async function makeEntryInner(
     handle: { agent: AgentLike; dispose(): Promise<void> },
     taskId: string,
     store: FrameStore,
@@ -1765,6 +1796,20 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         return { frames: entry.frames.filter((frame) => frame.seq > afterSeq), status: this.liveStatusOf(sessionId) };
       }
       return { frames: new FrameStore(framesFile).readAfter(afterSeq), status: 'persisted' };
+    },
+
+    /** 等待在途替换完成（Codex 六轮 P1）：RPC 入口先 await 此门再取条目
+     * ——替换窗口（await dispose ~ restore）内 live 仍指旧条目，直接操作
+     * 的副作用会被 restore 覆盖（followup 丢单，探针实证）。无在途替换
+     * 立即返回。 */
+    async whenSettled(sessionId: string): Promise<void> {
+      await sessionGates.get(sessionId)?.catch(() => {});
+    },
+
+    /** 同步探测在途替换（同步变更面 RPC 用：冲突快速失败由上层转可重试
+     * 错误——await 门只适合 async 路径）。 */
+    isReplacing(sessionId: string): boolean {
+      return sessionGates.has(sessionId);
     },
 
     /** 订阅 live 帧（WS 推送用）；返回退订函数。 */

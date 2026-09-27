@@ -909,6 +909,42 @@ describe('sessions 统一队列（W10k：单一序列 + 单航次投递）', () 
     expect(items.some((i) => i.text === '锚A')).toBe(true);
   });
 
+  // Codex 六轮 P1 回归：替换窗口（await dispose~restore）RPC 不得落在旧条目
+  // 上被 restore 覆盖；并发 resume 串行（互绕 dispose 会泄漏句柄/pending）。
+  // 注意：被 await 的是「旧条目」的 dispose——窗口由 create 句柄的延迟
+  // dispose 制造（resume 句柄的 dispose 属下一轮替换）。
+  it('替换闸门：isReplacing 窗口为真；并发 resume 串行不互绕 dispose', async () => {
+    // create 句柄延迟 dispose：resume 替换时 await 它 → 窗口 ~15ms。
+    const origCreate = kernel.agents.create.bind(kernel.agents);
+    let createDisposes = 0;
+    kernel.agents.create = async (options: { sessionId: string }) => {
+      const handle = await origCreate(options);
+      return {
+        agent: handle.agent,
+        dispose: async () => {
+          await new Promise((r) => setTimeout(r, 15));
+          createDisposes += 1;
+        },
+      };
+    };
+    const created = await sessions.createTaskSession('task-gate', {
+      cwd: root,
+      framesFile: path.join(root, 'frames-gate.jsonl'),
+      prompt: '初始',
+    });
+    const sid = created.sessionId;
+    await new Promise((r) => setTimeout(r, 80)); // 首轮完成
+    expect(sessions.isReplacing(sid)).toBe(false);
+    const r1 = sessions.resumeTaskSession('task-gate', { sessionId: sid, framesFile: path.join(root, 'frames-gate.jsonl') });
+    await new Promise((r) => setTimeout(r, 5)); // 替换窗口内（旧句柄 dispose 未完成）
+    expect(sessions.isReplacing(sid)).toBe(true);
+    const r2 = sessions.resumeTaskSession('task-gate', { sessionId: sid, framesFile: path.join(root, 'frames-gate.jsonl') });
+    await Promise.all([r1, r2]);
+    expect(sessions.isReplacing(sid)).toBe(false);
+    // 串行：r2 排队到 r1 之后（窗口内第二个请求不并行进入替换段）。
+    expect(createDisposes).toBeGreaterThanOrEqual(1);
+  });
+
   it('steer 返回条目 id（attach 寻址）', async () => {
     const { sid } = await seedIdle('task-steer-id');
     const itemId = sessions.steer(sid, '引导条目');

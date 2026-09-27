@@ -512,6 +512,7 @@ export class TaskService {
     if (task.status === 'cancelled') {
       throw new ORPCError('CONFLICT', { message: '已取消的任务不可操作' });
     }
+    this.guardReplacing(task);
     if (task.agent_session_id && this.deps.sessions.isLive(task.agent_session_id)) {
       this.deps.sessions.cancel(task.agent_session_id);
       // turn/end(cancelled) 帧由内核 firehose 自然落下（投影已有）；任务状态
@@ -558,6 +559,7 @@ export class TaskService {
   queueEdit(user: UserRow, id: string, messageId: string): TaskQueueEditOutput {
     const task = this.requireOwnedTask(user, id);
     this.requireLiveSession(task);
+    this.guardReplacing(task);
     const sessionId = task.agent_session_id!;
     // 未在锁定段：先锁定（编辑的冻结语义与锁定统一）。
     if (!this.deps.sessions.queueView(sessionId).items.some((i) => i.messageId === messageId && i.held)) {
@@ -575,6 +577,7 @@ export class TaskService {
   ): TaskQueueEditConfirmOutput {
     const task = this.requireOwnedTask(user, id);
     this.requireLiveSession(task);
+    this.guardReplacing(task);
     this.deps.sessions.queueEditApply(task.agent_session_id!, messageId, text);
     return { accepted: true };
   }
@@ -584,6 +587,7 @@ export class TaskService {
   queueLock(user: UserRow, id: string, messageId: string | null): TaskQueueLockOutput {
     const task = this.requireOwnedTask(user, id);
     this.requireLiveSession(task);
+    this.guardReplacing(task);
     this.deps.sessions.queueLock(task.agent_session_id!, messageId);
     return { accepted: true };
   }
@@ -592,6 +596,7 @@ export class TaskService {
   queueSetReordering(user: UserRow, id: string, paused: boolean): TaskQueueSetReorderingOutput {
     const task = this.requireOwnedTask(user, id);
     this.requireLiveSession(task);
+    this.guardReplacing(task);
     this.deps.sessions.setQueueReordering(task.agent_session_id!, paused);
     return { accepted: true };
   }
@@ -600,6 +605,7 @@ export class TaskService {
   queueRemove(user: UserRow, id: string, messageId: string): TaskQueueRemoveOutput {
     const task = this.requireOwnedTask(user, id);
     this.requireLiveSession(task);
+    this.guardReplacing(task);
     this.deps.sessions.queueRemove(task.agent_session_id!, messageId);
     return { accepted: true };
   }
@@ -608,6 +614,7 @@ export class TaskService {
   queueSetMode(user: UserRow, id: string, messageId: string, mode: TaskQueueMode): TaskQueueSetModeOutput {
     const task = this.requireOwnedTask(user, id);
     this.requireLiveSession(task);
+    this.guardReplacing(task);
     this.deps.sessions.queueSetMode(task.agent_session_id!, messageId, mode);
     return { accepted: true };
   }
@@ -616,6 +623,7 @@ export class TaskService {
   queueReorder(user: UserRow, id: string, orderedIds: string[]): TaskQueueReorderOutput {
     const task = this.requireOwnedTask(user, id);
     this.requireLiveSession(task);
+    this.guardReplacing(task);
     this.deps.sessions.queueReorder(task.agent_session_id!, orderedIds);
     return { accepted: true };
   }
@@ -624,11 +632,21 @@ export class TaskService {
   queueSendNow(user: UserRow, id: string, messageId: string): TaskQueueSendNowOutput {
     const task = this.requireOwnedTask(user, id);
     this.requireLiveSession(task);
+    this.guardReplacing(task);
     this.deps.sessions.queueSendNow(task.agent_session_id!, messageId);
     return { accepted: true };
   }
 
   /** 队列写操作前置：会话必须 live（不在册=重启后未开对话，队列本就空）。 */
+  /** 替换窗口守卫（Codex 六轮 P1）：resume 的 await dispose~restore 窗口内
+   * live 仍指旧条目——同步变更面在此窗口冲突快速失败（上层/webui 呈可重试
+   * 错误），followup 等 async 路径走 whenSettled 等待。 */
+  private guardReplacing(task: TaskRow): void {
+    if (task.agent_session_id && this.deps.sessions.isReplacing?.(task.agent_session_id)) {
+      throw new ORPCError('CONFLICT', { message: '会话正在恢复，请稍候重试' });
+    }
+  }
+
   private requireLiveSession(task: TaskRow): void {
     if (!task.agent_session_id || !this.deps.sessions.isLive(task.agent_session_id)) {
       throw new ORPCError('CONFLICT', { message: '会话不在运行，队列不可操作（先发送一条消息重开对话）' });

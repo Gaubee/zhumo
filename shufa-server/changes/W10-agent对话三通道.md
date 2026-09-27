@@ -442,3 +442,20 @@ live 复验深挖出三个真实缺陷（全部帧级证据定位+修复+回归�
 
 门禁：daemon 189/189 + tsc 0 + svelte-check 0 错 + build ✓；live 冒烟
 （demo 探针先行，双发送消费、队列清空）。
+
+## W10n 六轮修复（Codex 8.2/10 P1 替换闸门，2026-09-29）
+
+- 【P1·替换闸门】sessions 层 per-session 替换链：makeEntry 整段（释放
+  pending→await dispose→restore→pump）按 sessionId 串行——并发 resume 不
+  再互绕对方的 dispose（句柄/pending 泄漏）；新增 whenSettled（async 路径
+  等待门）+ isReplacing（同步面探测）。service 层：followup 在投递前 await
+  门（窗口内投递被 restore 覆盖丢单——Codex 探针实证 followup("during")
+  消失）；stop 与八个队列变更面在窗口内冲突快速失败（「会话正在恢复，请
+  稍候重试」——webui queueOpFailed 呈错+自动刷新）。回归 +1（窗口为真/
+  并发串行；注意：被 await 的是旧句柄 dispose，测试窗口须打在 create
+  句柄上——resume 句柄的 dispose 属下一轮）。
+- 【非阻塞】turnOpen 注释对齐实际复位时机（批2投帧前——重入 cancel 语义
+  所需）；reorder 恢复失败分支 refreshQueue 改 await（不再 fire-and-forget）。
+
+门禁：daemon 190/190 + tsc 0 + svelte-check 0 错 + build ✓；live 冒烟
+（demo 探针先行，双发送消费、队列清空）。
