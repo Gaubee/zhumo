@@ -1,7 +1,9 @@
 <!--
   指令输入卡（走查 R6 按 skill-creator-v2 ComposerCard 重写）：
-  附件行（素材视频 chip / 图片附件）→ 自动长高 textarea → 工具行
+  附件行（图片附件）→ 自动长高 textarea → 工具行
   （左簇：上下文表；右簇：附加图片 + 模型 chip + 强度 chip + 发送）。
+  （2026-09-28：素材视频 chip 撤除——会话级只读信息穿附件外衣属 affordance
+  错位，且与列表行/详情面板三处重复；素材主场在 TaskDetailPanel。）
   2026-09-25 前台对齐（Owner 指令「抄 skill-creator-v2」）：
   - 思考强度 chip：活动模型 efforts 档位（zcode 转数据源）；「跟随默认」= 不覆盖；
     running 禁用（本轮结束后再切，服务端同款拒绝）。
@@ -13,7 +15,6 @@
     skill-invocation 双消息注入）。`@` 已按 Owner 裁决撤除（DSH 无此面板语义）。
 -->
 <script lang="ts">
-  import IconFile from "@lucide/svelte/icons/file";
   import IconSend from "@lucide/svelte/icons/send";
   import IconSquare from "@lucide/svelte/icons/square";
   import IconChevronDown from "@lucide/svelte/icons/chevron-down";
@@ -34,7 +35,6 @@
     onsend,
     disabled = false,
     sending = false,
-    videoName = null,
     placeholder = "描述分析需求，例如：分析起笔角度与收笔…",
     /** 可用模型清单（null/空 = 无已配路由，模型/强度 chip 隐藏）。 */
     models = null,
@@ -68,7 +68,6 @@
     oncanceledit?: (() => void) | null;
     disabled?: boolean;
     sending?: boolean;
-    videoName?: string | null;
     placeholder?: string;
     models?: AvailableModel[] | null;
     defaultModel?: { provider: string; model: string } | null;
@@ -339,16 +338,6 @@
     bind:this={kbMenu}
   />
 
-  {#if videoName !== null}
-    <div class="mb-1.5 flex flex-wrap gap-1">
-      <span
-        class="flex items-center gap-1 rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-[10px]"
-      >
-        <IconFile class="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <span class="max-w-40 truncate">{videoName}</span>
-      </span>
-    </div>
-  {/if}
   {#if attachments.length > 0 || uploading}
     <div class="mb-1.5 flex flex-wrap gap-1">
       {#each attachments as att (att.resourceId)}

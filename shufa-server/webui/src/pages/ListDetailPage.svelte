@@ -375,7 +375,6 @@
           onconfirmedit={(text) => void confirmQueueEdit(text)}
           oncanceledit={() => cancelQueueEdit()}
           sending={tasks.sending}
-          videoName={selected.videoName}
           models={availableModels}
           defaultModel={availableDefault}
           currentModel={selected.modelProvider !== null && selected.modelModel !== null
