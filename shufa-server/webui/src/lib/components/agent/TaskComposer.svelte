@@ -63,8 +63,9 @@
 
   const pickedLabel = $derived.by(() => {
     if (picked === null) {
+      // Owner 2026-09-28：显示具体模型名 +（默认）标注，弃「跟随默认」抽象词。
       const def = availableDefault;
-      return def ? `跟随默认（${def.model}）` : "跟随默认";
+      return def ? `${def.model}（默认）` : "默认";
     }
     const current = picked;
     const found =
@@ -193,7 +194,7 @@
                 modelPickerOpen = false;
               }}
             >
-              跟随默认{availableDefault ? `（${availableDefault.model}）` : ""}
+              {availableDefault ? `${availableDefault.model}（默认）` : "默认"}
             </button>
             {#each available as item (item.provider + "::" + item.model)}
               <button
@@ -240,7 +241,7 @@
                 class="flex h-7 max-w-[140px] items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2.5 text-[11px] text-foreground/80 transition-colors hover:border-primary/50"
                 title="思考强度档位（跟随后台默认 = 不覆盖）"
               >
-                <span class="truncate">{picked?.effort ?? "强度·默认"}</span>
+                <span class="truncate">{picked?.effort ?? "模型默认"}</span>
                 <IconChevronDown class="h-3 w-3 shrink-0 opacity-60" aria-hidden="true" />
               </button>
             {/snippet}
@@ -258,7 +259,7 @@
                   effortOpen = false;
                 }}
               >
-                跟随默认
+                模型默认
               </button>
               {#each pickedEfforts as effort (effort)}
                 <button

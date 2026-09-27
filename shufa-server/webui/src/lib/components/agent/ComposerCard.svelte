@@ -150,15 +150,27 @@
     currentModel ?? (defaultModel !== null && groups.length > 0 ? defaultModel : null),
   );
 
-  /** chip 标签：活动模型名；同 id 跨路由时加 provider 前缀区分。 */
+  /** chip 标签：活动模型名（默认态标注「（默认）」——Owner 2026-09-28：裸模型名
+   * 分不清是任务覆盖还是后台默认）；同 id 跨路由时加 provider 前缀区分。 */
   const chipLabel = $derived.by(() => {
     if (activeModel === null) return "默认";
     const sameIdProviders = groups
       .filter((g) => g.models.some((m) => m.model === activeModel.model))
       .map((g) => g.provider);
     const prefix = sameIdProviders.length > 1 ? `${activeModel.provider}/` : "";
-    return `${prefix}${activeModel.model}`;
+    const suffix = currentModel === null ? "（默认）" : "";
+    return `${prefix}${activeModel.model}${suffix}`;
   });
+
+  /** 模型是否为后台默认（picker 行内「默认」标记）。 */
+  function isDefaultModel(provider: string, model: string): boolean {
+    return (
+      currentModel === null &&
+      defaultModel !== null &&
+      defaultModel.provider === provider &&
+      defaultModel.model === model
+    );
+  }
 
   /** 活动模型的档位目录（无数据 = 强度 chip 隐藏）。 */
   const activeEfforts = $derived.by(() => {
@@ -464,6 +476,9 @@
                   {#if (item.inputTypes ?? ["text"]).includes("image")}
                     <IconImage class="h-3 w-3 shrink-0 text-muted-foreground" aria-label="支持图片输入" />
                   {/if}
+                  {#if isDefaultModel(item.provider, item.model)}
+                    <span class="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-[9px] text-muted-foreground">默认</span>
+                  {/if}
                 </button>
               {/each}
             {/each}
@@ -490,7 +505,7 @@
                 {#if currentEffort !== null}
                   <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true"></span>
                 {/if}
-                <span class="truncate">{currentEffort ?? "强度·默认"}</span>
+                <span class="truncate">{currentEffort ?? "模型默认"}</span>
                 <IconChevronDown class="h-3 w-3 shrink-0 opacity-60" aria-hidden="true" />
               </button>
             {/snippet}
@@ -513,7 +528,7 @@
                     <IconCheck class="h-3 w-3" aria-hidden="true" />
                   {/if}
                 </span>
-                <span>跟随默认</span>
+                <span>模型默认</span>
               </button>
               {#each activeEfforts as effort (effort)}
                 <button
