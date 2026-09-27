@@ -109,15 +109,18 @@ describe('TaskService 创建链', () => {
     // ——任务目录名 + 视频文件名，绝不含数据根前缀；并带 cwd 口径句。
     expect(call.prompt).toContain(path.join(folder, 'lecture.mp4'));
     expect(call.prompt).toContain(path.join(folder, '.shufa'));
-    expect(call.prompt).toContain('所有路径均相对于当前工作目录（你的 cwd，即用户根目录）');
+    expect(call.prompt).toContain('相对于当前工作目录');
     expect(call.prompt).not.toContain(env.config.dataRoot);
     expect(call.prompt).not.toContain('绝对路径');
     // 视频链入任务根目录（capability 收容要求 video 在 taskRoot 内），绝不再指
     // blobs 实体（首轮真实联调 25 分钟死循环根因）。
     expect(call.prompt).not.toContain('blobs');
     expect(existsSync(path.join(call.cwd, folder, 'lecture.mp4'))).toBe(true);
-    expect(call.prompt).toContain('mcp__shufa__summary_write');
-    expect(call.prompt).toContain('result_url');
+    // 过拟合铁律（Owner 2026-09-27）：任务段只有用户原话 + 实例上下文，
+    // 任务模式指令（工具名/result_url 语义）只存在于 SKILL.md，不进任务消息。
+    expect(call.prompt).not.toContain('mcp__shufa__summary_write');
+    expect(call.prompt).not.toContain('result_url');
+    expect(call.prompt).not.toContain('请分析');
 
     // 资源行：任务目录（dir）→ .shufa（dir，meta）+ 视频文件（blob）。
     const rows = env.db.prepare('SELECT * FROM resources ORDER BY rowid').all() as Array<{

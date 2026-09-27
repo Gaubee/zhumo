@@ -81,8 +81,13 @@ stdout 输出 `{"step":"transcribe","skipped":"transcribe","reason":"…"}`，
   `focus_grid_idx` 是讲评焦点格（周边旁注活动最强）。
 - **clip**：`bbox` 为焦点区（对齐坐标系）。crops 产物给最终报告的读者看，
   你的语义判断依据是转录与各步 JSON，不是这些图。
+- **transcribe**：返回值携带转录全文（`transcript_text`）与 segments——
+  摘要与标签撰写以它为准。
 
 ## 你的核心工作：transcribe 之后、export 之前
+
+摘要（summary）与标签（labels）必须由你亲自撰写后经 `mcp__shufa__summary_write`
+提交——没有替你生成摘要的工具。
 
 ### 1. 模式匹配：kb_list 扫描「总结模式」
 
