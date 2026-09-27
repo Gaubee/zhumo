@@ -972,6 +972,37 @@ describe('sessions 统一队列（W10k：单一序列 + 单航次投递）', () 
     expect(sessions.isReplacing(sid)).toBe(false);
   });
 
+  // Codex 8.8 P2 回归：并发 rebuildIfLive（模型切换）的 isLive 判定在门内——
+  // 第二段不得因第一段整建窗口的「live 已删」而跳过（旧 setModel 门外判定
+  // 的竞态：DB 已切新模型、live agent 残留旧模型）。deferred resume 控窗。
+  it('rebuildIfLive：并发第二段不跳过（门内判定）；不在册 no-op=false', async () => {
+    const { sid } = await seedIdle('task-rebuild-race');
+    let release!: () => void;
+    const hang = new Promise<void>((r) => {
+      release = r;
+    });
+    let resumes = 0;
+    const origResume = kernel.agents.resume.bind(kernel.agents);
+    kernel.agents.resume = async (options: { resumeSessionId: string }) => {
+      const handle = await origResume(options);
+      resumes += 1;
+      if (resumes === 1) await hang; // 第一段 resume 挂起：整建窗口（live 已删、未落册）
+      return handle;
+    };
+    const framesFile = path.join(root, 'frames-task-rebuild-race.jsonl');
+    const r1 = sessions.rebuildIfLive('task-rebuild-race', { sessionId: sid, framesFile });
+    await new Promise((r) => setTimeout(r, 8)); // r1 持门挂起
+    const r2 = sessions.rebuildIfLive('task-rebuild-race', { sessionId: sid, framesFile });
+    await new Promise((r) => setTimeout(r, 8)); // r2 排队——此刻门外 isLive=false（旧竞态点）
+    release();
+    const [first, second] = await Promise.all([r1, r2]);
+    expect(first).toBe(true);
+    expect(second).toBe(true); // 关键：第二段等门后见 live 再整建，未跳过
+    expect(resumes).toBe(2);
+    // 不在册：no-op 返回 false（下次 resume 自然带新模型）。
+    await expect(sessions.rebuildIfLive('task-rebuild-race', { sessionId: 'sid-ghost', framesFile })).resolves.toBe(false);
+  });
+
   it('steer 返回条目 id（attach 寻址）', async () => {
     const { sid } = await seedIdle('task-steer-id');
     const itemId = sessions.steer(sid, '引导条目');

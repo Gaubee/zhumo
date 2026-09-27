@@ -398,14 +398,16 @@ export class TaskService {
       ...(input.effort !== undefined ? { modelEffort: input.effort } : {}),
     });
     const sessionId = task.agent_session_id;
-    if (sessionId && this.deps.sessions.isLive(sessionId)) {
-      // 单门整建（Codex 终轮 P2）：dispose+resume 同一 gate——两段式之间
-      // queueView/投递会读到「无 live」中间态；rebuildSession 整段互斥。
-      await this.deps.sessions.rebuildSession(task.id, {
+    if (sessionId && typeof this.deps.sessions.rebuildIfLive === 'function') {
+      // isLive 判定入链（Codex 8.8 P2）：门外判定时，并发第二次 setModel 若
+      // 恰逢第一次整建的 dispose 窗口（live 已删）会误判不在册跳过重建——
+      // DB 已新、agent 仍旧。rebuildIfLive 门内判定+整建，第二段必然
+      // 等第一段落册后再建（不在册=false，下次 resume 自然带新模型）。
+      const rebuilt = await this.deps.sessions.rebuildIfLive(task.id, {
         sessionId,
         framesFile: this.framesFileOf(task),
       });
-      this.rebind(task);
+      if (rebuilt) this.rebind(task);
     }
     return this.toItem(getTaskById(this.deps.db, task.id) ?? task);
   }

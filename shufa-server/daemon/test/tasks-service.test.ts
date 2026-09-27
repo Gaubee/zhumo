@@ -39,7 +39,7 @@ function fakeSessions() {
     resumeTaskSession: vi.fn(async (_taskId: string, input: { sessionId: string; framesFile: string }) => ({ sessionId: input.sessionId })),
     cancel: vi.fn(),
     disposeLive: vi.fn(async () => {}),
-    rebuildSession: vi.fn(async (_taskId: string, input: { sessionId: string }) => ({ sessionId: input.sessionId })),
+    rebuildIfLive: vi.fn(async () => true),
     answer: vi.fn(() => false),
     emit: vi.fn((_sessionId: string, frame: Omit<Frame, 'at' | 'seq'>) => {
       emitted.push({ ...frame, at: Date.now(), seq: emitted.length + 1 } as Frame);
@@ -313,8 +313,16 @@ describe('TaskService 创建链', () => {
     const updated = await service.setModel(user, { taskId: item.id, provider: 'zhipu', model: 'glm-5.3-flash' });
     expect(updated.model_provider).toBe('zhipu');
     expect(updated.model_model).toBe('glm-5.3-flash');
-    // W10n 终轮：热切=单门 rebuildSession（dispose+resume 同 gate，不再两段）。
-    expect(sessions.raw.rebuildSession).toHaveBeenCalled();
+    // W10n 终轮：热切=单门 rebuildIfLive（dispose+resume 同 gate，不再两段）。
+    // 十轮（Codex 8.8 P2）：isLive 判定入链——并发第二次切换不再可能跳过重建。
+    expect(sessions.raw.rebuildIfLive).toHaveBeenCalledWith(item.id, {
+      sessionId: 'task-1',
+      framesFile: expect.any(String),
+    });
+    // 不在册（rebuildIfLive=false）：列照更新、不整建、不抛（下次 resume 带新模型）。
+    sessions.raw.rebuildIfLive.mockResolvedValueOnce(false);
+    const cold = await service.setModel(user, { taskId: item.id, provider: 'zhipu', model: 'glm-5.3-flash' });
+    expect(cold.model_model).toBe('glm-5.3-flash');
     // 悬空模型拒绝。
     await expect(service.setModel(user, { taskId: item.id, provider: 'nope', model: 'm' })).rejects.toThrow('不在已配置路由中');
   });

@@ -508,3 +508,20 @@ live 复验深挖出三个真实缺陷（全部帧级证据定位+修复+回归�
 
 门禁：daemon 190/190 + tsc 0 + svelte-check 0 错 + build ✓；live 冒烟
 （双发送消费、队列清空、demo 退出）。
+
+## W10n 十轮（Codex 8.8/10 收口复核新 P2：并发 setModel 跳过重建）
+
+- 【P2·isLive 门外判定竞态】Codex 收口复核确认 queueView P2 已闭，但指出：
+  并发第二次 setModel 若恰逢第一次 rebuildSession 的 dispose 窗口（live 已
+  删、resume 未落），其门外 isLive 判定误报「不在册」跳过重建——DB 已切新
+  模型、live agent 残留旧模型。
+- 修复：rebuildSession → rebuildIfLive（isLive 判定移入 withSessionGate 门
+  内；不在册返回 false 不整建）。第二段必然等第一段 resume 落册后再整建，
+  DB 与 live 最终一致；不在册语义不变（下次 resume 自然带新模型）。
+- service.setModel 改调 rebuildIfLive（返回 true 才 rebind）；fake sessions
+  同步更新 + 断言补「不在册=false 仍更新列不抛」。
+- 回归测试（tasks-queue，deferred agents.resume 控窗）：第一段 resume 挂起
+  期间并发第二段不跳过（resumes=2、双 true）；不在册 no-op=false。
+
+门禁：daemon 191/191 + tsc 0（daemon 面；webui 未动）。
+

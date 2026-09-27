@@ -979,7 +979,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
   /** 会话替换串行段（Codex 六/七轮 P1）：fn 整段按 sessionId 互斥——并发
    * resume 排队执行（第二个的 prev 捕获到第一个的新条目，dispose 链正确）；
    * whenSettled/isReplacing 的窗口=fn 全程（含准备段 await）。 */
-  /** resume 主体（无门版——由 resumeTaskSession / rebuildSession 的门包覆）。 */
+  /** resume 主体（无门版——由 resumeTaskSession / rebuildIfLive 的门包覆）。 */
   async function resumeInner(taskId: string, input: TaskSessionResumeInput): Promise<{ sessionId: string }> {
       // 演示模式：daemon 重启后的 demo 会话续聊——空 inbox 重建，历史帧回放。
       if (demoDelayMs > 0) {
@@ -1463,21 +1463,24 @@ export function createTaskSessions(deps: TaskSessionDeps) {
 
     /** 单门整建（Codex 终轮 P2）：模型切换的 dispose+resume 收进同一 gate——
      * 两段式（disposeLive 门→resume 门）之间 queueView 会读到「无 live」的
-     * 中间态空队列；单门下读者（runExclusive）整段等待，醒来即新条目。 */
-    async rebuildSession(taskId: string, input: TaskSessionResumeInput): Promise<{ sessionId: string }> {
+     * 中间态空队列；单门下读者（runExclusive）整段等待，醒来即新条目。
+     * 8.8 P2：isLive 判定同入门内——门外判定时并发第二次切换若恰逢第一次
+     * 整建的 dispose 窗口（live 已删）会误判不在册而跳过，agent 残留旧模型；
+     * 门内判定下第二段必然等第一段 resume 落册后再整建。返回是否整建。 */
+    async rebuildIfLive(taskId: string, input: TaskSessionResumeInput): Promise<boolean> {
       return withSessionGate(input.sessionId, async () => {
         const entry = live.get(input.sessionId);
-        if (entry !== undefined) {
-          live.delete(input.sessionId);
-          for (const pending of entry.pending.values()) pending.resolve({ answers: [] });
-          entry.pending.clear();
-          try {
-            await entry.dispose();
-          } catch {
-            // 旧条目回收失败不阻断重建。
-          }
+        if (entry === undefined) return false;
+        live.delete(input.sessionId);
+        for (const pending of entry.pending.values()) pending.resolve({ answers: [] });
+        entry.pending.clear();
+        try {
+          await entry.dispose();
+        } catch {
+          // 旧条目回收失败不阻断重建。
         }
-        return resumeInner(taskId, input);
+        await resumeInner(taskId, input);
+        return true;
       });
     },
 
