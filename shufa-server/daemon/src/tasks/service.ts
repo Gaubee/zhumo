@@ -399,8 +399,9 @@ export class TaskService {
     });
     const sessionId = task.agent_session_id;
     if (sessionId && this.deps.sessions.isLive(sessionId)) {
-      await this.deps.sessions.disposeLive(sessionId);
-      await this.deps.sessions.resumeTaskSession(task.id, {
+      // 单门整建（Codex 终轮 P2）：dispose+resume 同一 gate——两段式之间
+      // queueView/投递会读到「无 live」中间态；rebuildSession 整段互斥。
+      await this.deps.sessions.rebuildSession(task.id, {
         sessionId,
         framesFile: this.framesFileOf(task),
       });
@@ -545,25 +546,29 @@ export class TaskService {
 
   /** 队列视图：live 不在册（daemon 重启后未 resume）返回空——重开对话
    * （followup/面板操作触发 resume）时 inbox 由内核持久 splices 恢复。
-   * held=锁定段条目（暂离内核 inbox，不会被消费）。W10n 八轮 P2：入口等
-   * 替换门——冲突触发的自动刷新不再读到替换窗口里的旧 live 队列。 */
+   * held=锁定段条目（暂离内核 inbox，不会被消费）。W10n 终轮 P2：读取在
+   * 互斥链内完成（isLive 检查+取值同段）——isLive 先于门会在模型切换的
+   * dispose 段提前返回空；快照式 whenSettled 也追不上等待期间追加的门。
+   * fake sessions 无 runExclusive 时回落直读（测试面）。 */
   async queueView(user: UserRow, id: string): Promise<TaskQueueListOutput> {
     const task = this.requireOwnedTask(user, id);
-    if (!task.agent_session_id || !this.deps.sessions.isLive(task.agent_session_id)) {
-      return { items: [], lockBoundary: null };
-    }
-    await this.deps.sessions.whenSettled?.(task.agent_session_id);
-    const view = this.deps.sessions.queueView(task.agent_session_id);
-    return {
-      items: view.items.map((i) => ({
-        message_id: i.messageId,
-        mode: i.mode,
-        text: i.text,
-        held: i.held,
-        inflight: i.inflight,
-      })),
-      lockBoundary: view.lockBoundary,
+    if (!task.agent_session_id) return { items: [], lockBoundary: null };
+    const read = (): TaskQueueListOutput => {
+      if (!this.deps.sessions.isLive(task.agent_session_id!)) return { items: [], lockBoundary: null };
+      const view = this.deps.sessions.queueView(task.agent_session_id!);
+      return {
+        items: view.items.map((i) => ({
+          message_id: i.messageId,
+          mode: i.mode,
+          text: i.text,
+          held: i.held,
+          inflight: i.inflight,
+        })),
+        lockBoundary: view.lockBoundary,
+      };
     };
+    if (this.deps.sessions.runExclusive === undefined) return read();
+    return this.deps.sessions.runExclusive(task.agent_session_id, () => read());
   }
 
   /** 进入编辑（Owner 设计四轮）：目标未锁定时先锁定到该条（该条及其后暂离

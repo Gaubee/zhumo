@@ -979,6 +979,36 @@ export function createTaskSessions(deps: TaskSessionDeps) {
   /** 会话替换串行段（Codex 六/七轮 P1）：fn 整段按 sessionId 互斥——并发
    * resume 排队执行（第二个的 prev 捕获到第一个的新条目，dispose 链正确）；
    * whenSettled/isReplacing 的窗口=fn 全程（含准备段 await）。 */
+  /** resume 主体（无门版——由 resumeTaskSession / rebuildSession 的门包覆）。 */
+  async function resumeInner(taskId: string, input: TaskSessionResumeInput): Promise<{ sessionId: string }> {
+      // 演示模式：daemon 重启后的 demo 会话续聊——空 inbox 重建，历史帧回放。
+      if (demoDelayMs > 0) {
+        await makeDemoEntry(input.sessionId, taskId, new FrameStore(input.framesFile), entryFramesFromDisk(new FrameStore(input.framesFile)));
+        return { sessionId: input.sessionId };
+      }
+      const kernel = requireKernel();
+      bindFirehose(kernel);
+      const agents = agentsService(kernel.ctx);
+      const model = await deps.modelSelection(taskId);
+      const handle = await agents.resume({
+        resumeSessionId: input.sessionId,
+        ...(model
+          ? {
+              agentOptions: {
+                provider: model.provider,
+                model: model.model,
+                ...(model.effort ? { reasoningEffort: model.effort } : {}),
+              },
+            }
+          : {}),
+        setup: setupToolSurface,
+      });
+      const store = new FrameStore(input.framesFile);
+      await makeEntry(handle, taskId, store, entryFramesFromDisk(store));
+      return { sessionId: handle.agent.session.id };
+  }
+
+
   async function withSessionGate<T>(sid: string, fn: () => Promise<T>): Promise<T> {
     const prevGate = sessionGates.get(sid) ?? Promise.resolve();
     let releaseGate!: () => void;
@@ -1403,34 +1433,9 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       // 替换串行段从函数入口起（Codex 七轮 P1）：准备段（modelSelection/
       // agents.resume 的 await）期间旧条目仍在册且 gate 未登记——whenSettled
       // 曾有盲区，窗口内投递照丢。整段（准备→dispose→restore）互斥。
-      return withSessionGate(input.sessionId, async () => {
-      // 演示模式：daemon 重启后的 demo 会话续聊——空 inbox 重建，历史帧回放。
-      if (demoDelayMs > 0) {
-        await makeDemoEntry(input.sessionId, taskId, new FrameStore(input.framesFile), entryFramesFromDisk(new FrameStore(input.framesFile)));
-        return { sessionId: input.sessionId };
-      }
-      const kernel = requireKernel();
-      bindFirehose(kernel);
-      const agents = agentsService(kernel.ctx);
-      const model = await deps.modelSelection(taskId);
-      const handle = await agents.resume({
-        resumeSessionId: input.sessionId,
-        ...(model
-          ? {
-              agentOptions: {
-                provider: model.provider,
-                model: model.model,
-                ...(model.effort ? { reasoningEffort: model.effort } : {}),
-              },
-            }
-          : {}),
-        setup: setupToolSurface,
-      });
-      const store = new FrameStore(input.framesFile);
-      await makeEntry(handle, taskId, store, entryFramesFromDisk(store));
-      return { sessionId: handle.agent.session.id };
-      });
+      return withSessionGate(input.sessionId, async () => resumeInner(taskId, input));
     },
+
 
     /** 取消当前活动（幂等；排队消息存活）。 */
     cancel(sessionId: string): void {
@@ -1453,6 +1458,26 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         if (!entry) return;
         live.delete(sessionId);
         await entry.dispose();
+      });
+    },
+
+    /** 单门整建（Codex 终轮 P2）：模型切换的 dispose+resume 收进同一 gate——
+     * 两段式（disposeLive 门→resume 门）之间 queueView 会读到「无 live」的
+     * 中间态空队列；单门下读者（runExclusive）整段等待，醒来即新条目。 */
+    async rebuildSession(taskId: string, input: TaskSessionResumeInput): Promise<{ sessionId: string }> {
+      return withSessionGate(input.sessionId, async () => {
+        const entry = live.get(input.sessionId);
+        if (entry !== undefined) {
+          live.delete(input.sessionId);
+          for (const pending of entry.pending.values()) pending.resolve({ answers: [] });
+          entry.pending.clear();
+          try {
+            await entry.dispose();
+          } catch {
+            // 旧条目回收失败不阻断重建。
+          }
+        }
+        return resumeInner(taskId, input);
       });
     },
 

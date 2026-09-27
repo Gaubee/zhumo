@@ -493,3 +493,18 @@ live 复验深挖出三个真实缺陷（全部帧级证据定位+修复+回归�
   与 tasks.error 同位互斥呈现（关一显一）。
 
 门禁：daemon 190/190 + tsc 0 + svelte-check 0 错 + build ✓；live 冒烟。
+
+## W10n 终轮收口（Codex 8.7/10 剩余 P2 补完，2026-09-29）
+
+- 【P2·模型切换中间态】setModel 改单门 rebuildSession（dispose+resume
+  同一 gate，sessions 拆 resumeInner 无门主体供两处门包覆）——两段式之间
+  queueView/投递读到「无 live」空队列的中间态消除；测试断言同步更新。
+- 【P2·读取入链】service.queueView 的 isLive 检查+取值整段在 runExclusive
+  内（isLive 先于门会在 dispose 段提前返回空；快照式 whenSettled 追不上
+  等待期间追加的门）；fake sessions 无 runExclusive 回落直读。
+- 系列收口：替换链（resume/rebuild/disposeLive）×投递（deliverGated）×
+  读取（queueView in-gate）三方同一互斥链，会话生命周期竞态面闭合。残余
+  窄窗已记录（/命令 $skill 异步消费回调、错误条同位互斥）。
+
+门禁：daemon 190/190 + tsc 0 + svelte-check 0 错 + build ✓；live 冒烟
+（双发送消费、队列清空、demo 退出）。
