@@ -477,3 +477,19 @@ live 复验深挖出三个真实缺陷（全部帧级证据定位+修复+回归�
 
 门禁：daemon 190/190 + tsc 0 + svelte-check 0 错 + build ✓；live 冒烟
 （双发送消费、队列清空）。
+
+## W10n 八轮修复（Codex 8.4/10 无 P1，两 P2 收口，2026-09-29）
+
+- 【P2·投递原子化】sessions 暴露 runExclusive（与 resume/disposeLive 同链
+  互斥）；service.followup 投递（含复活重试的重投）在链内原子执行——
+  「等门→投递」两窗口间不再能插入新替换（模型切换），/命令与 $skill 的
+  异步直投不再落进随替换销毁的旧 agent。复活保持在门外（gate 不可重入）。
+- 【P2·刷新过早】queueView 改 async + 入口 await 替换门——「会话正在恢复」
+  冲突触发的自动刷新不再读到替换窗口里的旧 live 队列。
+- 【补】disposeLive（setModel 模型切换路径）入 withSessionGate——所有
+  会话替换路径（resume/disposeLive/demo 复活）同一条串行链。
+- 残余记录：/命令与 $skill 直投在 runExclusive 内入队后异步执行，其内核
+  消费若恰逢替换仍属窄窗（命令语义=立即执行，不占队列序）；queue.error
+  与 tasks.error 同位互斥呈现（关一显一）。
+
+门禁：daemon 190/190 + tsc 0 + svelte-check 0 错 + build ✓；live 冒烟。

@@ -474,15 +474,21 @@ export class TaskService {
           ? this.deps.sessions.steer(sessionId, input.text)
           : this.deps.sessions.followup(sessionId, input.text) ?? undefined;
     };
-    // 替换窗口门（Codex 六/七轮 P1）：在途 resume 的整段（准备→dispose→
-    // restore）期间 live 指旧条目，直接投递会被 restore 覆盖且不抛错（丢单
-    // 无从触发重试）。等替换完成再投——七轮实证此前此门未真正接入。
-    await this.deps.sessions.whenSettled?.(sessionId);
+    // 投递在替换串行链内原子执行（Codex 八轮 P2）：此前「等门→投递」两窗口
+    // 间可插入新替换（模型切换），/命令与 $skill 的异步直投会落进随替换
+    // 销毁的旧 agent。runExclusive 与 resume/disposeLive 同链互斥；fn 内不
+    // 触发替换（gate 不可重入）——复活重试保持在门外。fake sessions 无此
+    // 方法时直投（测试面）。
+    const deliverGated = (): Promise<void> | void =>
+      this.deps.sessions.runExclusive !== undefined
+        ? this.deps.sessions.runExclusive(sessionId, () => deliver())
+        : deliver();
 
     try {
-      deliver();
+      await deliverGated();
     } catch {
       // running 但会话不在册（daemon 重启后）：复活一次再投递；失败同上收敛 failed。
+      // 复活在门外（gate 不可重入），重投同样原子入链。
       try {
         await this.deps.sessions.resumeTaskSession(task.id, {
           sessionId,
@@ -490,7 +496,7 @@ export class TaskService {
         });
         this.rebind(task);
         resumed = true;
-        deliver();
+        await deliverGated();
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         console.warn(`[tasks] 续聊复活失败（task=${task.id}）：${detail}`);
@@ -539,12 +545,14 @@ export class TaskService {
 
   /** 队列视图：live 不在册（daemon 重启后未 resume）返回空——重开对话
    * （followup/面板操作触发 resume）时 inbox 由内核持久 splices 恢复。
-   * held=锁定段条目（暂离内核 inbox，不会被消费）。 */
-  queueView(user: UserRow, id: string): TaskQueueListOutput {
+   * held=锁定段条目（暂离内核 inbox，不会被消费）。W10n 八轮 P2：入口等
+   * 替换门——冲突触发的自动刷新不再读到替换窗口里的旧 live 队列。 */
+  async queueView(user: UserRow, id: string): Promise<TaskQueueListOutput> {
     const task = this.requireOwnedTask(user, id);
     if (!task.agent_session_id || !this.deps.sessions.isLive(task.agent_session_id)) {
       return { items: [], lockBoundary: null };
     }
+    await this.deps.sessions.whenSettled?.(task.agent_session_id);
     const view = this.deps.sessions.queueView(task.agent_session_id);
     return {
       items: view.items.map((i) => ({

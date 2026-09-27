@@ -1445,10 +1445,15 @@ export function createTaskSessions(deps: TaskSessionDeps) {
      * 任务表新值）。不在册时 no-op（daemon 重启后的会话由 resume 自然带新模型）。
      */
     async disposeLive(sessionId: string): Promise<void> {
-      const entry = live.get(sessionId);
-      if (!entry) return;
-      live.delete(sessionId);
-      await entry.dispose();
+      // 入替换串行链（Codex 八轮在查项）：模型切换的 disposeLive→resume 与
+      // 其它替换同链互斥——否则 ungated 的 live.delete+dispose 间隙可与并发
+      // resume/投递交错（followup 自愈重投可救发送面，帧/队列面无谓竞态）。
+      return withSessionGate(sessionId, async () => {
+        const entry = live.get(sessionId);
+        if (!entry) return;
+        live.delete(sessionId);
+        await entry.dispose();
+      });
     },
 
   /**
@@ -1813,6 +1818,14 @@ export function createTaskSessions(deps: TaskSessionDeps) {
      * 错误——await 门只适合 async 路径）。 */
     isReplacing(sessionId: string): boolean {
       return sessionGates.has(sessionId);
+    },
+
+    /** 互斥执行（Codex 八轮 P2）：fn 与会话替换（resume/disposeLive）同链
+     * 互斥——「等门→投递」不再是两个窗口（等待后、执行前可插入新替换：
+     * 特殊命令直投会落进随替换销毁的旧 agent）。注意不可在 fn 内再触发
+     * 替换（gate 不可重入会死锁）——替换类操作（resume 等）保持在门外。 */
+    async runExclusive<T>(sessionId: string, fn: () => T | Promise<T>): Promise<T> {
+      return withSessionGate(sessionId, async () => fn());
     },
 
     /** 订阅 live 帧（WS 推送用）；返回退订函数。 */
