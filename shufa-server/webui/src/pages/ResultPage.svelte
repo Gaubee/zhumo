@@ -94,10 +94,13 @@
     return `${Math.round(v * 100)}%`;
   }
 
-  /** 静态总结行：田字格 × 归属旁注（按 label 关联），未归属的旁注归入 orphan 行（report.ts renderStaticSection） */
+  /** 静态总结行：按生字聚合（一字多格合成一行——CCxdbVrruwNO 实证：按格
+   * 行×label 关联会把同一组旁注在每格重复一遍）；grid_idx（管线空间最近格）
+   * 存在时优先格级关联，否则按 label 字级关联。未归属旁注归 orphan 行。 */
   interface StaticRow {
     /** null = 未关联旁注组 */
-    char: AnalysisChar | null;
+    chars: AnalysisChar[] | null;
+    label: string | null;
     related: AnalysisAnnotation[];
   }
   const staticRows = $derived.by<StaticRow[]>(() => {
@@ -105,18 +108,32 @@
     if (!d) return [];
     const rows: StaticRow[] = [];
     const used = new Set<number>();
+    // 一字多格聚合：同 label 的格子合成一行；label 为空的格各自成行。
+    const groups = new Map<string, AnalysisChar[]>();
+    const unlabeled: AnalysisChar[] = [];
     for (const g of d.chars) {
-      const related: AnalysisAnnotation[] = [];
-      d.annotations.forEach((a, i) => {
-        if (a.grids.includes(g.label)) {
-          related.push(a);
-          used.add(i);
-        }
-      });
-      rows.push({ char: g, related });
+      if (g.label) {
+        const list = groups.get(g.label) ?? [];
+        list.push(g);
+        groups.set(g.label, list);
+      } else {
+        unlabeled.push(g);
+      }
     }
+    for (const [label, chars] of groups) {
+      const idxSet = new Set(chars.map((c) => c.idx));
+      const related = d.annotations.filter((a, i) => {
+        const hit =
+          (a.grid_idx !== undefined && idxSet.has(a.grid_idx))
+          || a.grids.includes(label);
+        if (hit) used.add(i);
+        return hit;
+      });
+      rows.push({ chars, label, related });
+    }
+    for (const g of unlabeled) rows.push({ chars: [g], label: null, related: [] });
     const orphan = d.annotations.filter((_, i) => !used.has(i));
-    if (orphan.length > 0) rows.push({ char: null, related: orphan });
+    if (orphan.length > 0) rows.push({ chars: null, label: null, related: orphan });
     return rows;
   });
 
@@ -256,19 +273,23 @@
       <div class="col col-static" id="col-static" role="tabpanel" aria-labelledby="tab-summary">
         <section id="static">
           <h2>静态总结 <small>田字格 + 笔记 · 适合复盘</small></h2>
-          {#each staticRows as row (row.char ? `c${row.char.idx}` : "orphan")}
+          {#each staticRows as row (row.chars ? row.chars.map((c) => c.idx).join("-") : "orphan")}
             <div class="char-row">
-              {#if row.char}
-                <div class="char-grid">
-                  <img src={asset(row.char.crop)} alt="田字格：{row.char.label || '未识别'}" />
-                  <div class="cap">
-                    {row.char.label}{#if row.char.idx === data.focus_grid_idx}<span class="chip"
-                        >讲解焦点</span
-                      >{/if}
-                  </div>
+              {#if row.chars}
+                <div class="char-grid char-grid-multi">
+                  {#each row.chars as char (char.idx)}
+                    <div class="char-cell">
+                      <img src={asset(char.crop)} alt="田字格：{char.label || '未识别'}" />
+                      <div class="cap">
+                        {char.label}{#if char.idx === data.focus_grid_idx}<span class="chip"
+                          >讲解焦点</span
+                        >{/if}
+                      </div>
+                    </div>
+                  {/each}
                 </div>
                 <div class="char-info">
-                  <h3>{row.char.label ? `「${row.char.label}」` : "未识别"}<span class="chip">{row.char.note}</span></h3>
+                  <h3>{row.label ? `「${row.label}」` : "未识别"}<span class="chip">{row.chars.length > 1 ? `${row.chars.length} 格` : (row.chars[0]?.note || "")}</span></h3>
                   <p class="dim-line">关联旁注 {row.related.length} 处</p>
                   <div class="char-annos">
                     {#if row.related.length > 0}

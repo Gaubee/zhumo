@@ -520,7 +520,9 @@ def export_stage(
     # 旁注/字幕 ↔ 生字关联：转录文本命中标签者直取；无命中则延续上一焦点
     # （讲解具有连续性，"上下要对齐""纠正一下"仍在讲之前那个字）。
     # Owner 注（2026-09-22）：一段讲解可能同时针对多个字——命中多个标签全保留。
-    labels_list = [g["label"] for g in grids_data if g.get("label")]
+    # 去重保序（CCxdbVrruwNO 实证：一字多格时重复 label 会污染锚点/开场条目）。
+    labels_list = list(dict.fromkeys(
+        g["label"] for g in grids_data if g.get("label")))
 
     # 转录同音字 lint（Owner 要求 2026-09-25：写入结构化数据时自动校验）：
     # 锚点 = 本视频生字（labels 格 label + 焦点字）。误转字在导出面校正并
@@ -546,11 +548,17 @@ def export_stage(
         for s, gl in zip(segs, seg_grids):
             if s["start"] < t1 and s["end"] > t0:
                 assoc.update(gl)
+        # 空间最近格（格级关联，Owner 要求 2026-09-28）：旁注墨迹 bbox 中心 ↔
+        # 最近格中心。结果页优先按 grid_idx 精确挂格——一字多格时 label 关联
+        # 无法区分格子（CCxdbVrruwNO：3 个「桂」格 × label 关联全量重复），
+        # 渲染端已聚合同字行，grid_idx 让旁注精确落在书写发生的那个格组。
+        bx = a["bbox"]
+        acx, acy = bx[0] + bx[2] / 2, bx[1] + bx[3] / 2
+        near_i = min(range(len(grids)), key=lambda gi: (
+            grids[gi].center[0] - acx) ** 2 + (grids[gi].center[1] - acy) ** 2)
+        a["grid_idx"] = near_i
         if not assoc and labels_list:  # 回退：空间最近格的标签
-            bx = a["bbox"]
-            acx, acy = bx[0] + bx[2] / 2, bx[1] + bx[3] / 2
-            near = min(grids, key=lambda g: (g.center[0] - acx) ** 2 + (g.center[1] - acy) ** 2)
-            near_lab = grids_data[grids.index(near)].get("label")
+            near_lab = grids_data[near_i].get("label")
             if near_lab:
                 assoc.add(near_lab)
         a["grids"] = sorted(assoc)

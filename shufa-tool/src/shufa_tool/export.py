@@ -79,6 +79,7 @@ def export_bundle(
         annos_out.append({
             "idx": i, "first_ts": a["first_ts"], "desc": a.get("desc", ""),
             "grids": a.get("grids", []),
+            **({"grid_idx": a["grid_idx"]} if "grid_idx" in a else {}),
             "crop": write_png(img, assets / f"anno_{i}.png"),
         })
     entries_out = []

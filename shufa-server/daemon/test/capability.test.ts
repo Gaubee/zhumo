@@ -264,6 +264,81 @@ describe('shufa capability 工具面', () => {
     expect(warnings.some((w) => w.includes('未给 desc'))).toBe(true);
   });
 
+  it('summary_write 语义 lint（2026-09-28 CCxdbVrruwNO 复盘）：引文忠实/时间在界/旁注时间一致——硬校验拒写', async () => {
+    // manifest 带 probe/transcribe/ink（语义核对数据源）。
+    mkdirSync(path.join(taskDir, '.shufa-work'), { recursive: true });
+    writeFileSync(
+      path.join(taskDir, '.shufa-work', 'manifest.json'),
+      JSON.stringify({
+        probe: { duration_s: 31.88 },
+        transcribe: {
+          segments: [
+            { start: 0, end: 4, text: '我们一起来看一下这个考卷上面的桂字' },
+            { start: 13.96, end: 19.52, text: '要注意这个土跟这个土上下要对齐' },
+          ],
+        },
+        grid: { grids: [{ idx: 0 }, { idx: 1 }, { idx: 2 }] },
+        ink: { annotations: [{ index: 0, first_ts: 9.0 }, { index: 1, first_ts: 15.0 }] },
+      }),
+    );
+    // 1) 引文未逐字见于转录 → 拒写，文件不落盘。
+    const misquoted = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content:
+          '{"topic":"桂","paragraphs":["老师强调「上下必须完全对齐一致」"],"key_points":["对齐"]}',
+      },
+      'agent',
+    );
+    expect(misquoted.kind).toBe('failed');
+    expect((misquoted as { message: string }).message).toContain('引文未见于转录');
+    expect(existsSync(path.join(taskDir, 'summary.json'))).toBe(false);
+    // 2) t≈ 超出视频时长 → 拒写。
+    const overtime = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content:
+          '{"topic":"桂","paragraphs":["老师强调「上下要对齐」（t≈99s）"],"key_points":["对齐"]}',
+      },
+      'agent',
+    );
+    expect(overtime.kind).toBe('failed');
+    expect((overtime as { message: string }).message).toContain('超出视频时长');
+    expect(existsSync(path.join(taskDir, 'summary.json'))).toBe(false);
+    // 3) labels desc 的 t≈ 与旁注 first_ts 偏差 >3s → 拒写。
+    const descSkew = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content:
+          '{"topic":"桂","paragraphs":["老师强调「上下要对齐」"],"key_points":["对齐"]}',
+        labels:
+          '{"grids":[{"index":0,"label":"桂"},{"index":1,"label":"桂"},{"index":2,"label":"桂"}],"annotations":[{"index":1,"desc":"t≈28.5s：指出下土偏内"}]}',
+      },
+      'agent',
+    );
+    expect(descSkew.kind).toBe('failed');
+    expect((descSkew as { message: string }).message).toContain('偏差超 3s');
+    expect(existsSync(path.join(taskDir, 'summary.json'))).toBe(false);
+    // 4) 合法（引文逐字 + t≈ 在界 + desc 时间一致）→ ok 落盘。
+    const legit = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content:
+          '{"topic":"桂","paragraphs":["老师强调「要注意这个土跟这个土上下要对齐」"],"key_points":["两土对齐（t≈15s）"]}',
+        labels:
+          '{"grids":[{"index":0,"label":"桂"},{"index":1,"label":"桂"},{"index":2,"label":"桂"}],"annotations":[{"index":1,"desc":"t≈15s：强调上下两土对齐"}]}',
+      },
+      'agent',
+    );
+    expect(legit).toMatchObject({ kind: 'ok' });
+    expect(existsSync(path.join(taskDir, 'summary.json'))).toBe(true);
+    expect(existsSync(path.join(taskDir, 'labels.json'))).toBe(true);
+  });
+
   it('export：summary-file 注入 + bundle 命中 → onExported 附加结果链接', async () => {
     writeFileSync(path.join(taskDir, 'summary.json'), '{"topic":"桂"}', 'utf8');
     const bundle = path.join(userRoot, 'bundle');

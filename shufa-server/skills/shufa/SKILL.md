@@ -135,8 +135,20 @@ stdout 输出 `{"step":"transcribe","skipped":"transcribe","reason":"…"}`，
 - `grids[].index` 对应 grid/ink/clip 步 JSON 里的格序号；`label` **只标转录
   明确点到的字**（通常对应焦点格）；转录没提到的格**留空**（你看不到图片，
   练习页可能有多个不同生字，猜错比留空更糟）；`note` 可选，写本格讲解要点。
-- `annotations[].desc`：结合转录判断这条旁注在指出什么问题（一句话）。
+  一字写了多格（如同一个「桂」写了 3 遍）→ 各格都标同字即可，结果页会把
+  同字多格聚合展示，旁注按墨迹位置自动挂到对应格。
+- `annotations[].desc`：结合转录判断这条旁注在指出什么问题（一句话）；
+  如写时间（`t≈15s`），必须与该旁注 ink 步返回的 `first_ts` 一致（±3s 内）。
 - export 时管线自动做旁注↔生字关联（转录时间窗命中标签直取，否则回退空间最近格）。
+
+**summary_write 写入校验（错了会被拒绝写入，必须修复后重写）**：
+
+- 结构：topic/paragraphs（≥1 段）/key_points（≥1 条）非空；labels index
+  在检测范围内。
+- 引文忠实：paragraphs/key_points 里 ≥4 字的「」引文，**必须逐字出现在
+  转录原文里**——只有老师原话才加引号，转述与概括一律不用引号。
+- 时间在界：所有 `t≈Xs` 不得超出视频时长（probe 步返回的 `duration_s`）。
+- 旁注时间一致：labels desc 里的 `t≈Xs` 与该旁注 `first_ts` 偏差 ≤3s。
 
 ### 4. export 导出
 

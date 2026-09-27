@@ -62,7 +62,11 @@ export const AnalysisAnnotationSchema = z.object({
   idx: z.number().int(),
   first_ts: z.number(),
   desc: z.string(),
+  /** 字级关联（转录时间窗命中的生字 label；一字多格时不区分格子）。 */
   grids: z.array(z.string()),
+  /** 格级关联（旁注墨迹空间最近格 index；2026-09-28 起导出面携带，
+   * 结果页优先按它精确挂格；旧 bundle 无此字段回落 grids 聚合）。 */
+  grid_idx: z.number().int().optional(),
   crop: z.string(),
 });
 export type AnalysisAnnotation = z.infer<typeof AnalysisAnnotationSchema>;

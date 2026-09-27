@@ -353,6 +353,14 @@ export function createAnalysisCapabilities(deps: AnalysisCapabilityDeps): Capabi
           }
           labelsParsed = labelsCheck.data;
         }
+        // 语义 lint（Owner 2026-09-28：引文忠实/时间在界/旁注时间一致——
+        // 硬校验，错误即拒绝写入，agent 修复后重写）。
+        const semanticErrors = lintContentSemantics(ctx.taskDir, summaryCheck.data, labelsParsed);
+        if (semanticErrors.length > 0) {
+          return failed(
+            `summary/labels 语义校验未通过（已拒绝写入，请修复后重写）：${semanticErrors.join('；')}`,
+          );
+        }
         const warnings = lintLabelsAgainstManifest(ctx.taskDir, labelsParsed);
         const target = path.join(ctx.taskDir, 'summary.json');
         try {
@@ -463,6 +471,87 @@ export function wrapExportCompletion(
 }
 
 // ---------------------------------------------------------------- summary/labels 结构 lint
+
+/**
+ * summary/labels × manifest 语义 lint（Owner 要求 2026-09-28 复盘 CCxdbVrruwNO：
+ * 「写入结构化数据时自动校验」此前只有结构 zod + index/缺标软警告——引文与
+ * 时间戳无人核对，转述错误原样落盘）：
+ * - 引文忠实：paragraphs/key_points 中 ≥4 字的「」引文（去空白标点后）必须
+ *   逐字存在于转录原文——手册本就要求「引用要忠实」，写入面硬校验；
+ * - 时间在界：summary 全文与 labels desc 的 t≈Xs 不得超出视频时长；
+ * - 旁注时间一致：labels.annotations[].desc 的 t≈ 与 manifest 该旁注
+ *   first_ts 偏差 ≤3s（页面时间线按它跳转，错值误导复盘）。
+ * 返回错误列表（非空=拒绝写入，agent 修复后重写）；manifest 缺席跳过。
+ */
+function lintContentSemantics(
+  taskDir: string,
+  summary: { paragraphs: string[]; key_points: string[] },
+  labels: unknown,
+): string[] {
+  const errors: string[] = [];
+  let manifest: {
+    probe?: { duration_s?: number };
+    transcribe?: { segments?: Array<{ text?: string }> };
+    ink?: { annotations?: Array<{ first_ts?: number }> };
+  } | null = null;
+  try {
+    manifest = JSON.parse(readFileSync(path.join(taskDir, '.shufa-work', 'manifest.json'), 'utf8'));
+  } catch {
+    return errors; // manifest 未生成：跳过语义核对（结构校验已过）
+  }
+  const transcriptText = (manifest?.transcribe?.segments ?? [])
+    .map((s) => String(s.text ?? ''))
+    .join('');
+  const duration = manifest?.probe?.duration_s ?? 0;
+
+  // 1) 引文忠实（≥4 字才核对：短引文同音/变体太易误伤）。
+  const norm = (t: string) =>
+    t.replace(/[\s，。、；：？！,.;:?!"'（）()「」『』…—·]/g, '');
+  const quoteRe = /「([^」]{4,})」/g;
+  const quotes: string[] = [];
+  for (const para of [...summary.paragraphs, ...summary.key_points]) {
+    for (const m of para.matchAll(quoteRe)) quotes.push(m[1]!);
+  }
+  if (transcriptText && quotes.length > 0) {
+    const haystack = norm(transcriptText);
+    for (const q of quotes) {
+      if (!haystack.includes(norm(q))) {
+        errors.push(`引文未见于转录（逐字转述原话，或去掉引号改为转述）：「${q}」`);
+      }
+    }
+  }
+
+  // 2) t≈ 不得超出视频时长（summary 正文 + labels desc 通用）。
+  const timeRe = /t≈(\d+(?:\.\d+)?)s/g;
+  const checkTime = (text: string, where: string) => {
+    if (duration <= 0) return;
+    for (const m of text.matchAll(timeRe)) {
+      if (Number(m[1]) > duration + 0.5) {
+        errors.push(`${where}：t≈${m[1]}s 超出视频时长 ${duration.toFixed(1)}s`);
+      }
+    }
+  };
+  checkTime([...summary.paragraphs, ...summary.key_points].join('\n'), 'summary');
+
+  // 3) labels desc 的 t≈ ↔ 旁注实际 first_ts（±3s）。
+  const annos = manifest?.ink?.annotations ?? [];
+  const labelsAnnotations = (labels as { annotations?: unknown } | undefined)?.annotations;
+  if (Array.isArray(labelsAnnotations) && annos.length > 0) {
+    for (const item of labelsAnnotations as Array<{ index?: unknown; desc?: unknown }>) {
+      if (typeof item.index !== 'number' || typeof item.desc !== 'string') continue;
+      const real = annos[item.index]?.first_ts;
+      if (real === undefined) continue;
+      for (const m of item.desc.matchAll(timeRe)) {
+        if (Math.abs(Number(m[1]) - real) > 3) {
+          errors.push(
+            `labels.annotations[${item.index}].desc：t≈${m[1]}s 与旁注实际时间 ${real}s 偏差超 3s（以 manifest first_ts 为准）`,
+          );
+        }
+      }
+    }
+  }
+  return errors;
+}
 
 /** summary.json 内容结构（结果页静态总结消费面）。 */
 const SummaryContentSchema = z.object({

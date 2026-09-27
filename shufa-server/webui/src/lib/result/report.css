@@ -203,6 +203,18 @@
   flex: none;
   width: 150px;
 }
+/* 一字多格聚合行：格子横排（等分收缩，每格 ≤110px） */
+.shufa-report .char-grid.char-grid-multi {
+  display: flex;
+  gap: 8px;
+  width: auto;
+  max-width: 340px;
+}
+.shufa-report .char-grid.char-grid-multi .char-cell {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 110px;
+}
 .shufa-report .char-grid img {
   width: 100%;
   border-radius: 8px;
