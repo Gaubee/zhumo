@@ -108,15 +108,14 @@
    * 绑定前方最近 anchor；头部 attach=当前轮）。inflight 只读不参与操作。 */
   const listItems = $derived(items.filter((i) => i.inflight !== true));
   const inflightCount = $derived(items.length - listItems.length);
-  /** 收起态预览：队头下一条要生效的内容（本轮补充优先，否则下一轮）。 */
+  /** 收起态预览：队头下一条要生效的内容（文案按运行态——与模式徽标同口径，
+   * Codex P2：idle 的 steer 写「即将生效」与实际「开新一轮」不符）。 */
   const previewText = $derived.by(() => {
     const first = listItems[0];
     if (first === undefined) return null;
-    return first.mode === 'queue'
-      ? `下一条（新开一轮）：${first.text}`
-      : first.mode === 'steer'
-        ? `即将生效（本轮下一步补充）：${first.text}`
-        : `即将注入（本轮上下文）：${first.text}`;
+    if (first.mode === 'queue') return `下一条（新开一轮）：${first.text}`;
+    if (first.mode === 'steer') return running ? `即将生效（本轮下一步补充）：${first.text}` : `下一条（新开一轮）：${first.text}`;
+    return running ? `即将注入（本轮上下文）：${first.text}` : `待活动轮注入：${first.text}`;
   });
 
   /** dnd-action 容器 items（库要求可变数组带 id；拖动中库实时回写=插入预览）。
@@ -156,9 +155,10 @@
     return rows;
   });
 
-  /** 行按钮公共禁用态（W10m：行级 pending + 编辑/拖动全局态；pending 期间
-   * 全行禁用——同刻只有一条在途操作，防交叉重排）。 */
-  const rowBusy = (): boolean => editingId !== null || reordering || pendingId !== null;
+  /** 行按钮禁用态（W10n：编辑/拖动全局态 + 行级 pending——只禁本行，不再
+   * 全队列锁死；Codex P2：全局 pending 锁误伤并行操作）。 */
+  const rowBusy = (id: string): boolean =>
+    editingId !== null || reordering || pendingId === id;
 
   function handleDndItems(newItems: Array<Record<string, unknown>>): void {
     // 库 consider 回写（拖动开始的首次 consider 也走这里）：开启拖动态——
@@ -224,7 +224,7 @@
         {#snippet row(r: { item: TaskQueueItem; bound: 'current' | 'anchor' })}
           {@const item = r.item}
           {@const ls = lockState(item.message_id)}
-          {@const busy = rowBusy()}
+          {@const busy = rowBusy(item.message_id)}
           {@const selfPending = pendingId === item.message_id}
           <li
             class="flex items-center gap-1.5 rounded border border-border/60 bg-card px-2 py-1 text-[12px] transition-colors {r.bound === 'anchor' && item.mode !== 'queue'
@@ -249,13 +249,19 @@
                 恢复
               </button>
             {:else if ls === 'passive'}
-              <span
-                class="shrink-0 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-600/70"
-                title="已暂停（该条在暂停段内）"
+              <!-- 暂停段内：可点「移到这里」原子挪边界（daemon 侧释放前缀即泵，
+                   Codex P1-4：恢复→再暂停的两步竞态会丢目标条目）。 -->
+              <button
+                type="button"
+                class="q-hit q-pause shrink-0 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-600/70 hover:bg-amber-500/20 hover:text-amber-600 disabled:opacity-40"
+                title="已暂停（该条在暂停段内）；点击把暂停边界移到这里（之前的条目恢复发送）"
+                aria-label="把暂停边界移到这里"
+                disabled={busy}
+                onclick={() => onlock(item.message_id)}
               >
                 <IconPause class="h-3 w-3" />
                 已暂停
-              </span>
+              </button>
             {:else}
               <button
                 type="button"

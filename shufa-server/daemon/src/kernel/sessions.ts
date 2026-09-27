@@ -326,12 +326,19 @@ class DemoAgent implements AgentLike {
     this.onFrames?.([{ at: Date.now(), seq: 0, kind: 'turn-start', text: '' }]);
     const supplements = this.inbox.nextStep.splice(0);
     const frames: Frame[] = [
-      { at: Date.now(), seq: 0, kind: 'user-text', text: inboxMessageText(head) },
+      {
+        at: Date.now(),
+        seq: 0,
+        kind: 'user-text',
+        text: inboxMessageText(head),
+        payload: { mid: inboxMessageId(head) },
+      },
       ...supplements.map((m) => ({
         at: Date.now(),
         seq: 0,
         kind: 'user-text' as const,
         text: `${inboxMessageText(m)}（补充）`,
+        payload: { mid: inboxMessageId(m) },
       })),
       {
         at: Date.now(),
@@ -402,9 +409,9 @@ interface LiveTaskSession {
   /** 当前轮对应的 anchor（turn/start 配对；轮结束清除；null=当前轮非队列
    * 起源，如任务初始 prompt）。 */
   activeAnchorId: string | null;
-  /** 本轮 anchor 的消费帧尚未盖章（W10m 状态流）：turn/start 配对后置真，
-   * 该轮第一条 user-text 帧带上 payload.queue_item 后复位。 */
-  anchorStampPending: boolean;
+  /** 配对 anchor 的内核消息 id（盖章寻址用——anchor 在 turn/start 即移出
+   * 队列，其 user/message 事件晚到时按此匹配盖回 queue_item 戳）。 */
+  activeAnchorKernelId: string | null;
   /** 内核 turn 进行中（firehose turn/start~turn/end 维护；装配时 false）。 */
   turnRunning: boolean;
 }
@@ -649,15 +656,27 @@ export function createTaskSessions(deps: TaskSessionDeps) {
   /** 帧提交单点：环形 trim + jsonl append + 订阅者通知。 */
   function commitFrames(entry: LiveTaskSession, frames: readonly Frame[]): void {
     for (const raw of frames) {
-      // W10m 状态流：队列起源轮的第一条 user-text=anchor 消费帧，盖上
-      // payload.queue_item（条目稳定 id）——前端乐观帧按 id 精确接管
-      // （文本去重在重复文案下会误伤）。真实内核与 DemoAgent 两路帧都
-      // 经此单点，一处盖章两路受益。
+      // W10n 状态流盖章（按内核消息 id 精确匹配）：user-text 帧携带
+      // payload.mid（DemoAgent 直填 / 真实内核 user/message 事件投影填）——
+      // activeAnchorKernelId 命中=anchor 消费帧（anchor 已移出队列，靠回配）；
+      // 队列 kernelId 命中=attach 消费帧（盖自己的 id，前端精确收bubble）。
+      // 不再按「本轮首条 user-text」启发式：claim() 先取 next-step，attach
+      // 事件先到会把 anchor 的戳盖错条目（Codex 复核 P1）。
       let frame = raw;
-      if (frame.kind === 'user-text' && entry.anchorStampPending && entry.activeAnchorId !== null) {
-        const payload = (frame.payload ?? {}) as Record<string, unknown>;
-        frame = { ...frame, payload: { ...payload, queue_item: entry.activeAnchorId } };
-        entry.anchorStampPending = false;
+      if (frame.kind === 'user-text') {
+        const mid = (frame.payload as { mid?: unknown } | undefined)?.mid;
+        if (typeof mid === 'string' && mid.length > 0) {
+          let qid: string | undefined;
+          if (entry.activeAnchorKernelId !== null && mid === entry.activeAnchorKernelId) {
+            qid = entry.activeAnchorId ?? undefined;
+          } else {
+            qid = entry.queue.find((q) => q.kernelId === mid)?.id;
+          }
+          if (qid !== undefined) {
+            const payload = (frame.payload ?? {}) as Record<string, unknown>;
+            frame = { ...frame, payload: { ...payload, queue_item: qid } };
+          }
+        }
       }
       entry.frames.push(frame);
       if (entry.frames.length > retention) {
@@ -765,7 +784,16 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         if (checked.data.source?.kind !== 'user') return [];
         const text = textOf(checked.data);
         if (text === undefined || text.length === 0) return [];
-        return [frameOf(entry, 'user-text', { text })];
+        // W10n：带上内核消息 id（mid）——commitFrames 据此给队列条目消费帧
+        // 盖 queue_item 戳（精确配对，不依赖帧序）。
+        return [
+          frameOf(entry, 'user-text', {
+            text,
+            ...(typeof checked.data.id === 'string' && checked.data.id.length > 0
+              ? { payload: { mid: checked.data.id } }
+              : {}),
+          }),
+        ];
       }
       case 'assistant/message': {
         const checked = MessageEventSchema.safeParse(data);
@@ -922,7 +950,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       lockBoundaryId: null,
       admittedAnchorId: null,
       activeAnchorId: null,
-      anchorStampPending: false,
+      activeAnchorKernelId: null,
       turnRunning: false,
     };
     registerPanelAnswerer(entry);
@@ -1069,9 +1097,12 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     if (entry.admittedAnchorId !== null) {
       entry.activeAnchorId = entry.admittedAnchorId;
       entry.admittedAnchorId = null;
-      entry.anchorStampPending = true; // 本轮首条 user-text 盖 queue_item 戳
       const idx = entry.queue.findIndex((q) => q.id === entry.activeAnchorId);
       if (idx >= 0) {
+        // 配对即移出队列；kernelId 留存——anchor 的消费事件晚于移出，盖章
+        // 靠 activeAnchorKernelId 回配（W10n：claim() 先取 next-step 再取
+        // next-turn，attach 事件先到，不能按「首条 user-text」启发式盖）。
+        entry.activeAnchorKernelId = entry.queue[idx]!.kernelId ?? null;
         entry.queue.splice(idx, 1);
         persistQueueState(entry); // 无条件：anchor 已消费必须即刻落库（防重启复活）
       }
@@ -1086,7 +1117,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
   function onQueueTurnEnd(entry: LiveTaskSession, failed = false): void {
     entry.turnRunning = false;
     entry.activeAnchorId = null;
-    entry.anchorStampPending = false;
+    entry.activeAnchorKernelId = null;
     const before = entry.queue.length;
     entry.queue = entry.queue.filter((q) => q.state !== 'inflight');
     if (!failed) pumpQueue(entry);
@@ -1455,8 +1486,13 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     // 撤回边界及其后全部在途（Codex P1：漏掉的 inflight 锁定后仍会执行）；
     // 撤不回的（已消费）随轮终结移除——锁定的是剩余序列。
     withdrawSuffixInFlight(entry, idx);
+    // W10n 原子边界移动（Codex P1-4）：边界往深处挪=旧边界与新边界之间的
+    // 条目被释放——立即 pump 续跑，不等下一次轮事件（否则释放段停滞）。
+    const oldBoundaryIdx =
+      entry.lockBoundaryId === null ? -1 : entry.queue.findIndex((q) => q.id === entry.lockBoundaryId);
     entry.lockBoundaryId = entry.queue[idx] !== undefined ? entry.queue[idx]!.id : null;
     persistQueueState(entry);
+    if (oldBoundaryIdx >= 0 && oldBoundaryIdx < idx) pumpQueue(entry);
   },
 
   /** 编辑入口：锁定段内目标文本（调用方 service 负责先锁定未锁条目）。 */

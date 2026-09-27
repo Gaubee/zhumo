@@ -327,3 +327,41 @@ actions 禁用+暂停帧驱动刷新防抖动，drop 一次性提交新序）。
   覆盖补充帧）+ tsc 0；svelte-check 0 错；build ✓。
 - live（8299，demo 10s）：盖章验证消费帧带戳无双泡；引导改模式→补充帧
   同轮交付；暂停→边界「恢复发送」→恢复回未锁；队列清空 chip 消失。
+
+## W10n（2026-09-29，Codex 复核 7.0/10 NEEDS-WORK 四 P1 修复）
+
+### 复核结论（codex-w10m，大地三 46 分钟）
+
+- P1×4：①盖章错配——真实内核 claim() 先取 next-step 再取 next-turn，attach
+  事件先到，「首条 user-text」启发式会把 anchor 的戳盖到 attach 帧（DemoAgent
+  先取 head 掩盖了此路径）；②发送空窗——RPC 成功到消费帧到达间，乐观帧
+  被 displayFrames 隐藏、队列气泡又被自身乐观帧计入 consumedIds 过滤，
+  消息整条消失；③attach 双泡——attach 帧不盖章但 inflight 气泡并存；
+  ④边界上移竞态——passive 纯展示，「恢复→再暂停」两步间目标条目会被
+  pump 消费。P2×3：文本兜底误删、pending 全局锁、previewText 静态文案。
+- 另揪出提交卫生问题：9a80e70 把 Owner 并行改动中 service.ts 的
+  buildTaskContext 依赖卷入而 prompts.ts 未入——main 构建断裂（已补齐
+  e22129d）。
+
+### 修复（全部 live 验证）
+
+- 【P1①+③】盖章改按内核消息 id 精确配对：DemoAgent 帧直填 payload.mid、
+  真实内核 user/message 投影带事件消息 id；commitFrames 以
+  activeAnchorKernelId 回配已移出队列的 anchor、以队列 kernelId 命中
+  attach——attach 消费帧盖自己的 id（前端气泡精确收回）。删除
+  anchorStampPending 启发式。回归 +1（claim 先 next-step 顺序：attach
+  先到不夺戳、各自盖各自）。
+- 【P1②】pendingQueueItems consumedIds 排除乐观帧——只认真实 daemon 帧
+  为消费证据。live：t+0.7s 消息可见（排队中），无空窗。
+- 【P1④】原子边界移动：queueLock 边界深挪时释放前缀立即 pump（不等轮
+  事件）；passive 行可点「把暂停边界移到这里」；恢复（null）也挂行级
+  pending（边界行为标记）。回归 +1（深挪后前缀续投）。live：甲暂停→乙
+  移边界→甲释放乙成边界，无消费竞态。
+- 【P2】dropOptimistic 有 id 时严格 id-only（文本仅无 id 路径兜底）；
+  rowBusy 改行级 pending（不再全队列锁死）；previewText 按运行态动态
+  （idle steer=下一条（新开一轮））。
+
+### 门禁
+
+daemon 184/184 + tsc 0 + svelte-check 0 错 + build ✓；live：mid 盖章落盘
+（seq 级验证）、发送无空窗、无双泡、边界移动往返。

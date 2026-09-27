@@ -170,15 +170,14 @@ async function loadTaskRow(taskId: string): Promise<void> {
   }
 }
 
-/** 移除未落实的乐观 user 帧（真帧到达/发送失败时）。W10m：id 主键去重
- * ——真实帧带 payload.queue_item 戳（daemon 盖章）时按 id 精确移除，文本
- * 仅作无戳路径（slash 直投/mock）兜底；重复文案不再误伤。 */
 function dropOptimistic(match: { text: string; queueItem?: string }): void {
   tasks.frames = tasks.frames.filter((f) => {
     if (f.kind !== "user-text") return true;
     const payload = (f.payload ?? {}) as { optimistic?: boolean; queue_item?: string };
     if (payload.optimistic !== true) return true;
-    if (match.queueItem !== undefined && payload.queue_item === match.queueItem) return false;
+    // 有 id 时严格 id-only（Codex P2：文本兜底会误删同文本的其它乐观帧）；
+    // 无 id（slash 直投/mock 路径）回落文本。
+    if (match.queueItem !== undefined) return payload.queue_item !== match.queueItem;
     return (f.text ?? "") !== match.text;
   });
 }
@@ -316,11 +315,13 @@ export function cancelQueueEdit(): void {
   queue.editingId = null;
 }
 
-/** 锁定/解锁（daemon 单一事实源）：null=解锁放回（按原序继续跑）。 */
+/** 暂停/恢复（daemon 单一事实源）：null=恢复放回（按原序继续跑）。W10n：
+ * 恢复也挂行级 pending（以边界条目为标记行——恢复→再暂停的两步窗口里
+ * 边界行按钮不可再点，防竞态）。 */
 export async function lockQueue(messageId: string | null): Promise<void> {
   const taskId = tasks.selectedId;
   if (taskId === null) return;
-  if (messageId !== null) queue.pendingId = messageId;
+  queue.pendingId = messageId ?? queue.lockBoundary;
   try {
     await api.taskQueueLock(taskId, messageId);
     await refreshQueue();
@@ -643,14 +644,19 @@ export function displayFrames(): Frame[] {
  * 交内核待生效）显示「生效中」而非消失——发送中→排队中→生效中→已送达
  * 全程可见。 */
 export function pendingQueueItems(): TranscriptItem[] {
+  // 已消费 = 真实帧带 queue_item 戳（乐观帧自身虽带同 id 但不是消费证据——
+  // Codex P1：计入会把刚发送的消息从两处同时抹掉，RPC 成功到真实消费帧
+  // 到达之间整条消息消失）。inflight（已交内核待生效）显示「生效中」而非
+  // 消失——发送中→排队中→生效中→已送达全程可见。
   const consumedIds = new Set(
     tasks.frames
       .filter(
-        (f): f is Frame & { payload: { queue_item: string } } =>
+        (f) =>
           f.kind === "user-text" &&
+          (f.payload as { optimistic?: boolean } | undefined)?.optimistic !== true &&
           typeof (f.payload as { queue_item?: unknown } | undefined)?.queue_item === "string",
       )
-      .map((f) => f.payload.queue_item),
+      .map((f) => (f.payload as { queue_item: string }).queue_item),
   );
   return queue.items
     .filter((i) => !consumedIds.has(i.message_id))

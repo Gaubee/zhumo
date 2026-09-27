@@ -680,35 +680,41 @@ describe('sessions 统一队列（W10k：单一序列 + 单航次投递）', () 
     off();
   });
 
-  // W10m 状态流：followup/steer 返回条目稳定 id；队列起源轮的第一条
-  // user-text 帧盖 payload.queue_item 戳（前端乐观帧按 id 精确接管）。
-  it('followup 返回条目 id；消费帧带 queue_item 戳（attach 补充帧不盖）', async () => {
+  // W10n 状态流：followup/steer 返回条目稳定 id；消费帧按内核消息 id（mid）
+  // 精确盖章——真实内核 claim() 先取 next-step 再取 next-turn（dsh-agent-loop
+  // lib/index.js claim()），attach 的 user/message 事件先于 anchor 到达。
+  // 「首条 user-text」启发式会把 anchor 的戳盖到 attach 上（Codex 复核 P1）。
+  it('盖章按 mid 精确配对：claim 先 next-step 后 next-turn（attach 先到不盖错）', async () => {
     const { sid, turnStart, turnEnd } = await seedIdle('task-stamp');
-    const itemId = sessions.followup(sid, '状态流主');
-    expect(typeof itemId).toBe('string');
-    sessions.steer(sid, '状态流补充');
-    // pump：anchor 承认（idle nextTurn 空），steer attach 头段投当前轮。
+    const anchorId = sessions.followup(sid, '状态流主');
+    const steerId = sessions.steer(sid, '状态流补充');
     const agent = kernel.created.at(-1)!;
-    agent.inbox.splice('next-turn', 0, 1, []);
-    const frames: Array<{ kind: string; payload?: unknown }> = [];
+    const anchorMid = (agent.inbox.nextTurn[0] as { id?: string } | undefined)?.id;
+    agent.inbox.splice('next-turn', 0, 1, []); // 模拟内核消费队头（开轮）
+    // turn/start：配对（activeAnchorKernelId 留存）+ pump 把 steer 投 next-step。
+    turnStart();
+    const steerMid = (agent.inbox.nextStep[0] as { id?: string } | undefined)?.id;
+    expect(anchorMid).toBeTruthy();
+    expect(steerMid).toBeTruthy();
+    const frames: Array<{ kind: string; text?: string; payload?: { queue_item?: string } }> = [];
     sessions.subscribe(sid, (f) => frames.push(f as never));
     let evSeq = 50;
-    const userMsg = (text: string) =>
+    const userMsg = (mid: string, text: string) =>
       kernel.emitSessionEvent(sid, {
         seq: evSeq++,
         type: 'user/message',
-        data: { id: `msg-${text}`, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } },
+        data: { id: mid, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } },
       });
-    turnStart();
-    userMsg('状态流主');
-    userMsg('状态流补充');
+    // 真实 claim 顺序：next-step（attach）先，next-turn（anchor）后。
+    userMsg(steerMid!, '状态流补充');
+    userMsg(anchorMid!, '状态流主');
     turnEnd();
-    const userTexts = frames.filter((f) => f.kind === 'user-text') as Array<{ kind: string; text?: string; payload?: { queue_item?: string } }>;
-    // 第一条（anchor 消费帧）带戳且等于返回 id；补充帧不带。
-    const stamped = userTexts.filter((f) => f.payload?.queue_item === itemId);
-    expect(stamped).toHaveLength(1);
-    expect(stamped[0]!.text).toBe('状态流主');
-    expect(userTexts.some((f) => f.text === '状态流补充' && f.payload?.queue_item === undefined)).toBe(true);
+    const userTexts = frames.filter((f) => f.kind === 'user-text');
+    // 各自的帧盖各自的 id——先到的 attach 不会夺走 anchor 的戳。
+    expect(userTexts.filter((f) => f.payload?.queue_item === anchorId)).toHaveLength(1);
+    expect(userTexts.filter((f) => f.payload?.queue_item === anchorId)[0]!.text).toBe('状态流主');
+    expect(userTexts.filter((f) => f.payload?.queue_item === steerId)).toHaveLength(1);
+    expect(userTexts.filter((f) => f.payload?.queue_item === steerId)[0]!.text).toBe('状态流补充');
   });
 
   it('steer 返回条目 id（attach 寻址）', async () => {
@@ -716,5 +722,25 @@ describe('sessions 统一队列（W10k：单一序列 + 单航次投递）', () 
     const itemId = sessions.steer(sid, '引导条目');
     expect(typeof itemId).toBe('string');
     expect(sessions.queueView(sid).items.some((i) => i.messageId === itemId && i.mode === 'steer')).toBe(true);
+  });
+
+  // W10n 原子边界移动（Codex P1-4）：边界往深处挪=前缀释放即 pump 续跑，
+  // 不等下一次轮事件——「恢复整段→再暂停」的两步竞态会丢目标条目。
+  it('边界深挪：释放前缀立即续投（旧边界与新边界之间的条目不停滞）', async () => {
+    const { sid } = await seedIdle('task-boundary-move');
+    sessions.followup(sid, '甲');
+    sessions.followup(sid, '乙');
+    sessions.followup(sid, '丙');
+    const agent = kernel.created.at(-1)!;
+    // 全段暂停（边界=甲，撤回已承认的甲）。
+    const ids = sessions.queueView(sid).items.map((i) => i.messageId);
+    sessions.queueLock(sid, ids[0]!);
+    expect(sessions.queueView(sid).items.every((i) => i.held)).toBe(true);
+    expect(agent.inbox.nextTurn.length).toBe(0); // 甲已撤回，无在途
+    // 边界深挪到丙：甲乙释放且立即续投（甲重新承认）。
+    sessions.queueLock(sid, ids[2]!);
+    const view = sessions.queueView(sid).items;
+    expect(view.filter((i) => i.held).map((i) => i.text)).toEqual(['丙']);
+    expect(agent.inbox.nextTurn.length).toBe(1); // 甲已被重新承认投递
   });
 });
