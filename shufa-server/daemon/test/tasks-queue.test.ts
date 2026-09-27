@@ -831,6 +831,42 @@ describe('sessions 统一队列（W10k：单一序列 + 单航次投递）', () 
     expect(new Set(seqs).size).toBe(seqs.length);
   });
 
+  // Codex 增量复核 P1 回归：未开轮的 cancel（timer 在途）不得发孤立
+  // turn-end、不得清扫在途 attach——排队投递照常续跑（帧序与队列自然收敛）。
+  it('demo：未开轮 cancel——无孤立 turn-end、inflight attach 不被清扫、后续照常开轮', async () => {
+    vi.useRealTimers();
+    const sessions2 = createTaskSessions({
+      kernel: () => asKernelHandle(kernel),
+      modelSelection: async () => ({ provider: 'zhipu', model: 'glm-5.3-flash' }),
+      retention: 50,
+    });
+    sessions2.setDemoDelay(80);
+    const created = await sessions2.createTaskSession('task-preturn-cancel', {
+      cwd: root,
+      framesFile: path.join(root, 'frames-ptc.jsonl'),
+      prompt: '首条',
+    });
+    const sid = created.sessionId;
+    await new Promise((r) => setTimeout(r, 150)); // 首条轮完成，idle
+    const framesBefore = sessions2.stream(sid, path.join(root, 'frames-ptc.jsonl'), 0).frames.length;
+    sessions2.steer(sid, '未开轮引导'); // idle steer：attach 立即投递（inflight）+ 开轮起表
+    await new Promise((r) => setTimeout(r, 10));
+    const viewMid = sessions2.queueView(sid).items;
+    expect(viewMid.some((i) => i.text === '未开轮引导' && i.inflight)).toBe(true);
+    sessions2.cancel(sid); // timer 在途、turn-start 未发
+    await new Promise((r) => setTimeout(r, 15));
+    // 无孤立 turn-end；条目仍在队列（未被清扫）。
+    const framesAfterCancel = sessions2.stream(sid, path.join(root, 'frames-ptc.jsonl'), 0).frames;
+    expect(framesAfterCancel.length).toBe(framesBefore);
+    expect(sessions2.queueView(sid).items.some((i) => i.text === '未开轮引导')).toBe(true);
+    await new Promise((r) => setTimeout(r, 250));
+    // keepInbox：cancel 后照常开轮消费完毕。
+    expect(sessions2.queueView(sid).items).toHaveLength(0);
+    const frames = sessions2.stream(sid, path.join(root, 'frames-ptc.jsonl'), 0).frames;
+    expect(frames.some((f) => f.kind === 'user-text' && f.text === '未开轮引导')).toBe(true);
+    expect(frames.filter((f) => f.kind === 'turn-end' && f.text === 'cancelled')).toHaveLength(0);
+  });
+
   it('steer 返回条目 id（attach 寻址）', async () => {
     const { sid } = await seedIdle('task-steer-id');
     const itemId = sessions.steer(sid, '引导条目');

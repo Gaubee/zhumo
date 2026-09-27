@@ -406,3 +406,23 @@ live 复验深挖出三个真实缺陷（全部帧级证据定位+修复+回归�
 文件为权威；③「假设在内核 inbox」的丢弃逻辑对内存 inbox 的 demo 是丢单。
 
 门禁：daemon 187/187 + tsc 0 + svelte-check 0 错 + build ✓。
+
+## W10n 增量复核修复（Codex 7.5/10 两 P1 收窄，2026-09-29 四轮）
+
+- 【P1·cancel 生命周期】turnOpen 门控：DemoAgent 仅在本轮 turn-start 已发
+  且未 turn-end 时才发 cancelled 帧——未开轮的 cancel（timer 在途）无轮
+  可断：不造孤立「本轮完成」、不清扫未开轮的在途 attach（keepInbox 下
+  pending head 照常续跑）。entry.turnRunning 不能当守卫（deliverAttach
+  会预先置真）。回归 +1（未开轮 cancel：帧数不变/条目在队/后续照常消费/
+  无 cancelled 帧）。demo 轮为原子同步，turnOpen-true 的 cancel 实际不
+  可达——门控兼为未来异步 demo 轮的防御。
+- 【P1·审批收敛】makeEntry 替换旧条目前先以空答案释放 prev.pending（否则
+  旧审批 Promise 永久挂起——Codex 探针实证）+ dispose 带错处理。
+- 【P2】reorderQueue 的 daemon 恢复消费 RPC 改 await+失败面呈（不再
+  fire-and-forget 吞错——否则 daemon 仍暂停而 UI 已解锁）。
+- 条件性 P2（kernelId 重建不一致双投）记录在案：DSH 持久 inbox 正常保留
+  消息 id，仅重建场景触发，暂不处理。
+
+门禁：daemon 188/188 + tsc 0 + svelte-check 0 错 + build ✓；live 帧级
+终链（stop→keepInbox 续跑甲→乙，无孤立帧/停摆/双写；demo 探针先证 daemon
+侧生效）。

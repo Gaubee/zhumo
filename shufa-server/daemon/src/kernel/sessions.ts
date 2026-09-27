@@ -248,6 +248,11 @@ class DemoAgent implements AgentLike {
   ctx = { on: (): (() => void) => () => {} };
   private timer: ReturnType<typeof setTimeout> | null = null;
   private paused = false;
+  /** 本轮 turn-start 已发出且尚未 turn-end（Codex 增量复核 P1：cancel 仅在
+   * 真正开过轮时才发 turn-end(cancelled)——否则孤立「本轮完成」+清扫未
+   * 开轮的在途 attach。entry.turnRunning 不能当此守卫：deliverAttach 会在
+   * 开轮前预先置真）。 */
+  private turnOpen = false;
 
   constructor(
     sessionId: string,
@@ -286,8 +291,14 @@ class DemoAgent implements AgentLike {
     // W10n 三轮 live 实证补齐：真实内核 cancel 后发 turn/end(cancelled)
     // （daemon 的 onQueueTurnEnd 靠它清 turnRunning/清扫/pump 续跑），demo
     // 此前不发 → entry.turnRunning 卡真、后续 anchor 永不承认（队列停摆）。
+    // Codex 增量复核 P1 收窄：只在真正开过轮（turn-start 已发）时发——
+    // 未开轮的 cancel 无轮可断（pending head 属排队投递，keepInbox 续跑），
+    // 发了反而制造孤立「本轮完成」并清扫未开轮的在途 attach。
     if ((options as { keepInbox?: boolean } | undefined)?.keepInbox) {
-      this.onFrames?.([{ at: Date.now(), seq: 0, kind: 'turn-end', text: 'cancelled' }]);
+      if (this.turnOpen) {
+        this.turnOpen = false;
+        this.onFrames?.([{ at: Date.now(), seq: 0, kind: 'turn-end', text: 'cancelled' }]);
+      }
       this.schedule();
     } else this.inbox.nextTurn.length = 0;
     this.status = 'idle';
@@ -328,6 +339,7 @@ class DemoAgent implements AgentLike {
     }
     // W10k 两批投帧：批1 turn-start 单独先行——onFrames 提交后 daemon 的队列
     // 钩子把该轮 attach 组 steer 进来；批2 吸收为本轮补充 + 轮体。
+    this.turnOpen = true;
     this.onFrames?.([{ at: Date.now(), seq: 0, kind: 'turn-start', text: '' }]);
     const supplements = this.inbox.nextStep.splice(0);
     const frames: Frame[] = [
@@ -353,6 +365,7 @@ class DemoAgent implements AgentLike {
       },
       { at: Date.now(), seq: 0, kind: 'turn-end', text: 'completed' },
     ];
+    this.turnOpen = false;
     this.onFrames?.(frames);
     if (this.inbox.nextTurn.length === 0 && this.inbox.nextStep.length === 0) {
       this.status = 'idle';
@@ -975,11 +988,14 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     // 同 sessionId 条目时，旧 agent 的在途定时器/事件若不废止会继续产帧
     // ——frameSubscribers 按 sessionId 存活（W10l 根因修复）后僵尸帧直达
     // 客户端（双泡/幻视图）。替换即 dispose 旧 handle（demo=清定时器，
-    // 真实内核=agent 释放）。
+    // 真实内核=agent 释放）。Codex 增量复核 P1：先以空答案收敛旧审批
+    // pending（否则其 Promise 永久挂起，调用方 RPC 无响应）。
     const prev = live.get(handle.agent.session.id);
     if (prev !== undefined) {
+      for (const pending of prev.pending.values()) pending.resolve({ answers: [] });
+      prev.pending.clear();
       try {
-        void prev.dispose();
+        void prev.dispose().catch(() => {});
       } catch {
         // 旧条目回收失败不阻断新装配。
       }
