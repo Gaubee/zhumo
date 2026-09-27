@@ -456,12 +456,15 @@ export async function reorderQueue(orderedIds: string[]): Promise<void> {
   queue.error = null;
   // daemon 恢复消费先行（松手即续跑）；本地 reordering 保持到重排 RPC
   // 落定——行按钮不在「新序未提交」窗口恢复可操作（Codex 三轮 P2）。
-  // Codex 增量复核 P2：恢复 RPC 不再吞错——失败面呈（否则 daemon 侧仍
-  // 暂停而 UI 已解锁，队列静默冻结）。
+  // Codex 五轮 P2：恢复失败即终止本次提交——继续 reorder 会在 daemon 仍
+  // 暂停时提交新序，形成「界面恢复、队列冻结」；面呈错误 + 拉权威态收场。
   try {
     await api.taskQueueSetReordering(taskId, false);
   } catch (error) {
+    queue.reordering = false;
     queueOpFailed(error);
+    void refreshQueue();
+    return;
   }
   try {
     await api.taskQueueReorder(taskId, orderedIds);

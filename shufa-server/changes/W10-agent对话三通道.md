@@ -426,3 +426,19 @@ live 复验深挖出三个真实缺陷（全部帧级证据定位+修复+回归�
 门禁：daemon 188/188 + tsc 0 + svelte-check 0 错 + build ✓；live 帧级
 终链（stop→keepInbox 续跑甲→乙，无孤立帧/停摆/双写；demo 探针先证 daemon
 侧生效）。
+
+## W10n 五轮修复（Codex 8.0/10 P1+P2×2，2026-09-29）
+
+- 【P1·dispose 围栏】makeEntry/makeDemoEntry 异步化：释放旧 pending →
+  await prev.dispose() 完成后才 live.set/恢复/pump——真实内核 dispose 会
+  abort 活跃轮并异步发 turn/end，先切换会让旧轮终结事件落在新条目上
+  （onQueueTurnEnd 清扫新队列 inflight；Codex 延迟-dispose 探针复现）。
+  回归 +1（延迟 dispose 发 turn/end：新条目 inflight 存活）。
+- 【P2·cancel 重入】cancelRequested 标记：turn-start 回调内同步 cancel 已
+  发 cancelled 帧时，consumeHead 批2 抑制 completed（防双「本轮完成」）；
+  turnOpen 延迟到批后复位。
+- 【P2·reorder 终止】恢复消费 RPC 失败即终止本次提交（不继续 reorder——
+  否则 daemon 仍暂停时提交新序，界面恢复队列冻结）。
+
+门禁：daemon 189/189 + tsc 0 + svelte-check 0 错 + build ✓；live 冒烟
+（demo 探针先行，双发送消费、队列清空）。

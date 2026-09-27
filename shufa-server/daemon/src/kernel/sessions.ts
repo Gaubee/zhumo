@@ -253,6 +253,9 @@ class DemoAgent implements AgentLike {
    * 开轮的在途 attach。entry.turnRunning 不能当此守卫：deliverAttach 会在
    * 开轮前预先置真）。 */
   private turnOpen = false;
+  /** 重入 cancel 已发 cancelled 帧（Codex 五轮 P2：consumeHead 批2 抑制
+   * completed，防双「本轮完成」）。 */
+  private cancelRequested = false;
 
   constructor(
     sessionId: string,
@@ -297,6 +300,7 @@ class DemoAgent implements AgentLike {
     if ((options as { keepInbox?: boolean } | undefined)?.keepInbox) {
       if (this.turnOpen) {
         this.turnOpen = false;
+        this.cancelRequested = true;
         this.onFrames?.([{ at: Date.now(), seq: 0, kind: 'turn-end', text: 'cancelled' }]);
       }
       this.schedule();
@@ -365,8 +369,17 @@ class DemoAgent implements AgentLike {
       },
       { at: Date.now(), seq: 0, kind: 'turn-end', text: 'completed' },
     ];
-    this.turnOpen = false;
-    this.onFrames?.(frames);
+    // Codex 五轮 P2：重入 cancel（订阅者在 turn-start 回调内同步 cancel）已
+    // 发 cancelled turn-end 时，本轮不再发 completed（双「本轮完成」）；批后
+    // 才复位 turnOpen（批内 cancel 仍能正确识别本轮在途）。
+    if (this.cancelRequested) {
+      this.cancelRequested = false;
+      this.turnOpen = false;
+      this.onFrames?.(frames.filter((f) => f.kind !== 'turn-end'));
+    } else {
+      this.turnOpen = false;
+      this.onFrames?.(frames);
+    }
     if (this.inbox.nextTurn.length === 0 && this.inbox.nextStep.length === 0) {
       this.status = 'idle';
       this.onIdle?.();
@@ -455,10 +468,10 @@ export function createTaskSessions(deps: TaskSessionDeps) {
   let demoDelayMs = 0;
 
   /** demo 会话装配：DemoAgent + makeEntry + 帧回调接线。 */
-  function makeDemoEntry(sessionId: string, taskId: string, store: FrameStore, seeded: Frame[]): void {
+  async function makeDemoEntry(sessionId: string, taskId: string, store: FrameStore, seeded: Frame[]): Promise<void> {
     const agent = new DemoAgent(sessionId, demoDelayMs);
     const handle = { agent: agent as AgentLike, dispose: async () => agent.disposeOf() };
-    makeEntry(handle, taskId, store, seeded);
+    await makeEntry(handle, taskId, store, seeded);
     const entry = live.get(sessionId)!;
     agent.onFrames = (frames) => {
       // W10k 队列钩子（demo 轮事件经帧流而非 firehose）——按帧型分序
@@ -956,12 +969,12 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     return store.readAfter(0).slice(-retention);
   }
 
-  function makeEntry(
+  async function makeEntry(
     handle: { agent: AgentLike; dispose(): Promise<void> },
     taskId: string,
     store: FrameStore,
     seeded: Frame[],
-  ): LiveTaskSession {
+  ): Promise<LiveTaskSession> {
     const entry: LiveTaskSession = {
       agent: handle.agent,
       dispose: handle.dispose,
@@ -994,8 +1007,12 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     if (prev !== undefined) {
       for (const pending of prev.pending.values()) pending.resolve({ answers: [] });
       prev.pending.clear();
+      // Codex 五轮 P1：await dispose 完成后才切换 live——真实内核 dispose 会
+      // abort 活跃轮并异步发 turn/end，firehose 按 sessionId 取「当前」条目；
+      // 若先切换，旧轮的终结事件会落在新条目上（误清新队列的 inflight）。
+      // await 下旧事件落在旧条目（仍在册）——帧如实入流，新装配不受扰。
       try {
-        void prev.dispose().catch(() => {});
+        await prev.dispose();
       } catch {
         // 旧条目回收失败不阻断新装配。
       }
@@ -1319,7 +1336,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       // 演示模式（走查开关）：不建内核 agent、不选模型、不调 LLM。
       if (demoDelayMs > 0) {
         const sessionId = `task-${randomUUID()}`;
-        makeDemoEntry(sessionId, taskId, new FrameStore(input.framesFile), []);
+        await makeDemoEntry(sessionId, taskId, new FrameStore(input.framesFile), []);
         live.get(sessionId)!.agent.followup(
           { id: `demo-${randomUUID()}`, role: 'user', content: [{ type: 'text', text: input.prompt }], source: { kind: 'user' } },
         );
@@ -1345,7 +1362,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         setup: setupToolSurface,
       });
       const store = new FrameStore(input.framesFile);
-      makeEntry(handle, taskId, store, []);
+      await makeEntry(handle, taskId, store, []);
       handle.agent.followup(
         createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: input.prompt }] }) as never,
       );
@@ -1356,7 +1373,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     async resumeTaskSession(taskId: string, input: TaskSessionResumeInput): Promise<{ sessionId: string }> {
       // 演示模式：daemon 重启后的 demo 会话续聊——空 inbox 重建，历史帧回放。
       if (demoDelayMs > 0) {
-        makeDemoEntry(input.sessionId, taskId, new FrameStore(input.framesFile), entryFramesFromDisk(new FrameStore(input.framesFile)));
+        await makeDemoEntry(input.sessionId, taskId, new FrameStore(input.framesFile), entryFramesFromDisk(new FrameStore(input.framesFile)));
         return { sessionId: input.sessionId };
       }
       const kernel = requireKernel();
@@ -1377,7 +1394,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         setup: setupToolSurface,
       });
       const store = new FrameStore(input.framesFile);
-      makeEntry(handle, taskId, store, entryFramesFromDisk(store));
+      await makeEntry(handle, taskId, store, entryFramesFromDisk(store));
       return { sessionId: handle.agent.session.id };
     },
 

@@ -867,6 +867,48 @@ describe('sessions 统一队列（W10k：单一序列 + 单航次投递）', () 
     expect(frames.filter((f) => f.kind === 'turn-end' && f.text === 'cancelled')).toHaveLength(0);
   });
 
+  // Codex 五轮 P1 回归：旧句柄异步 dispose 期间发出的 turn/end 不得串入
+  // 新条目——串入时 onQueueTurnEnd 的 pump 会驱动新条目提前承认队首
+  //（新 agent inbox 被塞入消息）。await dispose 后切换 live，事件落旧条目。
+  it('resume：旧 dispose 延迟发 turn/end——落旧条目，新条目 inflight 不被清扫', async () => {
+    const { sid } = await seedIdle('task-dispose-fence');
+    // 恢复档案：attach 在前（pump 即投→inflight）、anchor 在后（turnRunning
+    // 预置阻断承认）——新条目装配后恰有一条 inflight，正对串入清扫面。
+    const restored: { lockBoundaryId: string | null; items: W10kQueueItem[] } = {
+      lockBoundaryId: null,
+      items: [
+        { id: 'r-attach', text: '引导补充', kind: 'attach', effect: 'steer', state: 'queued' },
+        { id: 'r-anchor', text: '锚A', kind: 'anchor', state: 'queued' },
+      ],
+    };
+    const sessions2 = createTaskSessions({
+      kernel: () => asKernelHandle(kernel),
+      modelSelection: async () => ({ provider: 'zhipu', model: 'glm-5.3-flash' }),
+      retention: 50,
+      onQueueRestore: () => structuredClone(restored),
+    });
+    const origResume = kernel.agents.resume.bind(kernel.agents);
+    kernel.agents.resume = async (options: { resumeSessionId: string }) => {
+      const handle = await origResume(options);
+      return {
+        agent: handle.agent,
+        dispose: async () => {
+          await new Promise((r) => setTimeout(r, 20));
+          kernel.emitSessionEvent(options.resumeSessionId, { seq: 900, type: 'turn/end', data: { reason: { kind: 'cancelled' } } });
+        },
+      };
+    };
+    await sessions2.resumeTaskSession('task-dispose-fence', {
+      sessionId: sid,
+      framesFile: path.join(root, 'frames-task-dispose-fence.jsonl'),
+    });
+    // await-dispose 围栏：串入的 turn/end 落旧条目——新条目的 inflight
+    // attach 存活（串入时 onQueueTurnEnd 的清扫会把它抹掉）。
+    const items = sessions2.queueView(sid).items;
+    expect(items.some((i) => i.text === '引导补充' && i.inflight)).toBe(true);
+    expect(items.some((i) => i.text === '锚A')).toBe(true);
+  });
+
   it('steer 返回条目 id（attach 寻址）', async () => {
     const { sid } = await seedIdle('task-steer-id');
     const itemId = sessions.steer(sid, '引导条目');
