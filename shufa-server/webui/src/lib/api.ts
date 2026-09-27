@@ -255,7 +255,7 @@ export interface ShufaApi {
     onFrame: (frame: Frame) => void,
     onReconnect?: () => void,
   ): () => void;
-  sendTaskPrompt(taskId: string, prompt: string, mode?: "followup" | "steer"): Promise<void>;
+  sendTaskPrompt(taskId: string, prompt: string, mode?: "followup" | "steer"): Promise<string | undefined>;
   /** WS 通道就绪（刷新后首 RPC 前调用——未 open 时发送会被静默丢弃）。 */
   ensureRpcReady(): Promise<void>;
   /** 打断当前轮（W10）：任务回 done 可续聊；区别于终态取消。 */
@@ -628,8 +628,9 @@ class MockApi implements ShufaApi {
     return onTaskFrame(taskId, onFrame);
   }
 
-  async sendTaskPrompt(taskId: string, prompt: string): Promise<void> {
+  async sendTaskPrompt(taskId: string, prompt: string): Promise<string | undefined> {
     void replayAgentTurn(taskId, prompt);
+    return undefined;
   }
 
   async ensureRpcReady(): Promise<void> {}
@@ -1170,9 +1171,15 @@ class RpcApi implements ShufaApi {
     };
   }
 
-  /** 前台续聊（W7b；W10 加 mode）：followup=排队（缺省）/ steer=引导当前轮。 */
-  async sendTaskPrompt(taskId: string, text: string, mode?: "followup" | "steer"): Promise<void> {
-    await rpc().tasks.followup({ id: taskId, text, ...(mode === "steer" ? { mode } : {}) });
+  /** 前台续聊（W7b；W10 加 mode；W10m 返回队列条目 id——乐观帧状态流主键）：
+   * followup=排队（缺省）/ steer=引导当前轮；slash/$skill 直投无条目 → undefined。 */
+  async sendTaskPrompt(
+    taskId: string,
+    text: string,
+    mode?: "followup" | "steer",
+  ): Promise<string | undefined> {
+    const out = await rpc().tasks.followup({ id: taskId, text, ...(mode === "steer" ? { mode } : {}) });
+    return out.queue_item_id;
   }
 
   async ensureRpcReady(): Promise<void> {

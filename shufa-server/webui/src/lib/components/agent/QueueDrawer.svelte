@@ -1,24 +1,23 @@
 <script lang="ts">
   /**
-   * 队列抽屉（W10c→W10k 重做，Owner 语义 2026-09-28）：输入面板上方紧贴长出
-   * 的手风琴——收起=一行预览（条数 + 下一条），展开=完整投递序列。
-   * W10k 单一有序序列（Codex 讨论定稿）：queue=开轮锚点，steer/inject=补充
-   * （绑定前方最近锚点，头部=当前轮）——不再分「挂起/排队」两组；分组由
-   * 顺序派生，拖动重排即重新绑定。
-   * 行布局：status（三态锁）+ 模式微标 + 单行文本 + actions（立刻发送/编辑/
-   * 改模式/删除）。锁三态：解锁/主动锁定（边界条）/被动锁定（边界后缀，
-   * 位置派生）。锁=只是不自动投递，其余全开放（做减法定稿）。
-   * 整行可拖动排序（svelte-dnd-action 实时插入预览）：拖动开始即全面板锁定
-   * （actions 禁用、暂停帧驱动刷新防抖动），drop 一次性提交新序。
+   * 队列抽屉（W10c→W10k→W10m 重做）：输入面板上方紧贴长出的手风琴——
+   * 收起=一行预览（待发/生效中计数 + 下一条），展开=完整投递序列。
+   * W10k 单一有序序列：queue=开轮锚点，steer/inject=补充（绑定前方最近
+   * 锚点，头部=当前轮）；分组由顺序派生，拖动重排即重新绑定。
+   * W10m（Codex 体验评审落地）：①暂停显式化——行首「⏸ 暂停/▶ 恢复」
+   * 文字钮（后缀只显示「已暂停」，不承担隐含点击）；②模式文案按运行态
+   * （steer/inject 在 idle 与运行中生效时点不同，如实标注）；③行级 pending
+   * 防重复点击；④删行内「立刻发送」主图标（高频路径收敛为发送/停止，
+   * sendNow RPC 保留）；⑤拖动抓手 + 触屏命中区扩张。
    */
   import { dndzone } from "svelte-dnd-action";
   import IconChevronDown from "@lucide/svelte/icons/chevron-down";
   import IconPencil from "@lucide/svelte/icons/pencil";
   import IconTrash from "@lucide/svelte/icons/trash";
   import IconRepeat from "@lucide/svelte/icons/repeat";
-  import IconSend from "@lucide/svelte/icons/send";
-  import IconLock from "@lucide/svelte/icons/lock";
-  import IconLockOpen from "@lucide/svelte/icons/lock-open";
+  import IconGripVertical from "@lucide/svelte/icons/grip-vertical";
+  import IconPause from "@lucide/svelte/icons/pause";
+  import IconPlay from "@lucide/svelte/icons/play";
   import * as Popover from "$lib/components/ui/popover";
   import type { TaskQueueItem, TaskQueueMode } from "@zhumo/contracts";
 
@@ -27,6 +26,8 @@
     lockBoundary = null,
     editingId = null,
     reordering = false,
+    pendingId = null,
+    running = false,
     onedit,
     oncancel,
     onremove,
@@ -34,7 +35,6 @@
     onlock,
     onreorder,
     onreordering,
-    onsendnow,
   }: {
     items: TaskQueueItem[];
     /** 锁定边界条目 id（daemon 单一事实源；null=未锁定）。 */
@@ -43,38 +43,52 @@
     editingId?: string | null;
     /** 拖动进行中（store 置位：帧驱动刷新暂停）。 */
     reordering?: boolean;
+    /** 行级请求中（W10m：该条 RPC 未落定前行按钮禁用）。 */
+    pendingId?: string | null;
+    /** 任务运行中（模式文案按运行态切换）。 */
+    running?: boolean;
     onedit: (messageId: string) => void;
     oncancel: () => void;
     onremove: (messageId: string) => void;
     onsetmode: (messageId: string, mode: TaskQueueMode) => void;
-    /** 锁定/解锁（null=解锁放回；daemon 持久化）。 */
+    /** 暂停/恢复（null=恢复放回；daemon 持久化）。 */
     onlock: (messageId: string | null) => void;
     onreorder: (orderedIds: string[]) => void;
     /** 拖动期面板锁（Svelte 5 props 不可反写——经回调置 store）。 */
     onreordering: (v: boolean) => void;
-    /** 立刻发送（打断当前轮 + 该条提到队头，内核收敛后自动开轮）。 */
-    onsendnow: (messageId: string) => void;
   } = $props();
 
-  const MODE_LABEL: Record<TaskQueueMode, string> = {
-    queue: "开轮",
-    steer: "引导",
-    inject: "注入",
-  };
   const MODE_CYCLE: TaskQueueMode[] = ["queue", "steer", "inject"];
+
+  /** 模式文案（W10m/Codex P2：按运行态如实标注生效时点——idle 时 steer
+   * 等价开新轮、inject 不唤醒；写死「本轮」与实际投递不一致）。 */
+  function modeLabel(mode: TaskQueueMode, isRunning: boolean): string {
+    if (mode === "queue") return "下一轮";
+    if (mode === "steer") return isRunning ? "本轮补充" : "新开一轮";
+    return isRunning ? "本轮注入" : "待活动轮";
+  }
 
   let open = $state(false);
   let modeOpenId = $state<string | null>(null);
+  /** 队列从空到非空即自动展开（W10m/Codex P2：队列存在时直接可见，少一次
+   * 点击）；用户手动收起后保持，直到队列清空再来新一轮。 */
+  let hadItems = false;
+  $effect(() => {
+    const has = items.length > 0;
+    if (has && !hadItems) open = true;
+    hadItems = has;
+  });
 
   /**
-   * 三态锁（Owner 设计四轮重做）：held 条目=锁定段（daemon 持久化，内核不消
-   * 费——可安全编辑/删除/拖动）；lockBoundary=边界条（段内其余为被动锁定）。
+   * 三态（Owner 设计四轮+W10m 显式化）：held 条目=暂停段（daemon 持久化，
+   * 内核不消费——可安全编辑/删除/拖动）；lockBoundary=边界条（段内其余为
+   * 被动暂停）。只有边界条「▶ 恢复」可点；后缀「已暂停」纯展示（不承担
+   * 隐含点击——要上移边界先恢复再在新行暂停）。
    */
   const lockStateOf = $derived.by(() => {
     const states = new Map<string, "unlocked" | "locked" | "passive">();
     for (const item of items) {
-      // 拖动进行中：全部未锁条目进入被动锁定（Owner 设计——拖动时整队列
-      // 稳定，松手恢复）；锁定段维持原态。
+      // 拖动进行中：全部未停条目进入被动暂停观感（拖动时队列稳定）；暂停段维持原态。
       if (reordering && !item.held) {
         states.set(item.message_id, "passive");
         continue;
@@ -90,10 +104,8 @@
     lockStateOf.get(id) ?? "unlocked";
   const isHeld = (id: string): boolean => items.find((i) => i.message_id === id)?.held === true;
 
-  /** W10k 单一序列（Owner 语义 2026-09-28）：不再分「挂起/排队」两组——
-   * queue=anchor（开轮锚点），steer/inject=attach（补充，绑定前方最近
-   * anchor；头部 attach=当前轮）。inflight（已交内核在途）只读不参与操作。
-   * 绑定与分组全部由顺序派生，拖动重排即重绑定。 */
+  /** W10k 单一序列：queue=anchor（开轮锚点），steer/inject=attach（补充，
+   * 绑定前方最近 anchor；头部 attach=当前轮）。inflight 只读不参与操作。 */
   const listItems = $derived(items.filter((i) => i.inflight !== true));
   const inflightCount = $derived(items.length - listItems.length);
   /** 收起态预览：队头下一条要生效的内容（本轮补充优先，否则下一轮）。 */
@@ -129,7 +141,7 @@
     return "current";
   }
 
-  /** 行分组派生（dnd 容器版，与 rowGroups 同规则）。 */
+  /** 行分组派生（dnd 容器版，与 boundOf 同规则）。 */
   const dndRows = $derived.by(() => {
     const rows: Array<{ item: TaskQueueItem & { id: string }; bound: 'current' | 'anchor' }> = [];
     let seenAnchor = false;
@@ -143,6 +155,10 @@
     }
     return rows;
   });
+
+  /** 行按钮公共禁用态（W10m：行级 pending + 编辑/拖动全局态；pending 期间
+   * 全行禁用——同刻只有一条在途操作，防交叉重排）。 */
+  const rowBusy = (): boolean => editingId !== null || reordering || pendingId !== null;
 
   function handleDndItems(newItems: Array<Record<string, unknown>>): void {
     // 库 consider 回写（拖动开始的首次 consider 也走这里）：开启拖动态——
@@ -160,7 +176,7 @@
 
 {#if items.length > 0 || editingId !== null}
   <div class="mb-1.5 overflow-hidden rounded-t-lg border border-b-0 border-border bg-muted/40">
-    <!-- 手风琴头：收起=预览（条数 + 下一条文本）；展开=完整列表。 -->
+    <!-- 手风琴头：收起=计数（待发/生效中拆分）+ 下一条预览；展开=完整列表。 -->
     <button
       type="button"
       class="flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/70"
@@ -168,9 +184,9 @@
       aria-expanded={open}
     >
       <IconChevronDown class="h-3 w-3 shrink-0 transition-transform {open ? '' : '-rotate-90'}" aria-hidden="true" />
-      <span>投递序列（{items.length}）</span>
+      <span>队列 · 待发 {listItems.length}{inflightCount > 0 ? ` · 生效中 ${inflightCount}` : ''}</span>
       {#if editingId !== null}
-        <span class="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-600">编辑中（锁定段内，Esc 取消不改锁）</span>
+        <span class="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-600">编辑中（暂停段内，Esc 取消）</span>
         <span class="flex-1"></span>
         <span
           role="button"
@@ -191,7 +207,7 @@
         </span>
       {:else if items.length > 0}
         <span class="min-w-0 flex-1 truncate text-muted-foreground/70">
-          {previewText ?? ''}{inflightCount > 0 ? ` · ${inflightCount} 条生效中` : ''}
+          {previewText ?? ''}
         </span>
       {:else}
         <span class="flex-1"></span>
@@ -203,39 +219,57 @@
            在 0 高+0 透明态——内容与输入框重叠、拖拽失效（实测两次）。开合即时。 -->
       <div class="border-t border-border/60 px-2 py-1.5">
         <p class="px-0.5 pb-1 text-[10px] text-muted-foreground/60">
-          开轮=新起一轮 · 引导/注入=补充给它上方最近的开轮条目（顶部无开轮条=补充当前轮） · 点锁=暂停自动发送 · 拖动排序
+          拖动排序 · ⏸ 从这里暂停 · 点模式徽标改投递方式
         </p>
         {#snippet row(r: { item: TaskQueueItem; bound: 'current' | 'anchor' })}
           {@const item = r.item}
+          {@const ls = lockState(item.message_id)}
+          {@const busy = rowBusy()}
+          {@const selfPending = pendingId === item.message_id}
           <li
-            class="flex items-center gap-2 rounded border border-border/60 bg-card px-2 py-1 text-[12px] transition-colors {r.bound === 'anchor' && item.mode !== 'queue'
+            class="flex items-center gap-1.5 rounded border border-border/60 bg-card px-2 py-1 text-[12px] transition-colors {r.bound === 'anchor' && item.mode !== 'queue'
               ? 'ml-4 border-l-2 border-l-primary/30'
-              : ''} {isHeld(item.message_id) ? 'opacity-75' : ''}"
+              : ''} {isHeld(item.message_id) ? 'opacity-75' : ''} {selfPending ? 'opacity-60' : ''}"
+            aria-busy={selfPending}
           >
-            <!-- status：三态锁定位（边界锁点击=解锁放回；被动锁点击=边界上移到该行；未锁点击=锁定）。
-                 开/闭两个图标常驻 DOM 由 data-lock CSS 切换（不 {#if} 切换）——拖动库在起始帧
-                 克隆行作为浮影，克隆体不随后续重渲染更新，双图标+CSS 才能让浮影正确呈被动锁。 -->
-            <button
-              type="button"
-              data-lock={lockState(item.message_id)}
-              class="shrink-0 rounded p-0.5 {lockState(item.message_id) === 'locked'
-                ? 'text-amber-600'
-                : lockState(item.message_id) === 'passive'
-                  ? 'text-amber-600/45'
-                  : 'text-muted-foreground/40 hover:text-muted-foreground'}"
-              title={lockState(item.message_id) === 'locked'
-                ? "锁定边界：本条及之后暂停发送（可编辑/删除）；点击解锁全部放回"
-                : lockState(item.message_id) === 'passive'
-                  ? "被动锁定（锁定段内）；点击把锁定边界上移到本条"
-                  : "锁定：本条及之后暂停发送，进入稳定管理态（编辑/删除随时做）"}
-              aria-label={lockState(item.message_id) === 'unlocked' ? "锁定" : "调整锁定"}
-              onclick={() =>
-                onlock(lockState(item.message_id) === 'locked' ? null : item.message_id)}
-            >
-              <IconLockOpen class="h-3 w-3 lock-ico-open" />
-              <IconLock class="h-3 w-3 lock-ico-closed" />
-            </button>
-            <!-- 模式微标 + 单行文本：开轮=主色锚点；补充·当前轮=琥珀；补充·引导/注入=跟随色 -->
+            <!-- 拖动抓手（W10m/触屏专项：抓手显式化——整行可拖但抓手示意拖动起点）。 -->
+            <IconGripVertical class="h-3.5 w-3.5 shrink-0 cursor-grab text-muted-foreground/35" aria-hidden="true" />
+            <!-- 暂停（W10m 显式化）：未停=「⏸ 暂停」（点击=该条及之后暂停）；
+                 边界=「▶ 恢复」（点击=全段放回）；后缀=「已暂停」纯展示。 -->
+            {#if ls === 'locked'}
+              <button
+                type="button"
+                class="q-hit q-pause shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-600 hover:bg-amber-500/25 disabled:opacity-40"
+                title="恢复发送：该条及之后按原序继续"
+                aria-label="恢复发送"
+                disabled={busy}
+                onclick={() => onlock(null)}
+              >
+                <IconPlay class="h-3 w-3" />
+                恢复
+              </button>
+            {:else if ls === 'passive'}
+              <span
+                class="shrink-0 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-600/70"
+                title="已暂停（该条在暂停段内）"
+              >
+                <IconPause class="h-3 w-3" />
+                已暂停
+              </span>
+            {:else}
+              <button
+                type="button"
+                class="q-hit q-pause shrink-0 rounded-full px-2 py-0.5 text-[10px] text-muted-foreground/70 hover:bg-muted hover:text-foreground disabled:opacity-40"
+                title="从这里暂停：本条及之后不再自动发送，可安全编辑"
+                aria-label="从这里暂停"
+                disabled={busy}
+                onclick={() => onlock(item.message_id)}
+              >
+                <IconPause class="h-3 w-3" />
+                暂停
+              </button>
+            {/if}
+            <!-- 模式徽标（文案按运行态）+ 单行文本：下一轮=主色锚点；补充·当前轮=琥珀。 -->
             {#if r.bound === 'current' && item.mode !== 'queue'}
               <span
                 class="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-600"
@@ -250,33 +284,22 @@
                 : item.mode === 'steer'
                   ? 'bg-amber-500/15 text-amber-600'
                   : 'bg-violet-500/15 text-violet-600'}"
-              title={item.mode === 'queue' ? '开轮：新起一轮逐条发送' : item.mode === 'steer' ? '引导：补充给它上方最近的开轮条目（下一 step 边界生效）' : '注入：作为上下文补充（不作为对话轮）'}
+              title={item.mode === 'queue' ? '下一轮：新起一轮逐条发送' : item.mode === 'steer' ? (running ? '引导：本轮下一 step 边界生效' : '引导：idle 时等价开新轮') : '注入：作为上下文补充，不唤醒（等下一次活动轮）'}
             >
-              {MODE_LABEL[item.mode]}
+              {modeLabel(item.mode, running)}
             </span>
             <span class="min-w-0 flex-1 truncate" title={item.text}>{item.text}</span>
-            <!-- actions：立刻发送/编辑/改模式/删除——全部条目开放（做减法；拖动中禁用） -->
+            <!-- actions：编辑/改模式/删除（W10m：删「立刻发送」主图标——低频高险，
+                 语义由模式+自然投递覆盖；触屏命中区经 .q-hit 扩张）。 -->
             <button
               type="button"
-              class="shrink-0 rounded p-1 text-muted-foreground hover:bg-primary/10 hover:text-primary disabled:opacity-30"
-              title={item.mode === 'queue'
-                ? '立刻发送：打断当前工作，以这条消息立即开始新一轮（带其后的补充组）'
-                : '立刻发送：立即投给当前轮（idle 时引导会开新轮）'}
-              aria-label="立刻发送该消息"
-              disabled={editingId !== null || reordering}
-              onclick={() => onsendnow(item.message_id)}
-            >
-              <IconSend class="h-3 w-3" />
-            </button>
-            <button
-              type="button"
-              class="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
-              title={isHeld(item.message_id) ? '编辑锁定段消息（安全：解锁前不会发送）' : '编辑（该条及其后锁定，文本回输入框）'}
+              class="q-hit shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+              title={isHeld(item.message_id) ? '编辑暂停段消息（安全：恢复前不会发送）' : '编辑（该条及其后暂停，文本回输入框）'}
               aria-label="编辑该消息"
-              disabled={editingId !== null || reordering}
+              disabled={busy}
               onclick={() => onedit(item.message_id)}
             >
-              <IconPencil class="h-3 w-3" />
+              <IconPencil class="h-3.5 w-3.5" />
             </button>
             <Popover.Root open={modeOpenId === item.message_id} onOpenChange={(o) => (modeOpenId = o ? item.message_id : null)}>
               <Popover.Trigger>
@@ -284,16 +307,16 @@
                   <button
                     type="button"
                     {...props}
-                    class="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
-                    title={isHeld(item.message_id) ? "修改模式：改引导/注入会立即生效（脱离锁定段）" : "修改模式（排队 / 引导 / 注入）"}
-                    aria-label="修改投递模式"
-                    disabled={editingId !== null || reordering}
+                    class="q-hit shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+                    title={isHeld(item.message_id) ? "修改模式：改引导/注入会立即生效（脱离暂停段）" : "修改投递方式"}
+                    aria-label="修改投递方式"
+                    disabled={busy}
                   >
-                    <IconRepeat class="h-3 w-3" />
+                    <IconRepeat class="h-3.5 w-3.5" />
                   </button>
                 {/snippet}
               </Popover.Trigger>
-              <Popover.Content side="top" align="end" class="w-36 p-1">
+              <Popover.Content side="top" align="end" class="w-44 p-1">
                 {#each MODE_CYCLE as mode (mode)}
                   <button
                     type="button"
@@ -303,7 +326,7 @@
                       modeOpenId = null;
                     }}
                   >
-                    <span>{MODE_LABEL[mode]}</span>
+                    <span>{modeLabel(mode, running)}</span>
                     {#if mode === item.mode}
                       <span class="text-[10px] text-muted-foreground">当前</span>
                     {/if}
@@ -313,18 +336,18 @@
             </Popover.Root>
             <button
               type="button"
-              class="shrink-0 rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-30"
-              title={isHeld(item.message_id) ? "从锁定段删除（安全，立即生效）" : "从队列删除"}
+              class="q-hit shrink-0 rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-30"
+              title={isHeld(item.message_id) ? "从暂停段删除（安全，立即生效）" : "从队列删除"}
               aria-label="删除该消息"
-              disabled={reordering}
+              disabled={busy}
               onclick={() => onremove(item.message_id)}
             >
-              <IconTrash class="h-3 w-3" />
+              <IconTrash class="h-3.5 w-3.5" />
             </button>
           </li>
         {/snippet}
 
-        <p class="px-0.5 pb-1 text-[10px] font-medium text-primary" title="W10k 单一序列：开轮条目之间逐轮发送，引导/注入跟随各自的开轮条目">
+        <p class="px-0.5 pb-1 text-[10px] font-medium text-primary" title="单一序列：下一轮条目之间逐轮发送，引导/注入跟随各自的开轮条目">
           投递序列（{listItems.length}）
         </p>
         <!-- dnd 容器（svelte-dnd-action）：整条序列一个容器——实时插入预览（占位
@@ -351,34 +374,29 @@
 {/if}
 
 <style>
-  /* 三态锁图标切换（data-lock 属性驱动；双图标常驻 DOM 的原因见上方模板注释）。
-   * 图标类在 lucide 子组件的 svg 上，本组件 hash class 不落在那里——图标类
-   * 一律 :global()（克隆体会原样复制这些类，规则对浮影同样生效）。 */
-  button[data-lock='unlocked'] :global(.lock-ico-closed) {
-    display: none;
+  /* 触屏命中区扩张（W10m/Codex 触屏专项）：图标视觉保持 14px，命中区经
+   * ::after 外扩 ~14px（合计 ≥30px），行高不膨胀。 */
+  .q-hit {
+    position: relative;
   }
-  button[data-lock='locked'] :global(.lock-ico-open),
-  button[data-lock='passive'] :global(.lock-ico-open) {
-    display: none;
+  .q-hit::after {
+    content: "";
+    position: absolute;
+    inset: -7px;
+  }
+  /* 文字钮（暂停/恢复）同样外扩，但小于其胶囊自身时不生效也无害。 */
+  .q-pause::after {
+    inset: -5px;
   }
 
   /* 拖动浮影（svelte-dnd-action 克隆行、id=dnd-action-dragged-el、position:fixed）：
-   * 克隆发生在拖动起始帧——早于 reordering=true 的重渲染，冻结在未锁态。
-   * 拖动中全员被动锁定（Owner 设计），浮影同样以被动锁呈现：琥珀闭锁 +
-   * 操作按钮禁用观感 + 抓取浮层阴影。 */
+   * 克隆发生在拖动起始帧——冻结在起始状态。拖动中全员进入「已暂停」观感，
+   * 操作按钮禁用 + 抓取浮层阴影。 */
   :global(#dnd-action-dragged-el) {
     box-shadow: 0 10px 24px rgb(0 0 0 / 0.14);
   }
-  :global(#dnd-action-dragged-el) :global(.lock-ico-open) {
-    display: none;
-  }
-  :global(#dnd-action-dragged-el) :global(.lock-ico-closed) {
-    display: block;
-  }
-  :global(#dnd-action-dragged-el) button[data-lock] {
-    color: rgb(217 119 6 / 0.55);
-  }
-  :global(#dnd-action-dragged-el) button:not([data-lock]) {
-    opacity: 0.3;
+  :global(#dnd-action-dragged-el) button {
+    opacity: 0.35;
+    pointer-events: none;
   }
 </style>

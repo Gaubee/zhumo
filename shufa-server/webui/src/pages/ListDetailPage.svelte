@@ -27,6 +27,7 @@
   import {
     cancelQueueEdit,
     confirmQueueEdit,
+    displayFrames,
     lockQueue,
     editQueueItem,
     getSelectedTask,
@@ -40,7 +41,6 @@
     reorderQueue,
     selectTask,
     sendPrompt,
-    sendQueueNow,
     setQueueItemMode,
     setQueueReordering,
     stopPrompt,
@@ -147,7 +147,7 @@
   const lastUsageView = $derived(lastUsage());
 
   const selected = $derived(getSelectedTask());
-  const items = $derived([...projectFrames(tasks.frames), ...pendingQueueItems()]);
+  const items = $derived([...projectFrames(displayFrames()), ...pendingQueueItems()]);
   const detailRunning = $derived(selected?.status === "running" || tasks.sending);
 
   /** 走查演示模式激活（URL demoDelay 写入 sessionStorage 后生效）。 */
@@ -338,6 +338,8 @@
           lockBoundary={queue.lockBoundary}
           editingId={queue.editingId}
           reordering={queue.reordering}
+          pendingId={queue.pendingId}
+          running={detailRunning}
           onedit={(messageId) => void beginQueueEdit(messageId)}
           oncancel={() => cancelQueueEdit()}
           onremove={(messageId) => void removeQueueItem(messageId)}
@@ -345,7 +347,6 @@
           onlock={(messageId) => void lockQueue(messageId)}
           onreorder={(orderedIds) => void reorderQueue(orderedIds)}
           onreordering={(v) => setQueueReordering(v)}
-          onsendnow={(messageId) => void sendQueueNow(messageId)}
         />
         <ComposerCard
           bind:this={composerRef}

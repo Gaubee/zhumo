@@ -228,11 +228,15 @@ export type TaskQueueReorderInput = z.infer<typeof TaskQueueReorderInputSchema>;
 export const TaskQueueReorderOutputSchema = z.object({ accepted: z.literal(true) });
 export type TaskQueueReorderOutput = z.infer<typeof TaskQueueReorderOutputSchema>;
 
-/** accepted 恒真；resumed=本次是否触发了会话复活；task=投递后的任务视图。 */
+/** accepted 恒真；resumed=本次是否触发了会话复活；task=投递后的任务视图；
+ * queue_item_id=入队条目的稳定 id（W10m 状态流：前端乐观帧以此为主键
+ * 去重——消费帧回带同 id 戳即精确接管；slash/$skill 直投内核无队列条目，
+ * 字段缺省）。 */
 export const TaskFollowupOutputSchema = z.object({
   accepted: z.literal(true),
   resumed: z.boolean(),
   task: TaskItemSchema,
+  queue_item_id: z.string().optional(),
 });
 export type TaskFollowupOutput = z.infer<typeof TaskFollowupOutputSchema>;
 

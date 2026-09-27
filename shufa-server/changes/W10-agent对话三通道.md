@@ -278,3 +278,52 @@ actions 禁用+暂停帧驱动刷新防抖动，drop 一次性提交新序）。
 
 删 Zap 直达 / 删行内「立刻发送」主图标 / 锁显式「从这里暂停」/ 紧凑列表 /
 状态流气泡（发送中→排队中→生效中→已送达/失败，id 去重，inflight=生效中）。
+
+## W10m（2026-09-29，Owner「继续推进，包括小项」：Codex 评审 P2/重设计落地 + 小项三件）
+
+### 小项
+
+- 任务列表拉取失败重试：loadTasks 退避三轮（1.5s×n）——帧流/RPC/任务列表
+  三处「失败即静默空态」病灶收口完毕。
+- withdrawAdmitted 统一到 withdrawItem 原语（Codex 尾注）：删除重复的
+  remove/splice 分叉，admitted anchor 是在途条目特例。
+- 「变成插入方式发送」病因分析（未再复现）：最可能是行内 20px 模式按钮
+  误触（两次点击=queue→steer→inject）+ 旧渲染 bug（dndItems 只比 id，模式
+  变更不回灌）合力——模式改了 UI 不显示，看起来像「自己变了」。本轮
+  双重加固：模式 popover 文案按运行态显式化（本轮补充/待活动轮）+
+  rowItems 渲染分离 + 行级 pending 防抖。若再出现待复现。
+
+### 状态流（Codex 转录呈现决策落地）
+
+- daemon：followup/steer 返回队列条目稳定 id（TaskFollowupOutput+
+  queue_item_id）；队列起源轮的第一条 user-text 帧盖 payload.queue_item
+  戳（commitFrames 单点，真实内核/DemoAgent 两路共益；补充帧不盖）。
+- webui：乐观帧带同 id——dropOptimistic id 主键去重（文本仅兜底）；
+  displayFrames（乐观帧被队列条目接管即让位）+ pendingQueueItems（已消费
+  不显示、inflight 显示「生效中」）——发送中→排队中→生效中→已送达全程
+  可见，重复文案不误伤。live 验证：消费帧 STAMP 落盘、无双泡。
+
+### P2/重设计（做减法）
+
+- 删 Zap 直达引导按钮（引导/注入=队列行模式选择）；删行内「立刻发送」
+  主图标（sendNow RPC 保留无 UI 入口）。输入面板收敛为 发送/停止。
+- 暂停显式化：三态锁图标 → 「⏸ 暂停 / ▶ 恢复」文字钮（后缀「已暂停」
+  纯展示不承担隐含点击）；锁语义文案同步（已暂停/已恢复）。
+- 模式文案按运行态：queue=下一轮；steer=本轮补充（idle=新开一轮）；
+  inject=本轮注入（idle=待活动轮）——与实际投递时点一致。
+- 行级 pending：queue.pendingId 包裹五类 RPC，落定前行禁用防重复点击。
+- 计数拆分「待发 N · 生效中 M」；队列非空自动展开（手动收起尊重到清空）；
+  拖动抓手显式化 + .q-hit 触屏命中区外扩（图标 14px 视觉、≥30px 命中）。
+
+### 教训（操作纪律）
+
+- pkill -f "tsx src/index.ts" 不匹配真实 cmdline（preflight.cjs src/index.ts）
+  ——旧 daemon 存活占端口，新进程 bind 失败静默退出，live 验证跑在旧代码
+  上（stamp 缺失假阴性）。重启服务后必须以 PID+启动时间核对进程身份。
+
+### 验证
+
+- daemon 182/182（新增：demo 消费帧盖章、followup/steer 返回 id、盖章不
+  覆盖补充帧）+ tsc 0；svelte-check 0 错；build ✓。
+- live（8299，demo 10s）：盖章验证消费帧带戳无双泡；引导改模式→补充帧
+  同轮交付；暂停→边界「恢复发送」→恢复回未锁；队列清空 chip 消失。

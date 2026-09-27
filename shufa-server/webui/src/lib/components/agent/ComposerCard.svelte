@@ -16,7 +16,6 @@
   import IconFile from "@lucide/svelte/icons/file";
   import IconSend from "@lucide/svelte/icons/send";
   import IconSquare from "@lucide/svelte/icons/square";
-  import IconZap from "@lucide/svelte/icons/zap";
   import IconChevronDown from "@lucide/svelte/icons/chevron-down";
   import IconCheck from "@lucide/svelte/icons/check";
   import IconImage from "@lucide/svelte/icons/image";
@@ -601,20 +600,8 @@
           <IconSquare class="h-3.5 w-3.5 fill-current" />
         </Button>
       {/if}
-      {#if running && text.trim().length > 0}
-        <!-- W10：运行中有输入 → 引导（steer，下一 step 边界消费，影响当前轮）。 -->
-        <Button
-          size="sm"
-          variant="outline"
-          class="h-8 w-8 rounded-full p-0"
-          disabled={sending || disabled}
-          onclick={() => submit("steer")}
-          aria-label="引导当前轮"
-          title="立即引导：不等本轮结束，下一步即生效"
-        >
-          <IconZap class="h-3.5 w-3.5" />
-        </Button>
-      {/if}
+      <!-- W10m（Codex 重设计）：删 Zap 直达引导——引导/注入成为队列行的明确
+           模式选择（点模式徽标改），输入面板只保留 发送/停止 两个稳定入口。 -->
       <!-- running 时发送=排队（内核 next-turn inbox，本轮结束自动续跑）。 -->
       <Button
         size="sm"

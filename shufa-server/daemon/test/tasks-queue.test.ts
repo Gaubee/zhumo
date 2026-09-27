@@ -375,6 +375,36 @@ describe('sessions 统一队列（W10k：单一序列 + 单航次投递）', () 
     expect(sessions2.queueView(sid).items).toHaveLength(0);
   });
 
+  // W10m 状态流（demo 路径回归）：DemoAgent 两批投帧——turn-start 批先行
+  // （钩子置 stamp 位）→ 批2 首条 user-text 必须带 queue_item 戳。线上实测
+  // 曾缺失：乐观帧/队列气泡/消费帧三方 id 配对依赖此戳。
+  it('W10m demo 场景：anchor 消费帧带 queue_item 戳', async () => {
+    vi.useRealTimers();
+    const sessions2 = createTaskSessions({
+      kernel: () => asKernelHandle(kernel),
+      modelSelection: async () => ({ provider: 'zhipu', model: 'glm-5.3-flash' }),
+      retention: 50,
+    });
+    sessions2.setDemoDelay(30);
+    const created = await sessions2.createTaskSession('task-demo-stamp', {
+      cwd: root,
+      framesFile: path.join(root, 'frames-demo-stamp.jsonl'),
+      prompt: '首条',
+    });
+    const sid = created.sessionId;
+    await new Promise((r) => setTimeout(r, 80));
+    const itemId = sessions2.followup(sid, '戳验证');
+    expect(typeof itemId).toBe('string');
+    await new Promise((r) => setTimeout(r, 120));
+    const stamped = sessions2
+      .stream(sid, path.join(root, 'frames-demo-stamp.jsonl'), 0)
+      .frames.filter(
+        (f) => f.kind === 'user-text' && (f.payload as { queue_item?: string } | undefined)?.queue_item === itemId,
+      );
+    expect(stamped).toHaveLength(1);
+    expect(stamped[0]!.text).toBe('戳验证');
+  });
+
   it('W10i：拖动期暂停消费（setQueueReordering true→false）——队列稳定不抖，松手恢复', async () => {
     vi.useRealTimers();
     const sessions2 = createTaskSessions({
@@ -648,5 +678,43 @@ describe('sessions 统一队列（W10k：单一序列 + 单航次投递）', () 
     kernel.emitSessionEvent(sid, { seq: 2, type: 'turn/end', data: { reason: { kind: 'completed' } } });
     expect(got).toContain('turn-start');
     off();
+  });
+
+  // W10m 状态流：followup/steer 返回条目稳定 id；队列起源轮的第一条
+  // user-text 帧盖 payload.queue_item 戳（前端乐观帧按 id 精确接管）。
+  it('followup 返回条目 id；消费帧带 queue_item 戳（attach 补充帧不盖）', async () => {
+    const { sid, turnStart, turnEnd } = await seedIdle('task-stamp');
+    const itemId = sessions.followup(sid, '状态流主');
+    expect(typeof itemId).toBe('string');
+    sessions.steer(sid, '状态流补充');
+    // pump：anchor 承认（idle nextTurn 空），steer attach 头段投当前轮。
+    const agent = kernel.created.at(-1)!;
+    agent.inbox.splice('next-turn', 0, 1, []);
+    const frames: Array<{ kind: string; payload?: unknown }> = [];
+    sessions.subscribe(sid, (f) => frames.push(f as never));
+    let evSeq = 50;
+    const userMsg = (text: string) =>
+      kernel.emitSessionEvent(sid, {
+        seq: evSeq++,
+        type: 'user/message',
+        data: { id: `msg-${text}`, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } },
+      });
+    turnStart();
+    userMsg('状态流主');
+    userMsg('状态流补充');
+    turnEnd();
+    const userTexts = frames.filter((f) => f.kind === 'user-text') as Array<{ kind: string; text?: string; payload?: { queue_item?: string } }>;
+    // 第一条（anchor 消费帧）带戳且等于返回 id；补充帧不带。
+    const stamped = userTexts.filter((f) => f.payload?.queue_item === itemId);
+    expect(stamped).toHaveLength(1);
+    expect(stamped[0]!.text).toBe('状态流主');
+    expect(userTexts.some((f) => f.text === '状态流补充' && f.payload?.queue_item === undefined)).toBe(true);
+  });
+
+  it('steer 返回条目 id（attach 寻址）', async () => {
+    const { sid } = await seedIdle('task-steer-id');
+    const itemId = sessions.steer(sid, '引导条目');
+    expect(typeof itemId).toBe('string');
+    expect(sessions.queueView(sid).items.some((i) => i.messageId === itemId && i.mode === 'steer')).toBe(true);
   });
 });

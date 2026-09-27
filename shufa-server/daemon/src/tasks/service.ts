@@ -57,7 +57,7 @@ import {
   type ModelRoutesBundle,
 } from '../kernel/model-route.js';
 import { buildRoutesBundle, loadModelsConfig, resolveRouteFor } from '../models-store.js';
-import { buildTaskPrompt } from '../kernel/prompts.js';
+import { buildTaskContext } from '../kernel/prompts.js';
 import type { TaskSessions } from '../kernel/sessions.js';
 import { createAnalysisCapabilities, type TaskLocation } from '../capability/analysis.js';
 import { createKnowledgeCapabilities } from '../capability/knowledge.js';
@@ -222,15 +222,16 @@ export class TaskService {
     });
     this.writeShufaMeta(shufaRow.id, shufaDir, task.id, null, null);
 
-    // 会话 + 提示词启动（§6：视频路径 + 步骤清单 + SKILL.md + 摘要由你撰写）。
-    // 提示词相对化（架构调整 2026-09-23）：agent 面只给相对路径（相对 cwd=
-    // userRoot）；进程面（python CLI 实参）由 capability 层 resolve 成绝对路径。
+    // 会话 + 提示词启动。装配铁律（Owner 2026-09-27「过拟合」纠偏）：用户原话
+    // 为主体，后附 buildTaskContext 的纯实例上下文（素材路径，相对 cwd=userRoot，
+    // 进程面由 capability 层 resolve 成绝对路径）；任务模式的执行指令只存在于
+    // SKILL.md（系统段注入），任务段绝不预设任务性质、绝不内联流程指令。
     const workdir = path.join(shufaDir, '.shufa-work');
     const relativeToUserRoot = (abs: string): string => path.relative(userRoot, abs);
     const prompt = [
       input.prompt,
       '',
-      buildTaskPrompt({
+      buildTaskContext({
         videoPath: relativeToUserRoot(taskVideoPath),
         taskDir: relativeToUserRoot(shufaDir),
         workdir: relativeToUserRoot(workdir),
@@ -464,11 +465,15 @@ export class TaskService {
     }
 
     // 投递通道（W10）：followup=排队下一轮（缺省）；steer=引导当前轮
-    // （idle 时内核等价开新轮，复活路径与 followup 完全共用）。
-    const deliver = (): void =>
-      input.mode === 'steer'
-        ? this.deps.sessions.steer(sessionId, input.text)
-        : this.deps.sessions.followup(sessionId, input.text);
+    // （idle 时内核等价开新轮，复活路径与 followup 完全共用）。W10m 状态流：
+    // 入队条目稳定 id 透传（前端乐观帧主键；slash/$skill 直投无条目）。
+    let queueItemId: string | undefined;
+    const deliver = (): void => {
+      queueItemId =
+        input.mode === 'steer'
+          ? this.deps.sessions.steer(sessionId, input.text)
+          : this.deps.sessions.followup(sessionId, input.text) ?? undefined;
+    };
 
     try {
       deliver();
@@ -492,7 +497,7 @@ export class TaskService {
     }
 
     const fresh = getTaskById(this.deps.db, task.id) ?? task;
-    return { accepted: true, resumed, task: this.toItem(fresh) };
+    return { accepted: true, resumed, task: this.toItem(fresh), ...(queueItemId !== undefined ? { queue_item_id: queueItemId } : {}) };
   }
 
   /**

@@ -34,22 +34,35 @@ export const queue = $state({
   reordering: false,
   /** 队列操作错误（W10l/Codex P1：不再静默——详情内联呈现，可关闭）。 */
   error: null as string | null,
+  /** 行级请求中（W10m/Codex P2：高风险操作 pending 态——该条目 RPC 未落
+   * 定前禁用行按钮，防重复点击/双投）。 */
+  pendingId: null as string | null,
 });
 
 let unsubscribe: (() => void) | null = null;
 
 export async function loadTasks(): Promise<void> {
   tasks.loading = true;
-  try {
-    tasks.list = await api.listTasks();
-    // 默认会话的选中不再这里做（2026-09-25 路由锚定）：列表落地后由
-    // ListDetailPage 的路由 effect 依 #/t/{id}、#/new、#/ 统一派生，
-    // 避免这里抢先选第一个又被路由纠正的双跳。
-  } catch (error) {
-    tasks.error = error instanceof Error ? error.message : String(error);
-  } finally {
-    tasks.loading = false;
+  // W10l 三处同源病灶收口：帧流/RPC 通道已自愈，任务列表是最后一个「拉取
+  // 失败即空列表」的面（Codex 评审指出）——同 initAuth 退避重试三轮。
+  const attempts = 3;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      tasks.list = await api.listTasks();
+      tasks.error = null;
+      break;
+    } catch (error) {
+      if (attempt === attempts) {
+        tasks.error = error instanceof Error ? error.message : String(error);
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+      }
+    }
   }
+  // 默认会话的选中不再这里做（2026-09-25 路由锚定）：列表落地后由
+  // ListDetailPage 的路由 effect 依 #/t/{id}、#/new、#/ 统一派生，
+  // 避免这里抢先选第一个又被路由纠正的双跳。
+  tasks.loading = false;
 }
 
 export async function selectTask(taskId: string): Promise<void> {
@@ -63,6 +76,7 @@ export async function selectTask(taskId: string): Promise<void> {
   queue.lockBoundary = null;
   queue.editingId = null;
   queue.reordering = false;
+  queue.pendingId = null;
   const frames = await api.getTaskFrames(taskId);
   if (tasks.selectedId !== taskId) return; // 已切走：过期响应丢弃
   tasks.frames = frames;
@@ -72,8 +86,11 @@ export async function selectTask(taskId: string): Promise<void> {
   const subscribe = api.subscribeTaskFrames(
     taskId,
     (frame) => {
-    // 真实 user-text 帧到达 → 移除同文本的乐观帧（走查 R7：乐观显示去重）。
-    if (frame.kind === "user-text") dropOptimistic(frame.text ?? "");
+    // 真实 user-text 帧到达 → 移除同 id（无戳回落同文本）的乐观帧（走查 R7）。
+    if (frame.kind === "user-text") {
+      const queueItem = (frame.payload as { queue_item?: string } | undefined)?.queue_item;
+      dropOptimistic({ text: frame.text ?? "", ...(queueItem !== undefined ? { queueItem } : {}) });
+    }
     if (tasks.selectedId === taskId) tasks.frames = [...tasks.frames, frame];
     // result 帧 = 新导出落地 → 刷新结果列表（详情右侧即时出新标签）。
     if (frame.kind === "result") void refreshResults(taskId);
@@ -153,13 +170,17 @@ async function loadTaskRow(taskId: string): Promise<void> {
   }
 }
 
-/** 移除未落实的乐观 user 帧（真帧到达/发送失败时）。 */
-function dropOptimistic(text: string): void {
-  const idx = [...tasks.frames]
-    .map((f, i) => ({ f, i }))
-    .filter(({ f }) => f.kind === "user-text" && (f.payload as { optimistic?: boolean } | undefined)?.optimistic === true && (f.text ?? "") === text)
-    .pop()?.i;
-  if (idx !== undefined) tasks.frames = tasks.frames.filter((_, i) => i !== idx);
+/** 移除未落实的乐观 user 帧（真帧到达/发送失败时）。W10m：id 主键去重
+ * ——真实帧带 payload.queue_item 戳（daemon 盖章）时按 id 精确移除，文本
+ * 仅作无戳路径（slash 直投/mock）兜底；重复文案不再误伤。 */
+function dropOptimistic(match: { text: string; queueItem?: string }): void {
+  tasks.frames = tasks.frames.filter((f) => {
+    if (f.kind !== "user-text") return true;
+    const payload = (f.payload ?? {}) as { optimistic?: boolean; queue_item?: string };
+    if (payload.optimistic !== true) return true;
+    if (match.queueItem !== undefined && payload.queue_item === match.queueItem) return false;
+    return (f.text ?? "") !== match.text;
+  });
 }
 
 export async function sendPrompt(prompt: string, mode: "followup" | "steer" = "followup"): Promise<void> {
@@ -183,7 +204,10 @@ export async function sendPrompt(prompt: string, mode: "followup" | "steer" = "f
   }
   tasks.sending = true;
   tasks.error = null;
-  // 乐观插入（走查 R7：发送即显示——不等 WS 帧回放；真帧到达后 dropOptimistic 去重）。
+  // 乐观插入（走查 R7：发送即显示——不等 WS 帧回放；真帧到达后按 id 去重）。
+  // W10m 状态流：RPC 返回队列条目 id 后补挂 payload.queue_item（乐观帧与
+  // 消费帧/队列行三方同键）。
+  let queueItem: string | undefined;
   const optimistic: Frame = {
     at: Date.now(),
     seq: -(Date.now()),
@@ -193,7 +217,15 @@ export async function sendPrompt(prompt: string, mode: "followup" | "steer" = "f
   };
   tasks.frames = [...tasks.frames, optimistic];
   try {
-    await api.sendTaskPrompt(taskId, trimmed, mode);
+    queueItem = await api.sendTaskPrompt(taskId, trimmed, mode);
+    if (queueItem !== undefined) {
+      const idx = tasks.frames.indexOf(optimistic);
+      if (idx >= 0) {
+        tasks.frames = tasks.frames.map((f, i) =>
+          i === idx ? { ...f, payload: { optimistic: true, queue_item: queueItem } } : f,
+        );
+      }
+    }
     // followup 触发 resume（done/failed 续聊）时任务即时回 running；状态帧到达前先行联动。
     tasks.list = tasks.list.map((t) =>
       t.id === taskId && t.status !== "running" ? { ...t, status: "running" as const } : t,
@@ -203,7 +235,7 @@ export async function sendPrompt(prompt: string, mode: "followup" | "steer" = "f
     // 发送成功即拉，队列条目立即可见。
     void refreshQueue();
   } catch (error) {
-    dropOptimistic(trimmed);
+    dropOptimistic({ text: trimmed });
     tasks.error = error instanceof Error ? error.message : String(error);
   } finally {
     tasks.sending = false;
@@ -238,8 +270,8 @@ export async function refreshQueue(): Promise<void> {
     const out = await api.taskQueue(taskId);
     queue.items = out.items;
     queue.lockBoundary = out.lockBoundary;
-    // 待发气泡接管排队消息的显示——清掉同文本乐观帧（防双泡）。
-    for (const item of out.items) dropOptimistic(item.text);
+    // W10m：不再按文本清乐观帧——displayFrames/pendingQueueItems 以 id 协调
+    // 乐观帧与队列状态气泡的交接（文本清理在重复文案下会误伤）。
   } catch {
     // 队列拉取失败不打断对话流；下次帧到达或操作后重试。
   }
@@ -266,6 +298,7 @@ export async function confirmQueueEdit(text: string): Promise<void> {
   const taskId = tasks.selectedId;
   const messageId = queue.editingId;
   if (taskId === null || messageId === null) return;
+  queue.pendingId = messageId;
   try {
     await api.taskQueueEditConfirm(taskId, messageId, text);
     queue.editingId = null;
@@ -273,6 +306,8 @@ export async function confirmQueueEdit(text: string): Promise<void> {
     toast("已修改（锁定段内生效，解锁后按序发送）");
   } catch (error) {
     queueOpFailed(error);
+  } finally {
+    queue.pendingId = null;
   }
 }
 
@@ -285,29 +320,36 @@ export function cancelQueueEdit(): void {
 export async function lockQueue(messageId: string | null): Promise<void> {
   const taskId = tasks.selectedId;
   if (taskId === null) return;
+  if (messageId !== null) queue.pendingId = messageId;
   try {
     await api.taskQueueLock(taskId, messageId);
     await refreshQueue();
-    toast(messageId === null ? "已解锁：锁定段按原序放回，继续发送" : "已锁定：该条及之后的消息暂停发送，可安全编辑");
+    toast(messageId === null ? "已恢复：该条及之后按原序继续发送" : "已暂停：该条及之后不再自动发送，可安全编辑");
   } catch (error) {
     queueOpFailed(error);
+  } finally {
+    queue.pendingId = null;
   }
 }
 
 export async function removeQueueItem(messageId: string): Promise<void> {
   const taskId = tasks.selectedId;
   if (taskId === null) return;
+  queue.pendingId = messageId;
   try {
     await api.taskQueueRemove(taskId, messageId);
     await refreshQueue();
   } catch (error) {
     queueOpFailed(error);
+  } finally {
+    queue.pendingId = null;
   }
 }
 
 export async function setQueueItemMode(messageId: string, mode: TaskQueueMode): Promise<void> {
   const taskId = tasks.selectedId;
   if (taskId === null) return;
+  queue.pendingId = messageId;
   try {
     await api.taskQueueSetMode(taskId, messageId, mode);
     await refreshQueue();
@@ -318,6 +360,8 @@ export async function setQueueItemMode(messageId: string, mode: TaskQueueMode): 
     else toast("已改为开轮：新起一轮发送，其后的引导/注入跟随它");
   } catch (error) {
     queueOpFailed(error);
+  } finally {
+    queue.pendingId = null;
   }
 }
 
@@ -339,6 +383,7 @@ export async function setQueueReordering(v: boolean): Promise<void> {
 export async function sendQueueNow(messageId: string): Promise<void> {
   const taskId = tasks.selectedId;
   if (taskId === null) return;
+  queue.pendingId = messageId;
   try {
     await api.taskQueueSendNow(taskId, messageId);
     const item = queue.items.find((i) => i.message_id === messageId);
@@ -351,6 +396,8 @@ export async function sendQueueNow(messageId: string): Promise<void> {
     void refreshQueue();
   } catch (error) {
     queueOpFailed(error);
+  } finally {
+    queue.pendingId = null;
   }
 }
 
@@ -410,8 +457,8 @@ export async function createTask(
 // ---- 帧投影（TranscriptView 条目语法） ----
 
 export type TranscriptItem =
-  | { kind: "user"; seq: number; text: string; /** 队列待发标记（W10l：排队/引导在转录流尾部的待发气泡）。 */
-      queued?: "排队中" | "引导待发" | "注入待发" }
+  | { kind: "user"; seq: number; text: string; /** 队列状态标记（W10l 待发气泡；W10m 状态流：生效中=已交内核待生效）。 */
+      queued?: "排队中" | "引导待发" | "注入待发" | "生效中" }
   | { kind: "assistant"; seq: number; text: string; streaming: boolean }
   | { kind: "reasoning"; seq: number; text: string; streaming: boolean }
   | { kind: "tool"; seq: number; toolName: string; argsText: string; result: string | null }
@@ -575,28 +622,49 @@ export function projectFrames(frames: Frame[]): TranscriptItem[] {
   return items;
 }
 
+/** 展示帧（W10m 状态流）：乐观帧一旦被队列条目接管（id 命中；无戳回落
+ * 文本）就让位——由 pendingQueueItems 按队列实时状态渲染（排队中/生效中），
+ * 避免「乐观帧定格在排队中而实际已生效」的双路径分叉。 */
+export function displayFrames(): Frame[] {
+  const liveIds = new Set(queue.items.map((i) => i.message_id));
+  const liveTexts = new Set(queue.items.map((i) => i.text));
+  return tasks.frames.filter((f) => {
+    if (f.kind !== "user-text") return true;
+    const payload = (f.payload ?? {}) as { optimistic?: boolean; queue_item?: string };
+    if (payload.optimistic !== true) return true;
+    if (payload.queue_item !== undefined) return !liveIds.has(payload.queue_item);
+    return !liveTexts.has(f.text ?? "");
+  });
+}
+
 /** 队列待发气泡合并（W10l，Owner 痛点「发出去的消息不知道去哪了/刷新即
- * 消失」）：queue.items 中尚未投递的消息追加到转录流尾部，按模式挂状态标
- * 签——真实 user-text 帧到达时条目离开队列视图，待发气泡同步消失（无双
- * 泡）。乐观帧已存在的同文本跳过（refreshQueue 落地时会清乐观帧，这里只
- * 是兜底防闪）。 */
+ * 消失」）：queue.items 中尚未消费的消息追加到转录流尾部，按模式挂状态标
+ * 签。W10m 状态流：已消费（真实帧带 queue_item 戳）不显示；inflight（已
+ * 交内核待生效）显示「生效中」而非消失——发送中→排队中→生效中→已送达
+ * 全程可见。 */
 export function pendingQueueItems(): TranscriptItem[] {
-  const optimisticTexts = new Set(
+  const consumedIds = new Set(
     tasks.frames
       .filter(
-        (f) =>
+        (f): f is Frame & { payload: { queue_item: string } } =>
           f.kind === "user-text" &&
-          (f.payload as { optimistic?: boolean } | undefined)?.optimistic === true,
+          typeof (f.payload as { queue_item?: unknown } | undefined)?.queue_item === "string",
       )
-      .map((f) => f.text ?? ""),
+      .map((f) => f.payload.queue_item),
   );
   return queue.items
-    .filter((i) => i.inflight !== true && !optimisticTexts.has(i.text))
+    .filter((i) => !consumedIds.has(i.message_id))
     .map((i, idx) => ({
       kind: "user" as const,
       seq: -1000 - idx,
       text: i.text,
-      queued: i.mode === "steer" ? ("引导待发" as const) : i.mode === "inject" ? ("注入待发" as const) : ("排队中" as const),
+      queued: i.inflight
+        ? ("生效中" as const)
+        : i.mode === "steer"
+          ? ("引导待发" as const)
+          : i.mode === "inject"
+            ? ("注入待发" as const)
+            : ("排队中" as const),
     }));
 }
 

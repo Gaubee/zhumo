@@ -402,6 +402,9 @@ interface LiveTaskSession {
   /** 当前轮对应的 anchor（turn/start 配对；轮结束清除；null=当前轮非队列
    * 起源，如任务初始 prompt）。 */
   activeAnchorId: string | null;
+  /** 本轮 anchor 的消费帧尚未盖章（W10m 状态流）：turn/start 配对后置真，
+   * 该轮第一条 user-text 帧带上 payload.queue_item 后复位。 */
+  anchorStampPending: boolean;
   /** 内核 turn 进行中（firehose turn/start~turn/end 维护；装配时 false）。 */
   turnRunning: boolean;
 }
@@ -645,7 +648,17 @@ export function createTaskSessions(deps: TaskSessionDeps) {
 
   /** 帧提交单点：环形 trim + jsonl append + 订阅者通知。 */
   function commitFrames(entry: LiveTaskSession, frames: readonly Frame[]): void {
-    for (const frame of frames) {
+    for (const raw of frames) {
+      // W10m 状态流：队列起源轮的第一条 user-text=anchor 消费帧，盖上
+      // payload.queue_item（条目稳定 id）——前端乐观帧按 id 精确接管
+      // （文本去重在重复文案下会误伤）。真实内核与 DemoAgent 两路帧都
+      // 经此单点，一处盖章两路受益。
+      let frame = raw;
+      if (frame.kind === 'user-text' && entry.anchorStampPending && entry.activeAnchorId !== null) {
+        const payload = (frame.payload ?? {}) as Record<string, unknown>;
+        frame = { ...frame, payload: { ...payload, queue_item: entry.activeAnchorId } };
+        entry.anchorStampPending = false;
+      }
       entry.frames.push(frame);
       if (entry.frames.length > retention) {
         entry.frames.splice(0, entry.frames.length - retention);
@@ -909,6 +922,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       lockBoundaryId: null,
       admittedAnchorId: null,
       activeAnchorId: null,
+      anchorStampPending: false,
       turnRunning: false,
     };
     registerPanelAnswerer(entry);
@@ -1055,6 +1069,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     if (entry.admittedAnchorId !== null) {
       entry.activeAnchorId = entry.admittedAnchorId;
       entry.admittedAnchorId = null;
+      entry.anchorStampPending = true; // 本轮首条 user-text 盖 queue_item 戳
       const idx = entry.queue.findIndex((q) => q.id === entry.activeAnchorId);
       if (idx >= 0) {
         entry.queue.splice(idx, 1);
@@ -1071,6 +1086,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
   function onQueueTurnEnd(entry: LiveTaskSession, failed = false): void {
     entry.turnRunning = false;
     entry.activeAnchorId = null;
+    entry.anchorStampPending = false;
     const before = entry.queue.length;
     entry.queue = entry.queue.filter((q) => q.state !== 'inflight');
     if (!failed) pumpQueue(entry);
@@ -1100,19 +1116,17 @@ export function createTaskSessions(deps: TaskSessionDeps) {
   /** 撤回在途承认的 anchor（从内核 next-turn 取回、回 queued、清游标）——
    * setMode/sendNow/reorder 等重排类操作的前置，防 stale 游标阻断 pump 或
    * 被外生轮 turn/start 假配对消费。撤不回（已被消费/开轮中）→ 条目随
-   * 该轮终结，从队列移除（Codex 复核 P1：内核寻址必须 kernelId ?? id）。 */
+   * 该轮终结，从队列移除（Codex 复核 P1：内核寻址必须 kernelId ?? id）。
+   * W10m：统一到 withdrawItem 原语（同语义——admitted anchor 是它在途
+   * 条目的特例），消除两份 remove/splice 分叉。 */
   function withdrawAdmitted(entry: LiveTaskSession): void {
     if (entry.admittedAnchorId === null) return;
     const idx = entry.queue.findIndex((q) => q.id === entry.admittedAnchorId);
-    entry.admittedAnchorId = null;
-    if (idx < 0) return;
-    const item = entry.queue[idx]!;
-    if (item.state !== 'admitted') return;
-    if (entry.agent.inbox.remove(item.kernelId ?? item.id)) {
-      item.state = 'queued';
-    } else {
-      entry.queue.splice(idx, 1); // 已被内核消费：随轮终结，不残留队列
+    if (idx < 0) {
+      entry.admittedAnchorId = null;
+      return;
     }
+    withdrawItem(entry, entry.queue[idx]!);
   }
 
   /** 统一撤回原语（Codex 复评 P1-A）：从内核取回在途条目。
@@ -1309,7 +1323,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
    * 追加用户消息（W7b 前台续聊）：live 会话排队投递；不在册时抛错
    * （调用方决定先 resume 再重试）。
    */
-  followup(sessionId: string, text: string): void {
+  followup(sessionId: string, text: string): string | undefined {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
     // slash 命令分流（2026-09-25 前台对齐，skill-creator-v2 同法）："/compact" 等
@@ -1359,13 +1373,16 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       }
     }
     // W10k：非命令消息入统一队列（anchor=开轮）。slash/$skill 分流直投内核
-    // （命令/技能语义=立即执行，不占队列序）。
-    enqueue(entry, {
+    // （命令/技能语义=立即执行，不占队列序）。W10m：返回条目 id（状态流
+    // 主键——前端乐观帧去重/消费帧配对都用它；直投路径返回 undefined）。
+    const item: W10kQueueItem = {
       id: randomUUID(),
       text,
       kind: 'anchor',
       state: 'queued',
-    });
+    };
+    enqueue(entry, item);
+    return item.id;
   },
 
   /**
@@ -1374,16 +1391,18 @@ export function createTaskSessions(deps: TaskSessionDeps) {
    * 面板语义（命令执行/技能注入）属于整轮对话，引导是中途改口的裸文本。
    * 不在册时抛错（调用方复活后重试，与 followup 同约定）。
    */
-  steer(sessionId: string, text: string): void {
+  steer(sessionId: string, text: string): string {
     const entry = live.get(sessionId);
     if (!entry) throw new Error(`agent session not found: ${sessionId}`);
-    enqueue(entry, {
+    const item: W10kQueueItem = {
       id: randomUUID(),
       text,
       kind: 'attach',
       effect: 'steer',
       state: 'queued',
-    });
+    };
+    enqueue(entry, item);
+    return item.id;
   },
 
   // ------------------------------------------------ 队列面板（W10k 统一序列）
