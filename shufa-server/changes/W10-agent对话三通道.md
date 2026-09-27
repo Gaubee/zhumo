@@ -378,3 +378,31 @@ daemon 184/184 + tsc 0 + svelte-check 0 错 + build ✓；live：mid 盖章落�
   turn-end 钩子殿后（清扫 inflight 前让本批 attach 帧先盖到自己的戳）。
 - 门禁：daemon 184/184 + tsc 0 + svelte-check 0 错 + build ✓；live 回归
   （无空窗/单泡/盖章落盘/chip 清空）。
+
+## W10n 三轮收尾（Codex 9.0/10 后 live 深挖三修复，2026-09-29）
+
+三轮复核 9.0/10 无 P0/P1；唯一 P2（拖动旧刷新写回）修复：进拖动态即提升
+刷新代次；reorderQueue 接管 reordering 生命周期（松手→daemon 先恢复消费、
+本地 reordering 保持到重排 RPC 落定）；无任务早退不悬挂。
+
+live 复验深挖出三个真实缺陷（全部帧级证据定位+修复+回归）：
+
+- 【停摆根因】DemoAgent cancel{keepInbox} 不发 turn-end——真实内核 cancel
+  后发 turn/end(cancelled) 驱动 onQueueTurnEnd（清 turnRunning/清扫/pump
+  续跑），demo 缺失 → entry.turnRunning 卡真、后续 anchor 永不承认。
+  补齐同构 + 回归（停止后续跑不停摆）。
+- 【僵尸条目】makeEntry 替换同 sessionId 条目时旧 agent 未失活——在途
+  定时器继续产帧（seq 双写/双泡/幻视图；frameSubscribers 修复使其直达
+  客户端后暴露）。替换即 dispose 旧 handle + 回归（无僵尸双写）。
+- 【demo 丢单】restore 只回填 queued 态——stop→立即续聊触发 resume 时，
+  在途消息随内存 inbox 销毁，DB 行被丢即丢单。改「未被收养的行一律回队
+  queued」：真实内核 kernelId 收养去重不变（防双投语义保留），demo 销毁
+  场景行被救回重投。回归改双向断言（无收养救回/有收养去重）。
+- 另：setDemoDelay 失败不再静默（退开关+横幅——曾致 daemon 侧 demo 未
+  生效、真实 LLM 被测试消息烧掉一轮）。
+
+教训入档：①daemon 重启后 demo 必须先探针确认 daemon 侧生效（横幅≠证据，
+本轮烧了一轮真实调用）；②UI textContent 探针在虚拟化下会假阴性，以帧
+文件为权威；③「假设在内核 inbox」的丢弃逻辑对内存 inbox 的 demo 是丢单。
+
+门禁：daemon 187/187 + tsc 0 + svelte-check 0 错 + build ✓。

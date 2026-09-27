@@ -93,7 +93,8 @@
 
   /** 演示延迟下发（W10g 竞态修复）：reload 后 auth.session 异步恢复，onMount
    * 时刻可能仍为 null 导致 setDemoDelay 被跳过、demo 静默失效——改为跟随
-   * session 就绪一次性下发。 */
+   * session 就绪一次性下发。W10n 三轮：失败退开关（横幅在场=daemon 已生效
+   * 的诚实信号——曾因静默失败让真实 LLM 被测试消息烧掉）。 */
   let demoDelayApplied = $state(false);
   $effect(() => {
     if (demoDelayApplied || auth.session === null) return;
@@ -103,7 +104,10 @@
     void (async () => {
       await api.ensureRpcReady();
       await api.setDemoDelay(saved);
-    })().catch(() => {});
+    })().catch(() => {
+      sessionStorage.removeItem("zhumo:demo-delay");
+      demoActive = false;
+    });
   });
 
   // 可用模型（走查 R6：对话中模型 chip；拉取失败静默隐藏 chip）。

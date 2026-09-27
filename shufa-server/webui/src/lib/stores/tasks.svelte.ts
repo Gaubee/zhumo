@@ -400,6 +400,9 @@ export async function setQueueItemMode(messageId: string, mode: TaskQueueMode): 
 export async function setQueueReordering(v: boolean): Promise<void> {
   const taskId = tasks.selectedId;
   queue.reordering = v;
+  // 进入拖动态即失效在途刷新（Codex 三轮 P2：拖动前发出的旧响应晚归
+  // 会在拖动中覆盖 queue.items）。
+  if (v) queueRefreshSeq += 1;
   if (taskId === null) return;
   try {
     await api.taskQueueSetReordering(taskId, v);
@@ -446,14 +449,22 @@ function queueOpFailed(error: unknown): void {
 
 export async function reorderQueue(orderedIds: string[]): Promise<void> {
   const taskId = tasks.selectedId;
-  if (taskId === null) return;
+  if (taskId === null) {
+    queue.reordering = false; // 无任务即无重排：不悬挂拖动态
+    return;
+  }
   queue.error = null;
+  // daemon 恢复消费先行（松手即续跑）；本地 reordering 保持到重排 RPC
+  // 落定——行按钮不在「新序未提交」窗口恢复可操作（Codex 三轮 P2）。
+  void api.taskQueueSetReordering(taskId, false).catch(() => {});
   try {
     await api.taskQueueReorder(taskId, orderedIds);
-  } catch (error) {
-    queueOpFailed(error);
-  } finally {
+    queue.reordering = false; // 本地序已提交：放行权威刷新
     await refreshQueue();
+  } catch (error) {
+    queue.reordering = false;
+    queueOpFailed(error);
+    void refreshQueue(); // 权威序兜底（乐观新序可能被拒）
   }
 }
 

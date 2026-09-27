@@ -283,8 +283,13 @@ class DemoAgent implements AgentLike {
       this.timer = null;
     }
     // keepInbox（打断语义）：排队保留，收敛后自动续跑队头——demo 同构。
-    if ((options as { keepInbox?: boolean } | undefined)?.keepInbox) this.schedule();
-    else this.inbox.nextTurn.length = 0;
+    // W10n 三轮 live 实证补齐：真实内核 cancel 后发 turn/end(cancelled)
+    // （daemon 的 onQueueTurnEnd 靠它清 turnRunning/清扫/pump 续跑），demo
+    // 此前不发 → entry.turnRunning 卡真、后续 anchor 永不承认（队列停摆）。
+    if ((options as { keepInbox?: boolean } | undefined)?.keepInbox) {
+      this.onFrames?.([{ at: Date.now(), seq: 0, kind: 'turn-end', text: 'cancelled' }]);
+      this.schedule();
+    } else this.inbox.nextTurn.length = 0;
     this.status = 'idle';
   }
 
@@ -352,6 +357,13 @@ class DemoAgent implements AgentLike {
     if (this.inbox.nextTurn.length === 0 && this.inbox.nextStep.length === 0) {
       this.status = 'idle';
       this.onIdle?.();
+    } else if (this.inbox.nextTurn.length === 0 && this.inbox.nextStep.length > 0) {
+      // 残余补充（live 实证 2026-09-29）：turn-end 钩子在 onFrames 回调内泵入
+      // 的 steer attach——此刻 status 仍 'running' 落入 nextStep，而调度只认
+      // nextTurn 队头 → 永久滞留（条目 inflight 卡死、队列停摆）。提升为
+      // 下一轮（与 W10k「idle 时 steer 等价开新轮」语义一致）。
+      this.inbox.nextTurn.push(...this.inbox.nextStep.splice(0));
+      this.schedule();
     } else this.schedule();
   }
 
@@ -959,6 +971,19 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       turnRunning: false,
     };
     registerPanelAnswerer(entry);
+    // 僵尸条目失活（live 实证 2026-09-29：seq 双写）：resume/makeEntry 替换
+    // 同 sessionId 条目时，旧 agent 的在途定时器/事件若不废止会继续产帧
+    // ——frameSubscribers 按 sessionId 存活（W10l 根因修复）后僵尸帧直达
+    // 客户端（双泡/幻视图）。替换即 dispose 旧 handle（demo=清定时器，
+    // 真实内核=agent 释放）。
+    const prev = live.get(handle.agent.session.id);
+    if (prev !== undefined) {
+      try {
+        void prev.dispose();
+      } catch {
+        // 旧条目回收失败不阻断新装配。
+      }
+    }
     live.set(handle.agent.session.id, entry);
     // W10k 装配即恢复：DB 存档回填 + 收养内核 inbox 遗留（旧模型/崩溃残留：
     // nextTurn→anchor、nextStep→attach(steer 缺省)，drain 后内核 inbox 清空），
@@ -986,6 +1011,11 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       const key = `attach:${inboxMessageText(m)}`;
       legacyTextBudget.set(key, (legacyTextBudget.get(key) ?? 0) + 1);
     }
+    // W10n 三轮补：state 为 admitted/inflight 的行原被丢弃（假设在内核
+    // inbox、收养已覆盖）——但 demo 的 inbox 是内存态，条目替换（stop→
+    // 立即续聊触发 resume）时在途消息随旧 agent 销毁，丢弃即丢单。改为
+    // 「未被收养的行一律回队 queued」：真实内核重启场景 kernelId 收养去重
+    // 不变（adopted 命中的行仍剔除，无双投）；demo 销毁场景行被救回重投。
     entry.queue = [
       ...adoptedStep.map((m) => ({
         id: inboxMessageId(m),
@@ -1001,8 +1031,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         state: 'queued' as const,
       })),
       ...(restored?.items ?? []).filter((i) => {
-        if (i.state !== 'queued') return false;
-        if (i.kernelId !== undefined) return !adoptedIds.has(i.kernelId); // v8 行只精确匹配
+        if (i.kernelId !== undefined) return !adoptedIds.has(i.kernelId); // v8 行只精确匹配（含 admitted/inflight：收养覆盖才剔除）
         const key = `${i.kind}:${i.text}`;
         const budget = legacyTextBudget.get(key) ?? 0;
         if (budget > 0) {
@@ -1010,7 +1039,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
           return false;
         }
         return true;
-      }),
+      }).map((i) => ({ ...i, state: 'queued' as const })),
     ];
     entry.lockBoundaryId = restored?.lockBoundaryId ?? null;
     persistQueueState(entry);

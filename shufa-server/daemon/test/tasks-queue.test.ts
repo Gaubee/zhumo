@@ -12,6 +12,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { createTaskSessions } from '../src/kernel/sessions.js';
+import type { W10kQueueItem } from '../src/kernel/sessions.js';
 import { asKernelHandle, FakeKernel } from './helpers-task.js';
 
 describe('sessions 统一队列（W10k：单一序列 + 单航次投递）', () => {
@@ -470,28 +471,53 @@ describe('sessions 统一队列（W10k：单一序列 + 单航次投递）', () 
     expect(sessions.queueView(sid).items.map((i) => i.text)).toEqual(['B']);
   });
 
-  it('Codex P1 回归：恢复只回填 queued 态（admitted/inflight 走内核收养，防双投）', async () => {
-    const sessions2 = createTaskSessions({
+  it('Codex P1 回归：恢复按收养去重（admitted/inflight 无收养救回重投，有收养剔除防双投）', async () => {
+    const rows = (): { lockBoundaryId: string | null; items: W10kQueueItem[] } => ({
+      lockBoundaryId: null,
+      items: [
+        { id: 'db-queued', text: '留存的', kind: 'anchor', state: 'queued' },
+        { id: 'db-admitted', text: '在途的', kind: 'anchor', state: 'admitted', kernelId: 'k-admit' },
+        { id: 'db-inflight', text: '飞行中', kind: 'attach', effect: 'steer', state: 'inflight', kernelId: 'k-flight' },
+      ],
+    });
+    // 场景 A（内核 inbox 空=demo 销毁/极端丢失）：三行全救回（W10n 三轮——
+    // 丢弃即丢单，live 实证 stop→续聊把中断消息连内存 inbox 一起带走）。
+    const s2 = createTaskSessions({
       kernel: () => asKernelHandle(kernel),
       modelSelection: async () => ({ provider: 'zhipu', model: 'glm-5.3-flash' }),
       retention: 50,
-      onQueueRestore: () => ({
-        lockBoundaryId: null,
-        items: [
-          { id: 'db-queued', text: '留存的', kind: 'anchor', state: 'queued' },
-          { id: 'db-admitted', text: '在途的', kind: 'anchor', state: 'admitted' },
-          { id: 'db-inflight', text: '飞行中', kind: 'attach', effect: 'steer', state: 'inflight' },
-        ],
-      }),
+      onQueueRestore: rows,
     });
-    const created = await sessions2.createTaskSession('task-p1-restore', {
+    const created = await s2.createTaskSession('task-p1-restore-a', {
       cwd: root,
-      framesFile: path.join(root, 'frames-p1r.jsonl'),
+      framesFile: path.join(root, 'frames-p1ra.jsonl'),
       prompt: '初始',
     });
-    expect(
-      sessions2.queueView(created.sessionId).items.map((i) => i.text),
-    ).toEqual(['留存的']);
+    expect(s2.queueView(created.sessionId).items.map((i) => i.text)).toEqual(['留存的', '在途的', '飞行中']);
+    expect(s2.queueView(created.sessionId).items.every((i) => i.inflight === false)).toBe(true);
+
+    // 场景 B（真实内核重启：admitted/inflight 仍在持久 inbox）：收养纳入 +
+    // kernelId 精确命中剔除 DB 行（防同一消息双重投递——原 Codex P1 语义）。
+    const created3 = await s2.createTaskSession('task-p1-restore-b', {
+      cwd: root,
+      framesFile: path.join(root, 'frames-p1rb.jsonl'),
+      prompt: '初始',
+    });
+    const agentB = kernel.created.at(-1)!;
+    agentB.inbox.splice('next-turn', 0, 0, [
+      { id: 'k-admit', role: 'user', content: [{ type: 'text', text: '在途的' }], source: { kind: 'user' } },
+    ]);
+    agentB.inbox.splice('next-step', 0, 0, [
+      { id: 'k-flight', role: 'user', content: [{ type: 'text', text: '飞行中' }], source: { kind: 'user' } },
+    ]);
+    await s2.resumeTaskSession('task-p1-restore-b', {
+      sessionId: created3.sessionId,
+      framesFile: path.join(root, 'frames-p1rb.jsonl'),
+    });
+    const textsB = s2.queueView(created3.sessionId).items.map((i) => i.text);
+    expect(textsB.filter((t) => t === '在途的')).toHaveLength(1);
+    expect(textsB.filter((t) => t === '飞行中')).toHaveLength(1);
+    expect(textsB).toContain('留存的');
   });
 
   it('Codex P1 回归：anchor 开轮后持久化不再包含该 anchor（防重启复活）', async () => {
@@ -715,6 +741,94 @@ describe('sessions 统一队列（W10k：单一序列 + 单航次投递）', () 
     expect(userTexts.filter((f) => f.payload?.queue_item === anchorId)[0]!.text).toBe('状态流主');
     expect(userTexts.filter((f) => f.payload?.queue_item === steerId)).toHaveLength(1);
     expect(userTexts.filter((f) => f.payload?.queue_item === steerId)[0]!.text).toBe('状态流补充');
+  });
+
+  // W10n 三轮 live 实证的停摆场景：甲承认在途、乙排队，乙改引导（setMode
+  // 即时 pump）——修复前 entry.turnRunning 卡真/乙 inflight 永久滞留。
+  it('demo：排队条目中途改引导不停摆（supplement 或开新轮，队列终态清空）', async () => {
+    vi.useRealTimers();
+    const sessions2 = createTaskSessions({
+      kernel: () => asKernelHandle(kernel),
+      modelSelection: async () => ({ provider: 'zhipu', model: 'glm-5.3-flash' }),
+      retention: 50,
+    });
+    sessions2.setDemoDelay(60);
+    const created = await sessions2.createTaskSession('task-race', {
+      cwd: root,
+      framesFile: path.join(root, 'frames-race.jsonl'),
+      prompt: '首条',
+    });
+    const sid = created.sessionId;
+    await new Promise((r) => setTimeout(r, 100));
+    sessions2.followup(sid, '甲');
+    sessions2.followup(sid, '乙');
+    await new Promise((r) => setTimeout(r, 20)); // 甲已承认在途、乙排队
+    const ids = sessions2.queueView(sid).items.map((i) => i.messageId);
+    sessions2.queueSetMode(sid, ids[1]!, 'steer');
+    await new Promise((r) => setTimeout(r, 400));
+    expect(sessions2.queueView(sid).items).toHaveLength(0);
+    const stream = sessions2.stream(sid, path.join(root, 'frames-race.jsonl'), 0).frames;
+    expect(stream.some((f) => f.kind === 'user-text' && f.text?.includes('乙'))).toBe(true);
+  });
+
+  // W10n 三轮 live 实证停摆根因：DemoAgent cancel{keepInbox} 不发 turn-end
+  // → onQueueTurnEnd 不跑 → entry.turnRunning 卡真 → 后续 anchor 永不承认。
+  // 真实内核 cancel 后发 turn/end(cancelled)，demo 补齐同构。
+  it('demo：停止（cancel keepInbox）后续跑不停摆——turn-running 复位、后续排队项正常开轮', async () => {
+    vi.useRealTimers();
+    const sessions2 = createTaskSessions({
+      kernel: () => asKernelHandle(kernel),
+      modelSelection: async () => ({ provider: 'zhipu', model: 'glm-5.3-flash' }),
+      retention: 50,
+    });
+    sessions2.setDemoDelay(60);
+    const created = await sessions2.createTaskSession('task-cancel-stall', {
+      cwd: root,
+      framesFile: path.join(root, 'frames-cancel.jsonl'),
+      prompt: '首条',
+    });
+    const sid = created.sessionId;
+    await new Promise((r) => setTimeout(r, 100));
+    sessions2.followup(sid, '被打断');
+    await new Promise((r) => setTimeout(r, 15)); // 轮进行中（承认+开轮后）
+    sessions2.cancel(sid); // 停止生成（cancel{user,keepInbox}）
+    sessions2.followup(sid, '停止后');
+    await new Promise((r) => setTimeout(r, 300));
+    expect(sessions2.queueView(sid).items).toHaveLength(0);
+    const stream = sessions2.stream(sid, path.join(root, 'frames-cancel.jsonl'), 0).frames;
+    expect(stream.some((f) => f.kind === 'user-text' && f.text?.includes('停止后'))).toBe(true);
+  });
+
+  // W10n 三轮 live 实证（seq 双写）：resume 替换条目时旧 agent 未失活——
+  // 僵尸 DemoAgent 定时器继续产帧（双泡/幻视图/seq 冲突）。替换即 dispose。
+  it('demo：resume 替换条目后旧 agent 不再产帧（无僵尸双写）', async () => {
+    vi.useRealTimers();
+    const sessions2 = createTaskSessions({
+      kernel: () => asKernelHandle(kernel),
+      modelSelection: async () => ({ provider: 'zhipu', model: 'glm-5.3-flash' }),
+      retention: 50,
+    });
+    sessions2.setDemoDelay(60);
+    const created = await sessions2.createTaskSession('task-zombie', {
+      cwd: root,
+      framesFile: path.join(root, 'frames-zombie.jsonl'),
+      prompt: '首条',
+    });
+    const sid = created.sessionId;
+    await new Promise((r) => setTimeout(r, 100));
+    sessions2.followup(sid, '僵尸轮'); // 承认+定时器 60ms 在途
+    await new Promise((r) => setTimeout(r, 20)); // 定时器未触发窗口内替换
+    await sessions2.resumeTaskSession('task-zombie', {
+      sessionId: sid,
+      framesFile: path.join(root, 'frames-zombie.jsonl'),
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    const frames = sessions2.stream(sid, path.join(root, 'frames-zombie.jsonl'), 0).frames;
+    // 僵尸已失活：旧定时器不产出「僵尸轮」（demo 恢复不回填 admitted——
+    // 该消息随替换丢弃是 demo 模式已知取舍）；且全帧 seq 无重复（无双写）。
+    expect(frames.some((f) => f.kind === 'user-text' && f.text === '僵尸轮')).toBe(false);
+    const seqs = frames.map((f) => f.seq);
+    expect(new Set(seqs).size).toBe(seqs.length);
   });
 
   it('steer 返回条目 id（attach 寻址）', async () => {

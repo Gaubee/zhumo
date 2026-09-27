@@ -169,8 +169,10 @@
 
   function onDndFinalize(newItems: Array<Record<string, unknown>>): void {
     dndItems = newItems as Array<TaskQueueItem & { id: string }>;
-    onreordering(false); // 松手：恢复消费 + 帧驱动刷新
-    onreorder(newItems.map((n) => String(n.id))); // 原序拖回也走它——reorderQueue finally 恢复远端视图
+    // 松手：daemon 恢复消费与 reordering 生命周期都由 reorderQueue 接管
+    // （Codex 三轮 P2：reordering 保持到重排 RPC 落定，行按钮不在新序
+    // 未提交窗口恢复；原序拖回也走它——finally 恢复权威视图）。
+    onreorder(newItems.map((n) => String(n.id)));
   }
 </script>
 
