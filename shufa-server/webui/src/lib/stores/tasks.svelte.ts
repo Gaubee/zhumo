@@ -442,7 +442,13 @@ function queueOpFailed(error: unknown): void {
   queue.error = message.includes("队列已变化") ? "队列刚有变化，已为你刷新到最新" : message;
   // 队列已变化/条目已生效/本地持有条目 daemon 不认识（已被消费）——本地视图
   // 均已证实过期，自动拉取最新，不要求用户手动刷新。
-  if (message.includes("队列已变化") || message.includes("已生效") || message.includes("队列中没有该条目")) {
+  // 「会话正在恢复」=替换窗口冲突——替换完成后重试即成功，同样自动刷新。
+  if (
+    message.includes("队列已变化") ||
+    message.includes("已生效") ||
+    message.includes("队列中没有该条目") ||
+    message.includes("会话正在恢复")
+  ) {
     void refreshQueue();
   }
 }
