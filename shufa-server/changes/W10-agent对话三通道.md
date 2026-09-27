@@ -524,4 +524,3 @@ live 复验深挖出三个真实缺陷（全部帧级证据定位+修复+回归�
   期间并发第二段不跳过（resumes=2、双 true）；不在册 no-op=false。
 
 门禁：daemon 191/191 + tsc 0（daemon 面；webui 未动）。
-
