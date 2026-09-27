@@ -27,6 +27,7 @@ import { createTaskSessions } from './kernel/sessions.js';
 import { defaultSkillDocPath } from './kernel/prompts.js';
 import path from 'node:path';
 import { resolveModelRoutesFromStore, resolveShufaToolDir, TaskService } from './tasks/service.js';
+import { loadModelsConfig, resolveDefaultEffort } from './models-store.js';
 import { ResourceService } from './resources.js';
 import { createShufaMcpServer } from './capability/mcp.js';
 import { KbStore } from './kb/store.js';
@@ -85,16 +86,35 @@ const sessions = createTaskSessions({
     kernel: () => kernel,
     modelSelection: async (taskId: string) => {
       // 任务覆盖（五轮活动模型）优先；缺省回落默认模型/旧链首路由。
+      // 强度回落链（2026-09-28 Owner）：任务显式档 > 后台默认档
+      // （default.effort）> 目录顺序档（efforts[ceil(N/2)]，管理员未配置
+      // 时的自动缺省）> 不传（无目录，内核自选）。
       const task = getTaskById(db, taskId);
+      const bundle = resolveModelRoutesFromStore(db, config);
+      // efforts 目录在 models 配置面（BridgedRoute 桥接载荷不带它）。
+      const catalog = loadModelsConfig(db);
+      const effortsOf = (provider: string, model: string): string[] | undefined =>
+        catalog.routes
+          .find((route) => route.provider === provider)
+          ?.models.find((entry) => entry.id === model)?.efforts;
       if (task?.model_provider && task.model_model) {
         return {
           provider: task.model_provider,
           model: task.model_model,
-          ...(task.model_effort ? { effort: task.model_effort } : {}),
+          ...(task.model_effort
+            ? { effort: task.model_effort }
+            : bundle.default?.effort
+              ? { effort: bundle.default.effort }
+              : { effort: resolveDefaultEffort(effortsOf(task.model_provider, task.model_model)) }),
         };
       }
-      const bundle = resolveModelRoutesFromStore(db, config);
-      if (bundle.default) return bundle.default;
+      if (bundle.default) {
+        const autoEffort = resolveDefaultEffort(effortsOf(bundle.default.provider, bundle.default.model));
+        return {
+          ...bundle.default,
+          ...(bundle.default.effort ? {} : autoEffort ? { effort: autoEffort } : {}),
+        };
+      }
       const first = bundle.routes[0];
       const model = first?.models[0]?.id;
       return first && model ? { provider: first.provider, model } : null;

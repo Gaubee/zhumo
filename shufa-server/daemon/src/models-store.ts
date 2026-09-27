@@ -50,11 +50,30 @@ export function loadKeys(db: SqliteDb): Record<string, string> {
   return parseJson(getSetting(db, KEY_KEYS), {});
 }
 
-export function loadDefault(db: SqliteDb, routes?: StoredRoute[]): ModelsDefault | null {
-  const value = parseJson<ModelsDefault | null>(getSetting(db, KEY_DEFAULT), null);
+/** 后台默认思考强度档算法（Owner 2026-09-28）：管理员未配置时按 efforts
+ * 顺序取下标 ceil(N/2)（3 档→下标 2 即第三档；1 档边界收 0）。返回
+ * undefined = 无目录/空目录（不传，内核自选）。 */
+export function resolveDefaultEffort(efforts: string[] | undefined): string | undefined {
+  if (efforts === undefined || efforts.length === 0) return undefined;
+  return efforts[Math.min(Math.ceil(efforts.length / 2), efforts.length - 1)];
+}
+
+export function loadDefault(db: SqliteDb, routes?: StoredRoute[]): ModelsDefault | null {  const value = parseJson<ModelsDefault | null>(getSetting(db, KEY_DEFAULT), null);
   const list = routes ?? loadRoutes(db);
-  if (value && list.some((route) => route.provider === value.provider)) return value;
-  return null;
+  if (!value) return null;
+  const route = list.find((candidate) => candidate.provider === value.provider);
+  if (!route) return null;
+  // effort 悬空防御（2026-09-28）：目录升级/模型变更可能让已存默认档不在
+  // 该模型 efforts 内——丢弃该字段回落「内核自选」，不让无效档进内核。
+  if (value.effort != null) {
+    const entry = route.models.find((candidate) => candidate.id === value.model);
+    const efforts = entry?.efforts;
+    if (!efforts || !efforts.includes(value.effort)) {
+      const { effort: _drop, ...rest } = value;
+      return rest;
+    }
+  }
+  return value;
 }
 
 /**
@@ -76,11 +95,25 @@ export function saveModelsConfig(
   }
   putSetting(db, KEY_ROUTES, JSON.stringify(routes));
   putSetting(db, KEY_KEYS, JSON.stringify(keys));
-  // default 校验：必须指向存在路由（防悬空引用）。
-  const valid =
-    input.default && routes.some((route) => route.provider === input.default!.provider)
-      ? input.default
-      : null;
+  // default 校验：必须指向存在路由（防悬空引用）；effort 必须在该模型
+  // efforts 目录内（2026-09-28 默认强度档；无目录视为无效一并丢弃）。
+  let valid: ModelsDefault | null = null;
+  if (input.default) {
+    const route = routes.find((candidate) => candidate.provider === input.default!.provider);
+    if (route) {
+      const { effort, ...rest } = input.default;
+      if (effort != null && effort !== '') {
+        const entry = route.models.find((candidate) => candidate.id === input.default!.model);
+        if (entry?.efforts?.includes(effort)) valid = { ...rest, effort };
+        else
+          throw new Error(
+            `默认强度档不在默认模型 efforts 内：${effort}（${input.default.model} 目录：${entry?.efforts?.join('、') ?? '无'}）`,
+          );
+      } else {
+        valid = rest;
+      }
+    }
+  }
   putSetting(db, KEY_DEFAULT, JSON.stringify(valid));
 }
 

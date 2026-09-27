@@ -230,6 +230,43 @@
   async function saveDefault(next: { provider: string; model: string } | null): Promise<void> {
     if (settings === null) return;
     const previous = settings.default;
+    // 换默认模型：已存默认强度不在新模型 efforts 目录内则一并重置（防悬空）。
+    let target: { provider: string; model: string; effort?: string | null } | null = next;
+    if (next !== null && previous?.effort != null) {
+      const entry = routes
+        .find((route) => route.provider === next.provider)
+        ?.models.find((model) => model.id === next.model);
+      target = entry?.efforts?.includes(previous.effort)
+        ? { ...next, effort: previous.effort }
+        : next;
+    }
+    settings.default = target;
+    try {
+      await api.saveModels({ routes: settings.routes, default: target });
+    } catch (e) {
+      settings.default = previous;
+      error = e instanceof Error ? e.message : String(e);
+      return;
+    }
+    await loadRouteInfo();
+    onsaved?.();
+  }
+
+  /** 默认模型当前的 efforts 目录（默认强度选择器的选项源）。 */
+  const defaultEfforts = $derived.by(() => {
+    const def = settings?.default;
+    if (def == null) return [];
+    return (
+      routes
+        .find((route) => route.provider === def.provider)
+        ?.models.find((model) => model.id === def.model)?.efforts ?? []
+    );
+  });
+
+  async function saveDefaultEffort(effort: string | null): Promise<void> {
+    if (settings === null || settings.default === null) return;
+    const previous = settings.default;
+    const next = { ...previous, ...(effort !== null ? { effort } : {}) };
     settings.default = next;
     try {
       await api.saveModels({ routes: settings.routes, default: next });
@@ -238,7 +275,6 @@
       error = e instanceof Error ? e.message : String(e);
       return;
     }
-    await loadRouteInfo();
     onsaved?.();
   }
 </script>
@@ -306,6 +342,31 @@
         </Select.Content>
       </Select.Root>
       <span class="shrink-0 text-[10px] text-muted-foreground">新建任务未选模型时使用</span>
+      {#if defaultEfforts.length > 0}
+        <span class="shrink-0 text-xs text-muted-foreground">默认强度</span>
+        <Select.Root
+          type="single"
+          items={[
+            { value: "__unset__", label: "未设置（自动取档）" },
+            ...defaultEfforts.map((effort) => ({ value: effort, label: effort })),
+          ]}
+          value={settings.default?.effort ?? "__unset__"}
+          onValueChange={(value) => {
+            void saveDefaultEffort(value === "__unset__" || value === undefined ? null : value);
+          }}
+        >
+          <Select.Trigger class="h-8 w-36 shrink-0 text-xs" aria-label="选择默认强度">
+            <Select.Value placeholder="未设置（自动取档）" />
+          </Select.Trigger>
+          <Select.Content class="max-h-64 text-xs">
+            <Select.Item value="__unset__" label="未设置（自动取档）">未设置（自动取档）</Select.Item>
+            {#each defaultEfforts as effort (effort)}
+              <Select.Item value={effort} label={effort}>{effort}</Select.Item>
+            {/each}
+          </Select.Content>
+        </Select.Root>
+        <span class="shrink-0 text-[10px] text-muted-foreground">任务未选档时使用</span>
+      {/if}
     </div>
 
     <!-- tab 条：横滚区 + 固定 + 新路由。 -->

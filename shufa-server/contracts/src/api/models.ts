@@ -51,10 +51,13 @@ export const ModelsRouteViewSchema = ModelsRouteSchema.extend({
 });
 export type ModelsRouteView = z.infer<typeof ModelsRouteViewSchema>;
 
-/** 默认模型（后台选择；活动模型按任务由前台覆盖，不落此处）。 */
+/** 默认模型（后台选择；活动模型按任务由前台覆盖，不落此处）。
+ * effort（2026-09-28 Owner）：后台默认思考强度档——任务未显式选档时的全局
+ * 缺省（null/缺省 = 未配置，由内核按模型自选）。 */
 export const ModelsDefaultSchema = z.object({
   provider: IdSchema,
   model: z.string().min(1),
+  effort: z.string().nullable().optional(),
 });
 export type ModelsDefault = z.infer<typeof ModelsDefaultSchema>;
 

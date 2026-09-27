@@ -124,7 +124,7 @@ interface ShufaRpc {
   me(): Promise<ContractUserInfo>;
   /** 五轮：登录用户面——可用模型清单（活动模型选择）。 */
   models: {
-    available(): Promise<{ models: AvailableModel[]; default: { provider: string; model: string } | null }>;
+    available(): Promise<{ models: AvailableModel[]; default: { provider: string; model: string; effort?: string | null } | null }>;
   };
   admin: {
     users: {
@@ -245,7 +245,7 @@ export interface ShufaApi {
   /** 连接测试（五轮）：直传测试密钥优先（不落盘），缺省用已存密钥。 */
   testModelRoute(input: { api: string; baseURL: string; modelId: string; apiKey?: string; provider?: string }): Promise<ModelsTestResult>;
   /** 可用模型清单（五轮活动模型：前台任务对话框选择面）。 */
-  getAvailableModels(): Promise<{ models: AvailableModel[]; default: { provider: string; model: string } | null }>;
+  getAvailableModels(): Promise<{ models: AvailableModel[]; default: { provider: string; model: string; effort?: string | null } | null }>;
   /** 局域网访问链接（BUG3）；失败由调用方降级隐藏（不报错弹脸）。 */
   getLanUrls(): Promise<string[]>;
   listTasks(): Promise<Task[]>;

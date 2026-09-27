@@ -15,6 +15,7 @@ import { getSetting, putSetting } from '../src/db/store.js';
 import {
   loadModelsConfig,
   loadRoutes,
+  resolveDefaultEffort,
   resolveRouteFor,
   saveModelsConfig,
 } from '../src/models-store.js';
@@ -72,6 +73,51 @@ describe('五轮 models-store：保存与密钥语义', () => {
     expect(after.routes).toHaveLength(0);
     expect(after.default).toBeNull();
     expect(resolveRouteFor(s.db, 'zai', 'glm-5.3-flash')).toBeNull();
+  });
+
+  it('默认强度档（2026-09-28）：合法保存/目录外拒绝/读取悬空丢弃', () => {
+    const route = (efforts?: string[]) => ({
+      provider: 'zai',
+      api: 'openai-completions' as const,
+      baseURL: 'https://z.ai/api/paas/v4',
+      models: [{ id: 'glm-5.3-flash', ...(efforts ? { efforts } : {}) }],
+    });
+    // 合法：effort 在目录内 → 保存并可读回。
+    saveModelsConfig(s.db, {
+      routes: [route(['low', 'high', 'max'])],
+      default: { provider: 'zai', model: 'glm-5.3-flash', effort: 'high' },
+    });
+    expect(loadModelsConfig(s.db).default).toMatchObject({ effort: 'high' });
+    // 目录外 → 保存拒绝（悬空档不落库）。
+    expect(() =>
+      saveModelsConfig(s.db, {
+        routes: [route(['low', 'high', 'max'])],
+        default: { provider: 'zai', model: 'glm-5.3-flash', effort: 'ultra' },
+      }),
+    ).toThrow('不在默认模型 efforts 内');
+    // 模型无 efforts 目录 → 配 effort 拒绝。
+    expect(() =>
+      saveModelsConfig(s.db, {
+        routes: [route()],
+        default: { provider: 'zai', model: 'glm-5.3-flash', effort: 'high' },
+      }),
+    ).toThrow('不在默认模型 efforts 内');
+    // 读取悬空防御：目录变更（efforts 移除该档）后 loadDefault 丢弃 effort 字段。
+    saveModelsConfig(s.db, {
+      routes: [route(['low', 'max'])],
+      default: { provider: 'zai', model: 'glm-5.3-flash' },
+    });
+    putSetting(s.db, 'models_default', JSON.stringify({ provider: 'zai', model: 'glm-5.3-flash', effort: 'high' }));
+    expect(loadModelsConfig(s.db).default).toEqual({ provider: 'zai', model: 'glm-5.3-flash' });
+  });
+
+  it('默认档算法 ceil(N/2)（Owner 2026-09-28）：3 档取下标 2；1 档边界收 0；无目录 undefined', () => {
+    expect(resolveDefaultEffort(['low', 'high', 'max'])).toBe('max'); // ceil(3/2)=2 → 下标 2
+    expect(resolveDefaultEffort(['low', 'high'])).toBe('high'); // ceil(2/2)=1 → 下标 1
+    expect(resolveDefaultEffort(['low', 'medium', 'high', 'max'])).toBe('high'); // ceil(4/2)=2 → 下标 2
+    expect(resolveDefaultEffort(['only'])).toBe('only'); // ceil(1/2)=1 越界 → 收 0
+    expect(resolveDefaultEffort([])).toBeUndefined();
+    expect(resolveDefaultEffort(undefined)).toBeUndefined();
   });
 
   it('迁移收编：旧 llm_* 五键齐备 → 首次读取物化为单路由 + default + 密钥', () => {

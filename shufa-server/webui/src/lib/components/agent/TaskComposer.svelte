@@ -6,24 +6,23 @@
   警示条并禁用创建（视频选择不受影响）。
   朱墨前端改造 [2026-09-24]（BUG5）：会话用户已被禁用 → 同款警示条 + 禁用创建
   （禁用账号可登录可读，仅新建任务被拦；daemon 侧双重拦截）。
-  走查五轮（2026-09-24 · 四）：活动模型选择移入本面板——模型 chip（Popover
-  分组列表：图标/上下文窗口/视觉标记；「跟随默认」= 不带覆盖创建）。
-  正交意图：[1] 素材视频选择；[2] 预设开场 chips；[3] 提示词编辑与创建；
-  [4] 未配置模型路由/账号被禁用的创建阻断；[5] 任务级模型选择；
-  [6] 任务级思考强度档（2026-09-25 前台对齐：模型 efforts 之一，缺省=不覆盖）。
+  Owner 2026-09-28 复用裁决：指令输入框整体复用会话 ComposerCard（模型/强度
+  选择、发送语义同源），本面板不再自建 textarea/选择器；预设经 setPrompt
+  实例方法注入。模型清单挂载即拉（不等点开选择器）。附件面/触发面板关（新
+  建无任务资源位、prompt 为自由描述）。
+  正交意图：[1] 素材视频选择；[2] 预设开场 chips；[3] 创建（输入面复用
+  ComposerCard）；[4] 未配置模型路由/账号被禁用的创建阻断；[5] 任务级模型
+  /强度选择（ComposerCard 同源交互）。
 -->
 <script lang="ts">
+  import { onMount } from "svelte";
   import IconFile from "@lucide/svelte/icons/file";
-  import IconSend from "@lucide/svelte/icons/send";
   import IconTriangleAlert from "@lucide/svelte/icons/triangle-alert";
-  import IconChevronDown from "@lucide/svelte/icons/chevron-down";
-  import IconImage from "@lucide/svelte/icons/image";
   import { Button } from "$lib/components/ui/button";
-  import * as Popover from "$lib/components/ui/popover";
+  import ComposerCard from "./ComposerCard.svelte";
   import { createTask, tasks } from "$lib/stores/tasks.svelte";
   import { auth } from "$lib/stores/auth.svelte";
   import { api } from "$lib/api";
-  import { formatTokenCount } from "$lib/components/models/route-meta";
   import type { AvailableModel } from "$lib/types";
 
   /** 预设开场（点选填充，仍然可编辑；措辞覆盖管线真实工具面）。 */
@@ -49,57 +48,33 @@
     },
   ];
 
-  let prompt = $state("");
   let video = $state<File | null>(null);
   let videoName = $state("");
   let videoInput = $state<HTMLInputElement | null>(null);
 
-  // ---- 五轮：活动模型选择（任务级覆盖；null = 跟随默认） ----
-  let modelPickerOpen = $state(false);
+  // ---- 活动模型选择（任务级覆盖；null = 跟随默认）——状态面与 ComposerCard 同源 ----
   let available = $state<AvailableModel[]>([]);
-  let availableDefault = $state<{ provider: string; model: string } | null>(null);
+  let availableDefault = $state<{ provider: string; model: string; effort?: string | null } | null>(null);
   let picked = $state<{ provider: string; model: string; effort?: string } | null>(null);
-  let effortOpen = $state(false);
+  let composer = $state<ComposerCard | null>(null);
 
-  const pickedLabel = $derived.by(() => {
-    if (picked === null) {
-      // Owner 2026-09-28：显示具体模型名 +（默认）标注，弃「跟随默认」抽象词。
-      const def = availableDefault;
-      return def ? `${def.model}（默认）` : "默认";
-    }
-    const current = picked;
-    const found =
-      current === null
-        ? undefined
-        : available.find((m) => m.provider === current.provider && m.model === current.model);
-    return found ? found.name : `${current?.provider ?? ""} / ${current?.model ?? ""}`;
+  // 挂载即拉（Owner 2026-09-28：不等点开选择器才加载——配置应首屏可见）。
+  onMount(() => {
+    void (async () => {
+      try {
+        const out = await api.getAvailableModels();
+        available = out.models;
+        availableDefault = out.default;
+      } catch {
+        available = []; // 拉取失败：选择器空态，创建仍走默认
+      }
+    })();
   });
 
-  /** 选中模型的档位目录（无数据 = 强度 chip 隐藏；跟随默认 = 不覆盖）。 */
-  const pickedEfforts = $derived.by(() => {
-    const current = picked;
-    if (current === null) return [];
-    return (
-      available.find((m) => m.provider === current.provider && m.model === current.model)?.efforts ??
-      []
-    );
-  });
-
-  async function openModelPicker(open: boolean): Promise<void> {
-    modelPickerOpen = open;
-    if (!open || available.length > 0) return;
-    try {
-      const out = await api.getAvailableModels();
-      available = out.models;
-      availableDefault = out.default;
-    } catch {
-      available = []; // 拉取失败：选择器空态，创建仍走默认
-    }
-  }
   let sending = $derived(tasks.sending);
   /** R4：bootstrap 已加载且生效路由为 null → 管理员未配置大模型服务。 */
   /** 走查演示模式（URL demoDelay 写入的 sessionStorage 标记）：模型路由未配置
-   * 也可建任务（DemoAgent 不调真实模型）。 */
+   也可建任务（DemoAgent 不调真实模型）。 */
   const demoActive = (() => {
     try {
       return Number(sessionStorage.getItem("zhumo:demo-delay") ?? "0") > 0;
@@ -113,28 +88,28 @@
   /** BUG5：会话用户已被禁用 → 不能新建任务（仍可查看已有任务）。 */
   let userDisabled = $derived(auth.session !== null && auth.session.disabled);
 
-  function applyPreset(presetPrompt: string): void {
-    prompt = presetPrompt;
+  /** ComposerCard 的模型/强度选择 → 任务级覆盖状态。默认态选强度 = 把默认
+   模型显式化为覆盖 + 档（强度不能脱离模型单独落任务列）。 */
+  function pickModel(provider: string, model: string): void {
+    picked = { provider, model }; // 换模型：档位重置
+  }
+  function pickEffort(effort: string | null): void {
+    const base = picked ?? (availableDefault !== null ? { provider: availableDefault.provider, model: availableDefault.model } : null);
+    if (base === null) return;
+    picked = { ...base, ...(effort !== null ? { effort } : {}) };
   }
 
-  function submit(): void {
+  /** ComposerCard 发送（Enter/按钮同源）→ 创建任务。 */
+  function submitFromComposer(text: string): void {
     if (modelMissing || userDisabled) return;
-    const trimmed = prompt.trim();
+    const trimmed = text.trim();
     if (trimmed.length === 0 || video === null || sending) return;
-    prompt = "";
     const file = video;
     video = null;
     videoName = "";
     const model = picked === null ? undefined : picked; // 任务级覆盖；未选=跟随默认
     picked = null;
     void createTask(trimmed, file, model);
-  }
-
-  function onkeydown(event: KeyboardEvent): void {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.isComposing) {
-      event.preventDefault();
-      submit();
-    }
   }
 </script>
 
@@ -144,168 +119,64 @@
     选择素材视频，选一个预设开场或直接描述需求——agent 会自行编排分析工具，摘要由它亲自撰写。
   </p>
 
-  <div class="mt-4 rounded-xl border border-border bg-card p-3 shadow-sm">
-    <input
-      bind:this={videoInput}
-      type="file"
-      accept="video/*"
-      class="hidden"
-      onchange={(event) => {
-        video = event.currentTarget.files?.[0] ?? null;
-        videoName = video?.name ?? "";
-      }}
-    />
-    <div class="flex items-center gap-2">
-      <Button size="sm" variant="outline" onclick={() => videoInput?.click()}>
-        <IconFile data-icon="inline-start" />
-        选择素材视频…
-      </Button>
-      {#if videoName !== ""}
-        <span class="min-w-0 truncate text-xs text-muted-foreground">{videoName}</span>
-      {:else}
-        <span class="text-[11px] text-muted-foreground">必选；agent 通过文件路径自行读取分析</span>
-      {/if}
+  <div class="mt-4 space-y-2">
+    <div class="rounded-xl border border-border bg-card p-3 shadow-sm">
+      <input
+        bind:this={videoInput}
+        type="file"
+        accept="video/*"
+        class="hidden"
+        onchange={(event) => {
+          video = event.currentTarget.files?.[0] ?? null;
+          videoName = video?.name ?? "";
+        }}
+      />
+      <div class="flex items-center gap-2">
+        <Button size="sm" variant="outline" onclick={() => videoInput?.click()}>
+          <IconFile data-icon="inline-start" />
+          选择素材视频…
+        </Button>
+        {#if videoName !== ""}
+          <span class="min-w-0 truncate text-xs text-muted-foreground">{videoName}</span>
+        {:else}
+          <span class="text-[11px] text-muted-foreground">必选；agent 通过文件路径自行读取分析</span>
+        {/if}
+      </div>
+
+      <div class="mt-3 flex flex-wrap gap-1.5">
+        {#each PRESETS as preset (preset.label)}
+          <button
+            type="button"
+            class="rounded-full border border-border bg-muted/40 px-2.5 py-1 text-[11px] text-foreground/80 transition-colors hover:border-primary/50 hover:bg-accent-soft"
+            onclick={() => composer?.setPrompt(preset.prompt)}
+          >
+            {preset.label}
+          </button>
+        {/each}
+      </div>
     </div>
 
-    <!-- 五轮：任务级模型选择（活动模型；不选=跟随后台默认模型） -->
-    <div class="mt-2 flex items-center gap-2">
-      <Popover.Root open={modelPickerOpen} onOpenChange={(open) => void openModelPicker(open)}>
-        <Popover.Trigger>
-          {#snippet child({ props })}
-            <button
-              type="button"
-              {...props}
-              class="flex h-7 items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2.5 text-[11px] text-foreground/80 transition-colors hover:border-primary/50"
-            >
-              <span class="max-w-[220px] truncate">{pickedLabel}</span>
-              <IconChevronDown class="h-3 w-3 shrink-0 opacity-60" aria-hidden="true" />
-            </button>
-          {/snippet}
-        </Popover.Trigger>
-        <Popover.Content class="w-72 p-0">
-          <div class="max-h-72 overflow-y-auto p-1">
-            <button
-              type="button"
-              class="flex w-full items-center rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted/60 {picked === null
-                ? "bg-accent-soft"
-                : ""}"
-              onclick={() => {
-                picked = null;
-                modelPickerOpen = false;
-              }}
-            >
-              {availableDefault ? `${availableDefault.model}（默认）` : "默认"}
-            </button>
-            {#each available as item (item.provider + "::" + item.model)}
-              <button
-                type="button"
-                class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted/60 {picked !== null && picked.provider === item.provider && picked.model === item.model
-                  ? "bg-accent-soft"
-                  : ""}"
-                onclick={() => {
-                  picked = { provider: item.provider, model: item.model }; // 换模型：档位重置
-                  modelPickerOpen = false;
-                }}
-              >
-                {#if item.iconUrl}
-                  <img
-                    src={item.iconUrl}
-                    alt=""
-                    class="h-4 w-4 shrink-0 object-contain dark:invert"
-                    onerror={(event) => ((event.currentTarget as HTMLImageElement).style.display = "none")}
-                  />
-                {/if}
-                <span class="min-w-0 flex-1">
-                  <span class="block truncate">{item.name}</span>
-                  <span class="block truncate text-[10px] text-muted-foreground">
-                    {item.provider}{item.contextWindow !== undefined
-                      ? ` · ${formatTokenCount(item.contextWindow)}`
-                      : ""}
-                  </span>
-                </span>
-                {#if (item.inputTypes ?? ["text"]).includes("image")}
-                  <IconImage class="h-3 w-3 shrink-0 text-muted-foreground" aria-label="支持图片输入" />
-                {/if}
-              </button>
-            {/each}
-          </div>
-        </Popover.Content>
-      </Popover.Root>
-      {#if pickedEfforts.length > 0}
-        <Popover.Root open={effortOpen} onOpenChange={(open) => (effortOpen = open)}>
-          <Popover.Trigger>
-            {#snippet child({ props })}
-              <button
-                type="button"
-                {...props}
-                class="flex h-7 max-w-[140px] items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2.5 text-[11px] text-foreground/80 transition-colors hover:border-primary/50"
-                title="思考强度档位（跟随后台默认 = 不覆盖）"
-              >
-                <span class="truncate">{picked?.effort ?? "模型默认"}</span>
-                <IconChevronDown class="h-3 w-3 shrink-0 opacity-60" aria-hidden="true" />
-              </button>
-            {/snippet}
-          </Popover.Trigger>
-          <Popover.Content class="w-48 p-0">
-            <div class="max-h-64 overflow-y-auto p-1">
-              <button
-                type="button"
-                class="flex w-full items-center rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted/60 {picked?.effort ===
-                undefined
-                  ? "bg-accent-soft"
-                  : ""}"
-                onclick={() => {
-                  if (picked !== null) picked = { ...picked, effort: undefined };
-                  effortOpen = false;
-                }}
-              >
-                模型默认
-              </button>
-              {#each pickedEfforts as effort (effort)}
-                <button
-                  type="button"
-                  class="flex w-full items-center rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted/60 {picked?.effort ===
-                  effort
-                    ? "bg-accent-soft"
-                    : ""}"
-                  onclick={() => {
-                    if (picked !== null) picked = { ...picked, effort };
-                    effortOpen = false;
-                  }}
-                >
-                  {effort}
-                </button>
-              {/each}
-            </div>
-          </Popover.Content>
-        </Popover.Root>
-      {/if}
-      <span class="text-[10px] text-muted-foreground">本任务使用的模型（活动模型）</span>
-    </div>
-
-    <div class="mt-3 flex flex-wrap gap-1.5">
-      {#each PRESETS as preset (preset.label)}
-        <button
-          type="button"
-          class="rounded-full border border-border bg-muted/40 px-2.5 py-1 text-[11px] text-foreground/80 transition-colors hover:border-primary/50 hover:bg-accent-soft"
-          onclick={() => applyPreset(preset.prompt)}
-        >
-          {preset.label}
-        </button>
-      {/each}
-    </div>
-
-    <textarea
-      bind:value={prompt}
-      {onkeydown}
-      rows="5"
+    <!-- 指令输入框整体复用会话 ComposerCard（Owner 2026-09-28）：
+         模型/强度选择、发送交互与对话页同源；Enter=创建。 -->
+    <ComposerCard
+      bind:this={composer}
+      onsend={submitFromComposer}
+      models={available}
+      defaultModel={availableDefault}
+      currentModel={picked}
+      currentEffort={picked?.effort ?? null}
+      onsetmodel={pickModel}
+      onseteffort={pickEffort}
+      attachable={false}
+      triggers={false}
       placeholder="描述分析需求…（点上方预设可快速填充，填充后仍可自由修改）"
-      class="mt-3 w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-[13px] leading-5 outline-none placeholder:text-muted-foreground/70 focus:border-primary/50"
-    ></textarea>
+      sending={sending}
+      disabled={modelMissing || userDisabled || video === null}
+    />
 
     {#if modelMissing}
       <div
-        class="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-[11px] leading-snug text-amber-700"
+        class="flex items-start gap-2 rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-[11px] leading-snug text-amber-700"
         role="alert"
       >
         <IconTriangleAlert class="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -316,7 +187,7 @@
     {#if userDisabled}
       <!-- BUG5：禁用账号创建阻断（与模型未配置同款警示模式）。 -->
       <div
-        class="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-[11px] leading-snug text-amber-700"
+        class="flex items-start gap-2 rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-[11px] leading-snug text-amber-700"
         role="alert"
       >
         <IconTriangleAlert class="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -324,22 +195,8 @@
       </div>
     {/if}
 
-    <div class="mt-2 flex items-center justify-between gap-2">
-      <span class="text-[10px] text-muted-foreground">
-        {#if tasks.error}
-          <span class="text-destructive" role="alert">{tasks.error}</span>
-        {:else}
-          ⌘/Ctrl + Enter 创建 · 换行直接回车
-        {/if}
-      </span>
-      <Button
-        size="sm"
-        disabled={sending || modelMissing || userDisabled || prompt.trim().length === 0 || video === null}
-        onclick={submit}
-      >
-        <IconSend data-icon="inline-start" />
-        {sending ? "创建中…" : "创建任务"}
-      </Button>
-    </div>
+    {#if tasks.error}
+      <p class="px-1 text-[11px] text-destructive" role="alert">{tasks.error}</p>
+    {/if}
   </div>
 </div>

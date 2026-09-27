@@ -135,10 +135,12 @@ export interface DshModelRoute {
   models: RouteModel[];
 }
 
-/** Models 配置（五轮）：路由集合 + 默认模型（活动模型按任务由前台选择）。 */
+/** Models 配置（五轮）：路由集合 + 默认模型（活动模型按任务由前台选择；
+ * effort = 后台默认强度档，2026-09-28：null/缺省 = 未配置，自动取目录
+ * ceil(N/2) 档）。 */
 export interface ModelsSettings {
   routes: DshModelRoute[];
-  default: { provider: string; model: string } | null;
+  default: { provider: string; model: string; effort?: string | null } | null;
 }
 
 /** 连接测试结果（ok 判别联合）。 */

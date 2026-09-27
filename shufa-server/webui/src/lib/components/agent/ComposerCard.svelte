@@ -24,7 +24,7 @@
   import IconLoader from "@lucide/svelte/icons/loader-circle";
   import { Button } from "$lib/components/ui/button";
   import * as Popover from "$lib/components/ui/popover";
-  import { routeAvatarColor, routeLetter, formatTokenCount } from "$lib/components/models/route-meta";
+  import { routeAvatarColor, routeLetter, formatTokenCount, resolveDefaultEffort } from "$lib/components/models/route-meta";
   import { api } from "$lib/api";
   import type { Attachment, AvailableModel } from "$lib/types";
   import TriggerMenu, { type MenuEntry } from "./TriggerMenu.svelte";
@@ -38,8 +38,7 @@
     placeholder = "描述分析需求，例如：分析起笔角度与收笔…",
     /** 可用模型清单（null/空 = 无已配路由，模型/强度 chip 隐藏）。 */
     models = null,
-    defaultModel = null,
-    /** 任务级模型覆盖（null = 跟随后台默认）。 */
+    defaultModel = null,    /** 任务级模型覆盖（null = 跟随后台默认）。 */
     currentModel = null,
     /** 任务级思考强度档（null = 跟随默认）。 */
     currentEffort = null,
@@ -53,6 +52,12 @@
     onseteffort,
     /** 停止当前轮（W10）：running 态回调；缺省时 running 仍可排队发送。 */
     onstop = null,
+    /** 附件面开关（Owner 2026-09-28：新建任务复用整卡时关掉——附件上传
+     * 依赖既有任务资源位，创建前不可用）。 */
+    attachable = true,
+    /** 触发面板开关（/命令、$技能）：会话内语义；新建任务的 prompt 是
+     * 自由描述，面板命令不适用。 */
+    triggers = true,
     /** 队列编辑态（W10b）：发送按钮变「确认修改」，Enter=确认、Escape=取消。 */
     editingActive = false,
     /** 进入编辑时回填的队列文本（变化触发填充；null=非编辑）。 */
@@ -70,7 +75,7 @@
     sending?: boolean;
     placeholder?: string;
     models?: AvailableModel[] | null;
-    defaultModel?: { provider: string; model: string } | null;
+    defaultModel?: { provider: string; model: string; effort?: string | null } | null;
     currentModel?: { provider: string; model: string } | null;
     currentEffort?: string | null;
     running?: boolean;
@@ -78,7 +83,16 @@
     capacity?: number | null;
     onsetmodel?: (provider: string, model: string) => void;
     onseteffort?: (effort: string | null) => void;
+    attachable?: boolean;
+    triggers?: boolean;
   } = $props();
+
+  /** 实例方法（Owner 2026-09-28 复用整卡）：外部注入文本（新建任务的
+   * 预设开场填充；textarea 受控在组件内，双向绑定不外露）。 */
+  export function setPrompt(value: string): void {
+    text = value;
+    requestCaretEnd();
+  }
 
   let text = $state("");
   let menuOpen = $state(false);
@@ -179,6 +193,14 @@
       models?.find((m) => m.provider === activeModel.provider && m.model === activeModel.model)
         ?.efforts ?? []
     );
+  });
+
+  /** 默认档显示值（Owner 2026-09-28）：后台配置档（default.effort）?? 目录
+   * 算法档（efforts[ceil(N/2)]，管理员未配置时的自动缺省）；无目录=null
+   * （「模型默认」= 内核自选）。 */
+  const defaultEffortValue = $derived.by(() => {
+    if (defaultModel?.effort) return defaultModel.effort;
+    return resolveDefaultEffort(activeEfforts);
   });
 
   function isActive(provider: string, model: string): boolean {
@@ -325,30 +347,32 @@
 
 <div class="relative rounded-xl border border-border bg-card p-2 shadow-sm">
   <!-- 触发面板（锚定卡片上方；键盘留 textarea，见 onkeydown 先占序）。 -->
-  <TriggerMenu
-    trigger="/"
-    entries={composerCommands}
-    {text}
-    {caretOnFirstLine}
-    menuLabel="命令"
-    dataSlot="slash-menu"
-    emptyMessage={composerFailed ? "命令目录不可用" : composerLoaded ? "无匹配命令" : "加载命令…"}
-    sourceLabel="内核命令注册表"
-    onSelect={(value) => onSlashSelect(value)}
-    bind:this={slashMenu}
-  />
-  <TriggerMenu
-    trigger="$"
-    entries={skillEntries}
-    {text}
-    {caretOnFirstLine}
-    menuLabel="技能"
-    dataSlot="skill-menu"
-    emptyMessage={composerFailed ? "技能目录不可用" : composerLoaded ? "无匹配技能" : "加载技能…"}
-    sourceLabel="内核技能注册表（user-invocable）"
-    onSelect={(value) => onSkillSelect(value)}
-    bind:this={kbMenu}
-  />
+  {#if triggers}
+    <TriggerMenu
+      trigger="/"
+      entries={composerCommands}
+      {text}
+      {caretOnFirstLine}
+      menuLabel="命令"
+      dataSlot="slash-menu"
+      emptyMessage={composerFailed ? "命令目录不可用" : composerLoaded ? "无匹配命令" : "加载命令…"}
+      sourceLabel="内核命令注册表"
+      onSelect={(value) => onSlashSelect(value)}
+      bind:this={slashMenu}
+    />
+    <TriggerMenu
+      trigger="$"
+      entries={skillEntries}
+      {text}
+      {caretOnFirstLine}
+      menuLabel="技能"
+      dataSlot="skill-menu"
+      emptyMessage={composerFailed ? "技能目录不可用" : composerLoaded ? "无匹配技能" : "加载技能…"}
+      sourceLabel="内核技能注册表（user-invocable）"
+      onSelect={(value) => onSkillSelect(value)}
+      bind:this={kbMenu}
+    />
+  {/if}
 
   {#if attachments.length > 0 || uploading}
     <div class="mb-1.5 flex flex-wrap gap-1">
@@ -402,16 +426,18 @@
         oncompact={() => onsend("/compact")}
       />
     </div>
-    <button
-      type="button"
-      class="flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
-      title="附加图片（≤4MiB/张）"
-      aria-label="附加图片"
-      disabled={uploading || disabled || sending}
-      onclick={() => fileInput?.click()}
-    >
-      <IconImage class="h-3.5 w-3.5" aria-hidden="true" />
-    </button>
+    {#if attachable}
+      <button
+        type="button"
+        class="flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+        title="附加图片（≤4MiB/张）"
+        aria-label="附加图片"
+        disabled={uploading || disabled || sending}
+        onclick={() => fileInput?.click()}
+      >
+        <IconImage class="h-3.5 w-3.5" aria-hidden="true" />
+      </button>
+    {/if}
     {#if groups.length > 0}
       <Popover.Root open={menuOpen} onOpenChange={(open) => (menuOpen = open)}>
         <Popover.Trigger>
@@ -505,7 +531,7 @@
                 {#if currentEffort !== null}
                   <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true"></span>
                 {/if}
-                <span class="truncate">{currentEffort ?? "模型默认"}</span>
+                <span class="truncate">{currentEffort ?? (defaultEffortValue !== null ? `${defaultEffortValue}（默认）` : "模型默认")}</span>
                 <IconChevronDown class="h-3 w-3 shrink-0 opacity-60" aria-hidden="true" />
               </button>
             {/snippet}
@@ -528,7 +554,7 @@
                     <IconCheck class="h-3 w-3" aria-hidden="true" />
                   {/if}
                 </span>
-                <span>模型默认</span>
+                <span>{defaultEffortValue !== null ? `${defaultEffortValue}（默认）` : "模型默认"}</span>
               </button>
               {#each activeEfforts as effort (effort)}
                 <button

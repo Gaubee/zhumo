@@ -32,10 +32,11 @@ export interface BridgedRoute {
   models: Array<{ id: string; contextWindow?: number }>;
 }
 
-/** 多路由桥接载荷（boot 用）：全量路由 + 默认模型。 */
+/** 多路由桥接载荷（boot 用）：全量路由 + 默认模型（effort=后台默认强度档，
+ * 2026-09-28：不进 settings.yaml——经 agentOptions 生效，仅 daemon 消费）。 */
 export interface ModelRoutesBundle {
   routes: BridgedRoute[];
-  default: { provider: string; model: string } | null;
+  default: { provider: string; model: string; effort?: string | null } | null;
 }
 
 /** 旧 llm_* 键面（兼容链/白名单沿用；多路由真源见 models-store.ts）。 */

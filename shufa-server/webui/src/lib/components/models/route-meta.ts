@@ -154,3 +154,11 @@ export function slugBase(provider: string): string {
 export function isNamespaceModelId(id: string): boolean {
   return id.includes("/") || id.includes("@");
 }
+
+/** 后台默认思考强度档算法（Owner 2026-09-28，与 daemon resolveDefaultEffort
+ * 同式）：管理员未配置时按 efforts 顺序取下标 ceil(N/2)（3 档→下标 2 即第
+ * 三档；1 档边界收 0）。null = 无目录（「模型默认」= 内核自选）。 */
+export function resolveDefaultEffort(efforts: string[] | undefined): string | null {
+  if (efforts === undefined || efforts.length === 0) return null;
+  return efforts[Math.min(Math.ceil(efforts.length / 2), efforts.length - 1)] ?? null;
+}

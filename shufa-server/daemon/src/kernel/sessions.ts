@@ -117,7 +117,7 @@ export interface TaskSessionDeps {
    * effort（2026-09-25 前台对齐）：任务级思考强度档（model_effort 列；null=不覆盖）。 */
   modelSelection: (
     taskId: string,
-  ) => Promise<{ provider: string; model: string; effort?: string } | null>;
+  ) => Promise<{ provider: string; model: string; effort?: string | null } | null>;
   retention?: number;
   /** agent turn 以 error 终止时的失败回调（W7 联调：任务失败路径不悬挂）。 */
   onSessionFailure?: (sessionId: string, reason: string) => void;
