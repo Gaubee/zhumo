@@ -436,15 +436,20 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     makeEntry(handle, taskId, store, seeded);
     const entry = live.get(sessionId)!;
     agent.onFrames = (frames) => {
+      // W10k 队列钩子（demo 轮事件经帧流而非 firehose）——按帧型分序
+      // （Codex 二轮条件性 P1）：turn-start 钩子先行（配对留存
+      // activeAnchorKernelId，同批 turn-start + user-text 也不漏盖）；
+      // turn-end 钩子殿后（清扫 inflight 前先让本批 attach 帧按队列
+      // kernelId 盖到自己的戳）。钩子里 pump 把该轮 attach 组 steer 进
+      // DemoAgent（consumeHead 批间吸收为补充）。
+      for (const frame of frames) {
+        if (frame.kind === 'turn-start') onQueueTurnStart(entry);
+      }
       const dated = frames.map((f, i) => ({ ...f, seq: entry.frameSeq + i }));
       entry.frameSeq += dated.length;
       commitFrames(entry, dated);
-      // W10k 队列钩子（demo 轮事件经帧流而非 firehose）：turn-start 批先行
-      // ——钩子里 pump 已把该轮 attach 组 steer 进 DemoAgent（consumeHead 批
-      // 间吸收为补充）；turn-end 清扫 inflight + pump 续跑。
       for (const frame of frames) {
-        if (frame.kind === 'turn-start') onQueueTurnStart(entry);
-        if (frame.kind === 'turn-end') onQueueTurnEnd(entry);
+        if (frame.kind === 'turn-end') onQueueTurnEnd(entry, false);
       }
     };
     // demo idle 与真实内核同守卫：队列头仍可投（如仅剩锁定段外的下一批）

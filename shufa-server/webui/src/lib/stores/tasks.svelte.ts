@@ -171,15 +171,37 @@ async function loadTaskRow(taskId: string): Promise<void> {
 }
 
 function dropOptimistic(match: { text: string; queueItem?: string }): void {
+  let removedById = false;
   tasks.frames = tasks.frames.filter((f) => {
     if (f.kind !== "user-text") return true;
     const payload = (f.payload ?? {}) as { optimistic?: boolean; queue_item?: string };
     if (payload.optimistic !== true) return true;
-    // 有 id 时严格 id-only（Codex P2：文本兜底会误删同文本的其它乐观帧）；
-    // 无 id（slash 直投/mock 路径）回落文本。
-    if (match.queueItem !== undefined) return payload.queue_item !== match.queueItem;
+    // ①id 命中优先（带戳路径精确配对）；无戳路径（slash 直投/mock）文本兜底。
+    if (match.queueItem !== undefined) {
+      if (payload.queue_item === match.queueItem) {
+        removedById = true;
+        return false;
+      }
+      return true;
+    }
     return (f.text ?? "") !== match.text;
   });
+  // ②竞态回收（Codex 二轮 P1）：WS 真帧先于 RPC 响应到达——乐观帧此刻
+  // 还没拿到 id，严格 id-only 漏删会双显。回收「最近一条·无 id·同文本」
+  // 的未认领乐观帧（每次发送恰产生一条，文本+无 id 唯一定位）。
+  if (match.queueItem !== undefined && !removedById) {
+    const idx = [...tasks.frames]
+      .map((f, i) => ({ f, i }))
+      .filter(
+        ({ f }) =>
+          f.kind === "user-text" &&
+          (f.payload as { optimistic?: boolean } | undefined)?.optimistic === true &&
+          (f.payload as { queue_item?: string } | undefined)?.queue_item === undefined &&
+          (f.text ?? "") === match.text,
+      )
+      .pop()?.i;
+    if (idx !== undefined) tasks.frames = tasks.frames.filter((_, i) => i !== idx);
+  }
 }
 
 export async function sendPrompt(prompt: string, mode: "followup" | "steer" = "followup"): Promise<void> {
@@ -260,13 +282,20 @@ export async function stopPrompt(): Promise<void> {
 
 // ------------------------------------------------ 队列面板操作（W10b）
 
+/** 队列刷新代次（Codex 二轮 P1）：帧驱动/操作/重连多方并发刷新，旧响应
+ * 晚归不得覆盖新状态（切任务后写回旧任务队列会污染 displayFrames/
+ * consumedIds 判断）。写回前校验 taskId + 代次双条件。 */
+let queueRefreshSeq = 0;
+
 export async function refreshQueue(): Promise<void> {
   const taskId = tasks.selectedId;
   if (taskId === null) return;
   // 拖动中的本地序不可被远端覆盖（锁定段在 daemon，重拉无碍）。
   if (queue.reordering) return;
+  const seq = ++queueRefreshSeq;
   try {
     const out = await api.taskQueue(taskId);
+    if (seq !== queueRefreshSeq || tasks.selectedId !== taskId) return; // 过期响应丢弃
     queue.items = out.items;
     queue.lockBoundary = out.lockBoundary;
     // W10m：不再按文本清乐观帧——displayFrames/pendingQueueItems 以 id 协调

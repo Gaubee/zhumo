@@ -365,3 +365,16 @@ actions 禁用+暂停帧驱动刷新防抖动，drop 一次性提交新序）。
 
 daemon 184/184 + tsc 0 + svelte-check 0 错 + build ✓；live：mid 盖章落盘
 （seq 级验证）、发送无空窗、无双泡、边界移动往返。
+
+## W10n 二轮修复（Codex 复核 8.0/10 剩余项，2026-09-29）
+
+- 【P1·竞态回收】WS 真帧先于 RPC 响应到达时，乐观帧还没拿到 id——严格
+  id-only 漏删致双显。dropOptimistic：id 命中优先；未命中且有戳时回收
+  「最近一条·无 id·同文本」未认领乐观帧（每次发送恰一条，定位唯一）。
+- 【P1·刷新代次】refreshQueue 加单调代次 + taskId 双校验——切任务/重连/
+  帧驱动并发刷新时旧响应晚归不再覆盖当前队列视图。
+- 【条件性·钩子分序】demo 帧包装器按帧型分序：turn-start 钩子先行（配对
+  留存 activeAnchorKernelId，同批 turn-start+user-text 防御性不漏盖）、
+  turn-end 钩子殿后（清扫 inflight 前让本批 attach 帧先盖到自己的戳）。
+- 门禁：daemon 184/184 + tsc 0 + svelte-check 0 错 + build ✓；live 回归
+  （无空窗/单泡/盖章落盘/chip 清空）。
