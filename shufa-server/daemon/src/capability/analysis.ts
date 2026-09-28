@@ -20,6 +20,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { TerminalAnalysisSummarySchema } from '@zhumo/contracts';
 import { refreshWindowsPath } from '../win-path-refresh.js';
 import type { CapabilityCallResult, CapabilityDefinition } from './core.js';
 
@@ -461,6 +462,25 @@ export function wrapExportCompletion(
       // path.resolve——那会锚到 daemon 进程 cwd 而非用户根目录）。
       const location = workdir ? deps.findTaskByDir(workdir) : null;
       if (location === null || typeof value.bundle !== 'string') return result;
+      // 终态门禁（Codex 五审 P1-1：CLI/手工注入的 summary 不经
+      // summary_write 的 zod 硬校验——产品入口在建 results 行前对 bundle
+      // 内 summary 复核终态契约，未达即拒绝导出）。data.json 缺失/损坏
+      // 仍走旧路径（onExported 收尾域负责 bundle 完整性）。
+      try {
+        const bundleData = JSON.parse(
+          readFileSync(path.join(value.bundle, 'data.json'), 'utf8'),
+        ) as { summary?: unknown };
+        const terminal = TerminalAnalysisSummarySchema.safeParse(bundleData.summary);
+        if (!terminal.success) {
+          return failed(
+            `bundle summary 未达终态契约（paragraphs/key_points 须全为 {kind,text[,source]} 对象；fact 必带非空 source）：${terminal.error.issues
+              .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
+              .join('；')}`,
+          );
+        }
+      } catch {
+        // data.json 不可读：不在本门禁域（见上）。
+      }
       const exported = deps.onExported(location.taskId, value.bundle);
       return exported === null
         ? result
@@ -470,6 +490,57 @@ export function wrapExportCompletion(
           };
     },
   };
+}
+
+// ------------------------------------------------ 共享校验表（daemon lint 与
+// e2e 产物断言同一来源——Codex 五审 P2：两份复制表会漂移成网内自洽假阳性）。
+
+/** 视觉动作黑名单（agent 看不到画面；引号内转录原话豁免）。 */
+export const VISUAL_RE = /(圈画|画了圈|圈出|圈点|划出|勾出|红笔|笔迹|示范|归位纠正)/g;
+/** fact 兜底风险词表（终态主门是 source+锚点；此表拦已知的无源分析词形。
+ * AFk7oLRzFQlm 实证漏项已补：圈出/圈点/先肯定/搭对/同一条竖线/迎让/归位）。 */
+export const RISKY_RE = /(中轴|垂直线|竖直线|同一条竖线|重心|最关键|最容易|正对|正下方|匀称|比例|部件错位|对位标准|动手纠正|未对齐|逐字精讲|圈出|圈点|先肯定|以鼓励|搭对了|迎让|归位)/;
+/** ≥4 字配对引文（硬校验域；短引文同音变体易误伤，不做逐字硬核）。 */
+export const QUOTE_RE = /「([^」]{4,})」|“([^”]{4,})”|『([^』]{4,})』/g;
+/** 任意长度引号整段剥除（词表豁免域——「重心」这类短引号也是原话，五审 P2 误伤修复）。 */
+export const ANY_QUOTE_RE = /「[^」]*」|“[^”]*”|『[^』]*』/g;
+/** 归一化：去空白与标点（引文/锚点比对共用）。 */
+export function normalizeClaimText(t: string): string {
+  return t.replace(/[\s，。、；：？！,.;:?!"'（）()「」『』…—·]/g, '');
+}
+export function quoteOf(m: RegExpMatchArray): string {
+  return m[1] ?? m[2] ?? m[3] ?? '';
+}
+
+/**
+ * fact 溯源锚点核验（Codex 五审 P1-2：source 只证明「段存在」，不证明
+ * text 整体被支撑——「半真半假夹带」可绕过。判据按 run12 真实产物校准：
+ * 每个句子须含 ≥4 字连续原文片段出现在 source 所指段中；纯夹带句（如
+ * 「而且每天练习一百遍」）锚点为零即拒）。返回错误列表（空=通过）。
+ */
+export function factAnchorErrors(
+  claim: { kind: string; text: string; source: number[] },
+  segments: string[],
+  where: string,
+): string[] {
+  if (claim.kind !== 'fact') return [];
+  const scope = normalizeClaimText(claim.source.map((idx) => segments[idx] ?? '').join(''));
+  const errors: string[] = [];
+  for (const sent of claim.text.split(/[。；！？\n]/)) {
+    const ns = normalizeClaimText(sent);
+    // <4 字的残句（引导语/语气词）单独核无意义，并入相邻句由整句锚点覆盖。
+    if (ns.length < 4) continue;
+    let anchored = false;
+    for (let k = 0; k + 4 <= ns.length && !anchored; k += 1) {
+      if (scope.includes(ns.slice(k, k + 4))) anchored = true;
+    }
+    if (!anchored) {
+      errors.push(
+        `${where} 的句子无原文锚点：「${sent}」——每句须含所引段 ≥4 字连续原话；夹带内容改 {"kind":"inference"} 或删除`,
+      );
+    }
+  }
+  return errors;
 }
 
 // ---------------------------------------------------------------- summary/labels 结构 lint
@@ -524,15 +595,13 @@ function lintContentSemantics(
 
   // 1) 引文忠实（≥4 字才核对：短引文同音/变体太易误伤）。引号内已逐字核过
   // = 转录原话，视觉动词黑名单对其豁免。
-  const norm = (t: string) =>
-    t.replace(/[\s，。、；：？！,.;:?!"'（）()「」『』…—·]/g, '');
-  // 配对一致（run7 实证 agent 会混用「…" 错配——跨族正则切出怪引文）。
-  const quoteRe = /「([^」]{4,})」|“([^”]{4,})”|『([^』]{4,})』/g;
-  const quoteOf = (m: RegExpMatchArray): string => m[1] ?? m[2] ?? m[3] ?? '';
-  const strippedQuotes = (t: string): string => t.replace(quoteRe, '');
+  const norm = normalizeClaimText;
+  const quoteRe = QUOTE_RE;
+  const quoteOfLocal = quoteOf;
+  const strippedQuotes = (t: string): string => t.replace(ANY_QUOTE_RE, '');
   const quotes: string[] = [];
   for (const para of texts) {
-    for (const m of para.matchAll(quoteRe)) quotes.push(quoteOf(m));
+    for (const m of para.matchAll(quoteRe)) quotes.push(quoteOfLocal(m));
   }
   claims.forEach((claim, i) => {
     if (transcriptText === '' || quotes.length === 0) return;
@@ -542,7 +611,7 @@ function lintContentSemantics(
         : transcriptText;
     const haystack = norm(scope);
     for (const m of texts[i]!.matchAll(quoteRe)) {
-      const q = quoteOf(m);
+      const q = quoteOfLocal(m);
       if (!haystack.includes(norm(q))) {
         errors.push(`第 ${i + 1} 条引文未见于其声明的来源段：「${q}」（fact 只能引 source 所指的转录段原话）`);
       }
@@ -550,8 +619,9 @@ function lintContentSemantics(
   });
 
   // 2) 视觉动词黑名单（Codex 三审 P1：agent 看不到画面，任何视觉动作断言
-  // 都是编造——run5 三条 desc 全写「圈画」实证）。
-  const visualRe = /(圈画|画了圈|圈出|圈点|划出|勾出|红笔|笔迹|示范|归位纠正)/g;
+  // 都是编造——run5 三条 desc 全写「圈画」实证）。豁免域=任意长度引号
+  // （五审 P2：「重心」等短引号也是原话，≥4 字豁免会误伤）。
+  const visualRe = VISUAL_RE;
   const checkVisual = (text: string, where: string) => {
     for (const m of strippedQuotes(text).matchAll(visualRe)) {
       errors.push(`${where}：视觉动作「${m[1]}」无证据——你看不到画面，删除或改为转录原话引用`);
@@ -609,13 +679,9 @@ function lintContentSemantics(
     });
   }
 
-  // 5) 高风险分析词不得混入纯 string 事实段（三审 run6/run7 两轮实证模型
-  //    不执行自检——升为拒写级驱动拆分或 inference 声明；词表为过渡方案，
-  //    终态是 Codex 建议的证据字段。引号内原话豁免。
-  // 词表四审封版（不再扩：终态换 source+segment 证据字段）。
-  // 词表兜底（终态下事实段已强制 source；此表仍拦 fact 里的无源分析词形——
-  // 补 AFk7oLRzFQlm 实证漏项：圈出/圈点/先肯定/搭对/同一条竖线/迎让/归位）。
-  const riskyRe = /(中轴|垂直线|竖直线|同一条竖线|重心|最关键|最容易|正对|正下方|匀称|比例|部件错位|对位标准|动手纠正|未对齐|逐字精讲|圈出|圈点|先肯定|以鼓励|搭对了|迎让|归位)/;
+  // 5) fact 兜底词表（终态主门=source+锚点；此表只拦已知的无源分析词形，
+  //    引号内原话豁免——豁免域为任意长度引号）。
+  const riskyRe = RISKY_RE;
   claims.forEach((claim, i) => {
     if (claim.kind !== 'fact') return;
     const hit = riskyRe.exec(strippedQuotes(claim.text));
@@ -624,6 +690,19 @@ function lintContentSemantics(
         `第 ${i + 1} 条 fact 含分析判断「${hit[1]}」——老师没说过的判断须改为 {"kind":"inference"} 或删除`,
       );
     }
+  });
+
+  // 6) fact 溯源锚点（Codex 五审 P1-2：source 只证段存在不证内容支撑——
+  //    每句须含 ≥4 字连续原文锚点，拦「半真半假夹带」；判据经 run12
+  //    真实产物校准，见 factAnchorErrors 注释）。
+  claims.forEach((claim, i) => {
+    errors.push(
+      ...factAnchorErrors(
+        claim as { kind: string; text: string; source: number[] },
+        segments.map((s) => s.text ?? ''),
+        `第 ${i + 1} 条 fact`,
+      ),
+    );
   });
 
   return errors;

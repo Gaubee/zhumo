@@ -96,17 +96,24 @@ export type AnalysisTranscript = z.infer<typeof AnalysisTranscriptSchema>;
  * 总结。source 词表（2026-09-25 对齐生产端）：agent=模型亲写（summary_write 注入，
  * daemon 默认）/ injected=summary 文件注入（CLI 旧路径）/ heuristic=CLI 规则摘要。
  */
-/** 段落元素（终态契约 2026-09-27：fact 必带转录段引用）：fact = 转录事实
- * （source=segments 下标）；inference/suggestion = 显式声明的推断/建议。
- * 纯 string 仅旧 bundle 兼容（heuristic 摘要仍产 string 段）。 */
-export const AnalysisClaimSchema = z.union([
-  z.string(),
+/** 终态写契约（Codex 五审 P1-1：写入/导出门禁用）：fact 必带非空 source
+ * （转录段下标）；纯 string 不再接受。 */
+export const TerminalClaimSchema = z.union([
   z.object({
     kind: z.literal('fact'),
-    text: z.string(),
-    source: z.array(z.number().int().min(0)).optional(),
+    text: z.string().min(1),
+    source: z.array(z.number().int().min(0)).min(1),
   }),
-  z.object({ kind: z.enum(['inference', 'suggestion']), text: z.string() }),
+  z.object({ kind: z.enum(['inference', 'suggestion']), text: z.string().min(1) }),
+]);
+export type TerminalClaim = z.infer<typeof TerminalClaimSchema>;
+
+/** 读契约：终态形态 + 旧 bundle 形态（纯 string＝heuristic/旧产物、无
+ * source 的 fact＝中间态）——仅渲染兼容，不作为写入依据。 */
+export const AnalysisClaimSchema = z.union([
+  TerminalClaimSchema,
+  z.string(),
+  z.object({ kind: z.literal('fact'), text: z.string() }),
 ]);
 export type AnalysisClaim = z.infer<typeof AnalysisClaimSchema>;
 
@@ -117,6 +124,17 @@ export const AnalysisSummarySchema = z.object({
   source: z.enum(['heuristic', 'injected', 'agent']).optional(),
 });
 export type AnalysisSummary = z.infer<typeof AnalysisSummarySchema>;
+
+/** 终态 summary 写契约（export 门禁用）：paragraphs/key_points 全部为
+ * TerminalClaim，且非空——agent 亲写的导出产物必须达到此形态
+ * （heuristic/injected 旧路径不适用此门）。 */
+export const TerminalAnalysisSummarySchema = z.object({
+  topic: z.string().min(1),
+  paragraphs: z.array(TerminalClaimSchema).min(1),
+  key_points: z.array(TerminalClaimSchema).min(1),
+  source: z.enum(['agent']).optional(),
+});
+export type TerminalAnalysisSummary = z.infer<typeof TerminalAnalysisSummarySchema>;
 
 export const AnalysisRawStatsSchema = z.object({
   steps: z.number().int(),

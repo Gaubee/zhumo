@@ -186,13 +186,13 @@ describe('shufa capability 工具面', () => {
     mkdirSync(path.join(taskDir, '.shufa-work'), { recursive: true });
     writeFileSync(
       path.join(taskDir, '.shufa-work', 'manifest.json'),
-      JSON.stringify({ probe: { duration_s: 30 }, transcribe: { segments: [{ start: 0, end: 3, text: '内容' }] } }),
+      JSON.stringify({ probe: { duration_s: 30 }, transcribe: { segments: [{ start: 0, end: 3, text: '讲评桂字的内容' }] } }),
     );
     const good = await registry.call(
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"桂","paragraphs":[{"kind":"fact","text":"左右结构","source":[0]}],"key_points":[{"kind":"fact","text":"两土对齐","source":[0]}]}',
+        content: '{"topic":"桂","paragraphs":[{"kind":"fact","text":"本段讲评桂字","source":[0]}],"key_points":[{"kind":"fact","text":"讲评桂字要领","source":[0]}]}',
       },
       'agent',
     );
@@ -220,7 +220,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"桂","paragraphs":[{"kind":"fact","text":"左右结构","source":[0]}],"key_points":[{"kind":"fact","text":"两土对齐","source":[0]}]}',
+        content: '{"topic":"桂","paragraphs":[{"kind":"fact","text":"本段讲评桂字","source":[0]}],"key_points":[{"kind":"fact","text":"讲评桂字要领","source":[0]}]}',
         labels: '{"grids":[{"index":0,"label":"桂"}],"annotations":[{"index":0,"desc":"指出主笔"}]}',
       },
       'agent',
@@ -268,7 +268,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"桂","paragraphs":[{"kind":"fact","text":"左右结构","source":[0]}],"key_points":[{"kind":"fact","text":"两土对齐","source":[0]}]}',
+        content: '{"topic":"桂","paragraphs":[{"kind":"fact","text":"本段讲评桂字","source":[0]}],"key_points":[{"kind":"fact","text":"讲评桂字要领","source":[0]}]}',
         labels: '{"grids":[{"index":0,"label":"桂"},{"index":2,"label":"桂"}],"annotations":[{"index":0,"desc":"指出主笔"}]}',
       },
       'agent',
@@ -284,7 +284,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"桂","paragraphs":[{"kind":"fact","text":"左右结构","source":[0]}],"key_points":[{"kind":"fact","text":"两土对齐","source":[0]}]}',
+        content: '{"topic":"桂","paragraphs":[{"kind":"fact","text":"本段讲评桂字","source":[0]}],"key_points":[{"kind":"fact","text":"讲评桂字要领","source":[0]}]}',
         labels: '{"grids":[{"index":0,"label":"桂"},{"index":1,"label":""}],"annotations":[{"index":0,"desc":"指出主笔"}]}',
       },
       'agent',
@@ -356,7 +356,7 @@ describe('shufa capability 工具面', () => {
       {
         workdir: taskDir,
         content:
-          '{"topic":"桂","paragraphs":[{"kind":"fact","text":"老师强调「要注意这个土跟这个土上下要对齐」","source":[1]}],"key_points":[{"kind":"fact","text":"两土对齐（t≈15s）","source":[1]}]}',
+          '{"topic":"桂","paragraphs":[{"kind":"fact","text":"老师强调「要注意这个土跟这个土上下要对齐」","source":[1]}],"key_points":[{"kind":"fact","text":"上下要对齐（t≈15s）","source":[1]}]}',
         labels:
           '{"grids":[{"index":0,"label":"桂"},{"index":1,"label":"桂"},{"index":2,"label":"桂"}],"annotations":[{"index":1,"desc":"t≈15s：强调上下两土对齐"}]}',
       },
@@ -514,13 +514,62 @@ describe('shufa capability 工具面', () => {
     expect(mixed).toMatchObject({ kind: 'ok' });
     const written = JSON.parse(readFileSync(path.join(taskDir, 'summary.json'), 'utf8'));
     expect(written.paragraphs[1]).toMatchObject({ kind: 'inference' });
+    // 6) 溯源锚点（五审 P1-2：「半真半假夹带」——首句有锚点、次句纯编造 → 拒）。
+    const smuggle = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content:
+          '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师说这是左右结构。而且每天练习一百遍。","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
+      },
+      'agent',
+    );
+    expect(smuggle.kind).toBe('failed');
+    expect((smuggle as { message: string }).message).toContain('无原文锚点');
+    // 7) 短引号豁免（五审 P2：「重心」这类 <4 字引号也是原话，词表不误伤）。
+    const shortQuote = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content:
+          '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师讲了「重心」的讲评甲字的内容。","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
+      },
+      'agent',
+    );
+    expect(shortQuote).toMatchObject({ kind: 'ok' });
+  });
+
+  it('export 终态门禁（五审 P1-1）：bundle summary 退化为纯 string → 拒绝导出', async () => {
+    writeFileSync(path.join(taskDir, 'summary.json'), '{"topic":"桂"}', 'utf8');
+    const bundle = path.join(userRoot, 'bundle-legacy');
+    mkdirSync(bundle, { recursive: true });
+    writeFileSync(
+      path.join(bundle, 'data.json'),
+      JSON.stringify({ summary: { topic: '桂', paragraphs: ['旧形态纯字符串'], key_points: ['要点'] } }),
+      'utf8',
+    );
+    const gate = makeRegistry([{ code: 0, stdout: JSON.stringify({ step: 'export', bundle }) + '\n', stderr: '' }]);
+    const rejected = await gate.call('shufa.export', { workdir: taskDir }, 'agent');
+    expect(rejected.kind).toBe('failed');
+    expect((rejected as { message: string }).message).toContain('未达终态契约');
   });
 
   it('export：summary-file 注入 + bundle 命中 → onExported 附加结果链接', async () => {
     writeFileSync(path.join(taskDir, 'summary.json'), '{"topic":"桂"}', 'utf8');
     const bundle = path.join(userRoot, 'bundle');
     mkdirSync(bundle, { recursive: true });
-    writeFileSync(path.join(bundle, 'data.json'), '{}', 'utf8');
+    // 终态门禁（五审 P1-1）：bundle data.json 的 summary 须达终态契约。
+    writeFileSync(
+      path.join(bundle, 'data.json'),
+      JSON.stringify({
+        summary: {
+          topic: '桂',
+          paragraphs: [{ kind: 'fact', text: '老师讲评桂字', source: [0] }],
+          key_points: [{ kind: 'suggestion', text: '练习' }],
+        },
+      }),
+      'utf8',
+    );
     const exporting = makeRegistry([{ code: 0, stdout: JSON.stringify({ step: 'export', bundle }) + '\n', stderr: '' }]);
     const result = await exporting.call('shufa.export', { workdir: taskDir }, 'agent');
     expect(result.kind).toBe('ok');

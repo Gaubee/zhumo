@@ -11,10 +11,14 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { RPCLink } from '@orpc/client/websocket';
 import { createORPCClient } from '@orpc/client';
+// 校验表与 daemon 同源（Codex 五审 P2：两份复制表漂移=网内自洽假阳性）。
+const { VISUAL_RE, RISKY_RE, QUOTE_RE, ANY_QUOTE_RE, normalizeClaimText, quoteOf, factAnchorErrors } = await import(
+  '../daemon/src/capability/analysis.js'
+);
 
 const videoPath = process.argv[2] ?? '';
 const daemonUrl = process.argv[3] ?? 'ws://127.0.0.1:8217';
-const webuiBase = process.env.E2E_WEBUI_URL ?? 'http://127.0.0.1:5173';
+const webuiBase = process.env.E2E_WEBUI_URL ?? 'http://127.0.0.1:8217'; // daemon 静态托管 webui/dist
 const DATA_ROOT = process.env.E2E_DATA_ROOT ?? path.join(process.env.HOME!, 'Library/Application Support/zhumo');
 if (!existsSync(videoPath)) {
   console.error('用法: npx tsx ../e2e-shufa.mts <视频绝对路径> [ws-url]');
@@ -106,9 +110,8 @@ if (task?.status !== 'done') {
     // 3) 三态契约：每条 claim 必须是合法对象（纯 string 已被 daemon 拒绝——
     //    产物里再出现即契约回退）；fact 的 source 必须非空且在段界内。
     const claims = [...(summary.paragraphs ?? []), ...(summary.key_points ?? [])];
-    const norm = (t: string) => t.replace(/[\s，。、；：？！,.;:?!"'（）()「」『』…—·]/g, '');
-    const quoteRe = /「([^」]{4,})」|“([^”]{4,})”|『([^』]{4,})』/g;
-    const quoteOf = (m: RegExpMatchArray): string => m[1] ?? m[2] ?? m[3] ?? '';
+    const norm = normalizeClaimText;
+    const quoteRe = QUOTE_RE;
     for (const [i, c] of claims.entries()) {
       const where = i < (summary.paragraphs ?? []).length ? `paragraphs[${i}]` : `key_points[${i - (summary.paragraphs ?? []).length}]`;
       if (typeof c === 'string' || c === null || !['fact', 'inference', 'suggestion'].includes(c?.kind)) {
@@ -124,14 +127,16 @@ if (task?.status !== 'done') {
         for (const m of String(c.text ?? '').matchAll(quoteRe)) {
           check(norm(scope).includes(norm(quoteOf(m))), `${where} fact 引文逐字出自所引段：「${quoteOf(m)}」`);
         }
+        // 溯源锚点（五审 P1-2 的产物面复核：每句 ≥4 字连续原文锚点）。
+        for (const err of factAnchorErrors(c as { kind: string; text: string; source: number[] }, segments, where)) {
+          check(false, err);
+        }
       }
     }
-    // 4) 高风险分析词不得混入 fact（词表与 daemon riskyRe 同表；daemon 改表时
-    //    同步此处。fact 段外的 inference/suggestion 不查；引号内原话豁免）。
-    const RISKY = /(中轴|垂直线|竖直线|同一条竖线|重心|最关键|最容易|正对|正下方|匀称|比例|部件错位|对位标准|动手纠正|未对齐|逐字精讲|圈出|圈点|先肯定|以鼓励|搭对了|迎让|归位)/;
+    // 4) 高风险分析词不得混入 fact（与 daemon RISKY_RE 同源；引号内原话豁免）。
     for (const [i, c] of claims.entries()) {
       if (c?.kind !== 'fact') continue;
-      check(!RISKY.test(String(c.text ?? '').replace(quoteRe, '')), `第 ${i + 1} 条 fact 无高风险分析词`);
+      check(!RISKY_RE.test(String(c.text ?? '').replace(ANY_QUOTE_RE, '')), `第 ${i + 1} 条 fact 无高风险分析词`);
     }
     // 5) annotations desc 全给
     const annoCount = manifest.ink?.annotations?.length ?? 0;
@@ -142,13 +147,13 @@ if (task?.status !== 'done') {
     }
     check((data.annotations ?? []).every((a: any) => typeof a.grid_idx === 'number'), 'annotations.grid_idx 全存在（格级关联）');
     check((data.summary?.paragraphs ?? []).length >= 2, 'data.summary 已注入');
-    // 7) desc 无视觉动作词（daemon 硬拦后的产物面复核）。
-    const VISUAL = /(圈画|画了圈|圈出|圈点|划出|勾出|红笔|笔迹|示范|归位纠正)/;
+    // 7) desc 无视觉动作词（daemon 硬拦后的产物面复核；同源 VISUAL_RE。
+    //    用 .match 而非 .test——g 旗标下 test 的 lastIndex 跨调用有状态）。
     for (const a of labels.annotations ?? []) {
-      check(!VISUAL.test(a.desc ?? ''), `labels.annotations[${a.index}].desc 无视觉动作词`);
+      check(!String(a.desc ?? '').match(VISUAL_RE), `labels.annotations[${a.index}].desc 无视觉动作词`);
     }
     for (const c of claims) {
-      check(!VISUAL.test(String(typeof c === 'string' ? c : c?.text ?? '').replace(quoteRe, '')), 'summary 段落无未豁免视觉动作词');
+      check(!String(typeof c === 'string' ? c : c?.text ?? '').replace(ANY_QUOTE_RE, '').match(VISUAL_RE), 'summary 段落无未豁免视觉动作词');
     }
   }
 }

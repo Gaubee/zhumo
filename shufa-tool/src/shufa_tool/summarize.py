@@ -86,8 +86,44 @@ def summarize(transcript_text: str, focus_char: str = "") -> Summary:
 def load_injected(path: Path, source: str = "injected") -> Summary:
     """--summary-file：JSON {topic, paragraphs, key_points}。
     source 标记实际来源（agent=模型经 summary_write 亲写 / injected=人工注入），
-    走查 2026-09-23：固定 "injected" 使 agent 亲写的摘要来源不可辨。"""
+    走查 2026-09-23：固定 "injected" 使 agent 亲写的摘要来源不可辨。
+    终态契约（Codex 五审 P1-1 对等）：paragraphs/key_points 元素一律
+    {kind,text[,source]} 对象——fact 必带非空 source（转录段下标整数数组，
+    从 0 起）；纯字符串不再接受（与 daemon summary_write 同规）。"""
+
+    class _SummaryShapeError(Exception):
+        pass
+
     data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        for field_name in ("paragraphs", "key_points"):
+            items = data.get(field_name, [])
+            if not isinstance(items, list):
+                raise _SummaryShapeError(f"{field_name} 必须是数组")
+            for i, item in enumerate(items):
+                if not isinstance(item, dict) or item.get("kind") not in (
+                    "fact",
+                    "inference",
+                    "suggestion",
+                ):
+                    raise _SummaryShapeError(
+                        f"{field_name}[{i}] 必须是 {{kind,text[,source]}} 对象（纯字符串已废弃）："
+                        "fact=老师原话（必带 source 段下标）/ inference=分析 / suggestion=建议"
+                    )
+                if item["kind"] == "fact":
+                    src = item.get("source")
+                    if (
+                        not isinstance(src, list)
+                        or not src
+                        or not all(
+                            isinstance(x, int) and not isinstance(x, bool) and x >= 0 for x in src
+                        )
+                    ):
+                        raise _SummaryShapeError(
+                            f"{field_name}[{i}].source 必须是非空转录段下标数组（整数，从 0 起）"
+                        )
+    except _SummaryShapeError as e:
+        raise ValueError(f"summary 结构未达终态契约：{e}") from e
     return Summary(
         topic=data.get("topic", ""),
         paragraphs=data.get("paragraphs", []),
