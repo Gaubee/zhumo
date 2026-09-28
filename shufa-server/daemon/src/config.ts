@@ -39,6 +39,7 @@ export const DEFAULT_ENV_TEMPLATE = [
   'LLM_BASE_URL=',
   'LLM_API_KEY=',
   'LLM_MODEL=',
+  'SHUFA_OCR_SIZE=medium',
   '#DATA_ROOT=（留空 = 系统数据目录：macOS ~/Library/Application Support/zhumo，Linux ~/.local/share/zhumo，Windows %LOCALAPPDATA%\zhumo）',
   '# 监听地址（§8 未列，daemon 约定：默认 127.0.0.1:8217，避开 6173 分析页）',
   '#HOST=127.0.0.1',

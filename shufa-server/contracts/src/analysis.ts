@@ -53,6 +53,9 @@ export const AnalysisCharSchema = z.object({
   visibility: z.number(),
   note: z.string(),
   label: z.string(),
+  /** PP-OCRv6 机器感知旁路；不参与 transcript/labels 证据核验。 */
+  label_ocr: z.string().optional(),
+  label_ocr_conf: z.number().min(0).max(1).optional(),
   crop: z.string(),
   /** 墨迹时序检测（背景帧减首帧差分）：true=开拍前已写（作业），false=
    * 视频中书写。机器检测事实，非语义标注（note 才是语义说明位）。 */

@@ -264,7 +264,11 @@ const setupSteps = setupGated.handler(async ({ context }) => {
 });
 
 const setupRunStep = setupGated.input(WizardRunInputSchema).handler(async ({ context, input }) => {
-  return context.wizard.run(input.id, input.force, { model: input.model, mirror: input.mirror });
+  return context.wizard.run(input.id, input.force, {
+    model: input.model,
+    mirror: input.mirror,
+    ocr_size: input.ocr_size,
+  });
 });
 
 // 取消运行中的步骤（走查 2026-09-24）：不经 setupGated——与 complete 同因，
@@ -474,7 +478,11 @@ const adminWizardSteps = requireAdmin.handler(({ context }) => {
 const adminWizardRun = requireActiveAdmin
   .input(WizardRunInputSchema)
   .handler(async ({ context, input }) => {
-    return context.wizard.run(input.id, input.force, { model: input.model, mirror: input.mirror });
+    return context.wizard.run(input.id, input.force, {
+      model: input.model,
+      mirror: input.mirror,
+      ocr_size: input.ocr_size,
+    });
   });
 
 const adminWizardCancel = requireActiveAdmin

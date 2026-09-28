@@ -891,6 +891,7 @@ function toWizardStepView(step: ContractWizardStep): WizardStep {
     title: step.title,
     command: step.command ?? undefined,
     url: step.url ?? undefined,
+    ocrSize: step.ocr_size,
     targetDir: step.target_dir,
     status: step.status,
     lastLog: step.last_log ?? "",

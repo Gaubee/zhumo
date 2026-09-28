@@ -1,13 +1,13 @@
 /**
  * 向导引擎测试：命令执行/嗅探跳过/force、下载真实 HTTP、断点续传、
- * whisper 型号×镜像参数化、种子迁移（W2' 验证门 + 走查 R3/R4/R5/R6）。
+ * whisper 型号×镜像参数化、OCR 档位保存、种子迁移（W2' 验证门 + 走查 R3/R4/R5/R6）。
  * 原始需求 2026-09-23（PRODUCT_DESIGN.md §1）；走查修订 2026-09-22。
  */
 import http from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { WHISPER_MODEL_CATALOG, WHISPER_MIRRORS } from '@zhumo/contracts';
+import { OCR_MODEL_CATALOG, WHISPER_MODEL_CATALOG, WHISPER_MIRRORS } from '@zhumo/contracts';
 import { getWizardStep, listWizardSteps, updateWizardProgress } from '../src/db/store.js';
 import {
   capStepLog,
@@ -477,8 +477,11 @@ describe('wizard 种子定义（走查 R3/R4/R5/R6）', () => {
     // Intel mac 维持 W9 前行为：mlx 无 x64 构建、Owner 裁决 macOS 保留现行为
     //（无转录，不展示永远跑不了的步骤）。
     expect(defaultWizardSeeds(ctx, 'darwin', 'x64').find((s) => s.id === 'whisper-model')).toBeUndefined();
-    // --extra transcribe：基础 sync 不含可选依赖（反而卸掉 mlx-whisper/torch）。
+    // 两个可选依赖组始终一起安装；档位目录不暴露手写精度不足的 tiny。
     expect(seeds.find((s) => s.id === 'python-env')?.command).toContain('--extra transcribe');
+    expect(seeds.find((s) => s.id === 'python-env')?.command).toContain('--extra ocr');
+    expect(OCR_MODEL_CATALOG.map((model) => model.id)).toEqual(['medium', 'small']);
+    expect(seeds.find((s) => s.id === 'python-env')?.probe).toContain('rapidocr, onnxruntime');
     // 探测验 venv 内容而非 uv 存在性（--no-sync 快速失败），import 按引擎族。
     const probe = seeds.find((s) => s.id === 'python-env')?.probe ?? '';
     expect(probe).toContain('--no-sync');
@@ -495,6 +498,37 @@ describe('wizard 种子定义（走查 R3/R4/R5/R6）', () => {
     expect(defaultWizardSeeds(ctx, 'darwin', 'x64').find((s) => s.id === 'python-env')?.probe ?? '').not.toContain(
       'whisper',
     );
+  });
+});
+
+describe('wizard OCR 档位设置', () => {
+  test('python-env 选择持久化到 .env，读取向导时回显，done 步骤也保存新选项', async () => {
+    const s = createServices();
+    const previous = process.env.SHUFA_OCR_SIZE;
+    try {
+      const marker = path.join(s.root, 'python-env-command-ran');
+      const runner = new WizardRunner(s.db, [
+        {
+          id: 'python-env',
+          kind: 'command',
+          title: 'Python 环境',
+          command: `touch "${marker}"`,
+          targetDir: s.root,
+        },
+      ], { envFile: s.envFile });
+      updateWizardProgress(s.db, 'python-env', { status: 'done' });
+      const step = await runner.run('python-env', false, { ocr_size: 'small' });
+      expect(step.status).toBe('done');
+      expect(step.ocr_size).toBe('small');
+      expect(runner.list().find((row) => row.id === 'python-env')?.ocr_size).toBe('small');
+      expect(readFileSync(s.envFile, 'utf8')).toContain('SHUFA_OCR_SIZE=small');
+      expect(process.env.SHUFA_OCR_SIZE).toBe('small');
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.SHUFA_OCR_SIZE;
+      else process.env.SHUFA_OCR_SIZE = previous;
+      s.dispose();
+    }
   });
 });
 

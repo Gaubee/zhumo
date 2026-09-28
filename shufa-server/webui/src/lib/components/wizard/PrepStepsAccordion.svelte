@@ -19,6 +19,7 @@
      下载进度条 + current/total 文案，终态保留不清空。
   5. whisper-model 步骤内嵌模型/镜像选择器，选中值随 onrun params 传出；
      来源链接显示选中组合的预测 URL（客户端合成，选中即更新）。
+  Owner 需求 [2026-09-28]：PP-OCRv6 档位在已安装后仍可单独保存，不触发依赖重装。
 -->
 <script lang="ts">
   import * as Select from "$lib/components/ui/select";
@@ -27,10 +28,11 @@
   import { Button } from "$lib/components/ui/button";
   import { Switch } from "$lib/components/ui/switch";
   import IconPlay from "@lucide/svelte/icons/play";
+  import IconSave from "@lucide/svelte/icons/save";
   import IconSquare from "@lucide/svelte/icons/square";
   import IconX from "@lucide/svelte/icons/x";
-  import { WHISPER_MIRRORS, WHISPER_MODEL_CATALOG, whisperModelIdFromRepo, whisperRepoFor } from "@zhumo/contracts";
-  import type { WhisperMirrorId, WhisperModelOption, WizardRunParams, WizardStep } from "$lib/types";
+  import { OCR_MODEL_CATALOG, WHISPER_MIRRORS, WHISPER_MODEL_CATALOG, whisperModelIdFromRepo, whisperRepoFor } from "@zhumo/contracts";
+  import type { OcrModelId, WhisperMirrorId, WhisperModelOption, WizardRunParams, WizardStep } from "$lib/types";
 
   let {
     steps,
@@ -53,6 +55,12 @@
   /** whisper-model 步骤的模型/镜像选择（默认 large-v3-turbo + official，与种子一致）。 */
   let whisperModel = $state("whisper-large-v3-turbo");
   let whisperMirror = $state<WhisperMirrorId>("official");
+  let ocrSize = $state<OcrModelId>("medium");
+
+  $effect(() => {
+    const selected = steps.find((step) => step.id === "python-env")?.ocrSize;
+    if (selected) ocrSize = selected;
+  });
 
   // 选型回填（2026-09-25 Windows 实测教训）：行 url 是后端持久化的事实源——
   // 组件卸载重建（分区切换/刷新）后视图默认值不得越过它，否则下次点下载会把
@@ -177,6 +185,9 @@
 
   /** 按钮文字：命令=运行；下载=.download 残差存在=恢复下载，否则开始下载。 */
   function actionLabel(step: WizardStep): string {
+    if (step.id === "python-env" && step.status === "done" && (step.ocrSize ?? "medium") !== ocrSize) {
+      return "保存档位";
+    }
     if (step.kind === "command") return "运行";
     return step.resumable ? "恢复下载" : "开始下载";
   }
@@ -202,11 +213,14 @@
     label: modelOptionLabel(model),
   }));
   const whisperMirrorItems = WHISPER_MIRRORS.map((mirror) => ({ value: mirror.id, label: mirror.label }));
+  const ocrModelItems = OCR_MODEL_CATALOG.map((model) => ({ value: model.id, label: model.label }));
 
   /** 点击运行/下载：whisper-model 步骤随发选中的模型与镜像，其余不传 params。 */
   function runStep(step: WizardStep, force: boolean): void {
     if (step.id === "whisper-model") {
       onrun(step.id, force, { model: whisperModel, mirror: whisperMirror });
+    } else if (step.id === "python-env") {
+      onrun(step.id, force, { ocr_size: ocrSize });
     } else {
       onrun(step.id, force);
     }
@@ -257,7 +271,8 @@
 {#snippet detailBody(step: WizardStep)}
   {@const isRunning = running === step.id || step.status === "running"}
   {@const force = forceMap[step.id] ?? false}
-  {@const rerunLocked = step.status === "done" && !force}
+  {@const ocrSelectionChanged = step.id === "python-env" && (step.ocrSize ?? "medium") !== ocrSize}
+  {@const rerunLocked = step.status === "done" && !force && !ocrSelectionChanged}
   <div class="flex min-w-0 flex-col gap-3 text-xs text-muted-foreground">
     <div class="flex flex-col gap-1">
       <span class="break-all">
@@ -351,6 +366,21 @@
         </label>
       </div>
     {/if}
+    {#if step.id === "python-env"}
+      <label class="flex min-w-0 flex-col gap-1">
+        <span class="text-muted-foreground">PP-OCRv6 档位</span>
+        <Select.Root type="single" items={ocrModelItems} bind:value={ocrSize}>
+          <Select.Trigger class="h-8 w-full min-w-0 text-xs" aria-label="选择 PP-OCRv6 档位">
+            <Select.Value />
+          </Select.Trigger>
+          <Select.Content class="max-h-64 text-xs">
+            {#each OCR_MODEL_CATALOG as model (model.id)}
+              <Select.Item value={model.id} label={model.label}>{model.label}</Select.Item>
+            {/each}
+          </Select.Content>
+        </Select.Root>
+      </label>
+    {/if}
     <div class="flex items-center justify-between gap-3">
       <label class="flex items-center gap-2">
         <Switch
@@ -379,7 +409,7 @@
         {/if}
       {:else}
         <Button size="sm" disabled={rerunLocked} onclick={() => runStep(step, force)}>
-          <IconPlay />
+          {#if ocrSelectionChanged}<IconSave />{:else}<IconPlay />{/if}
           {actionLabel(step)}
         </Button>
       {/if}

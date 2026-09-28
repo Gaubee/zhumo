@@ -15,19 +15,20 @@
  */
 import { spawn } from 'node:child_process';
 import { refreshWindowsPath } from './win-path-refresh.js';
-import { createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { WizardKind, WizardStep } from '@zhumo/contracts';
 import {
+  OCR_MODEL_CATALOG,
   WHISPER_MIRRORS,
   WHISPER_MODEL_CATALOG,
   whisperModelIdFromRepo,
   whisperRepoFor,
 } from '@zhumo/contracts';
-import { saveEnvValues } from './config.js';
+import { parseDotenv, saveEnvValues } from './config.js';
 import type { SqliteDb } from './db/database.js';
 import {
   getWizardStep,
@@ -49,6 +50,13 @@ export interface WizardContext {
 export interface WizardRunParams {
   model?: string;
   mirror?: 'official' | 'cn';
+  ocr_size?: OcrModelId;
+}
+
+type OcrModelId = (typeof OCR_MODEL_CATALOG)[number]['id'];
+
+function isOcrModelId(value: string | undefined): value is OcrModelId {
+  return OCR_MODEL_CATALOG.some((model) => model.id === value);
 }
 
 export interface WizardSeedInput {
@@ -206,14 +214,10 @@ export function defaultWizardSeeds(
     {
       id: 'python-env',
       kind: 'command',
-      // 标题显式引擎名（W9 二修）：本步骤就是转录引擎的独立安装项——win/linux
-      // 装 faster-whisper（CTranslate2）、mac 装 mlx-whisper；Intel mac 无引擎。
-      title: `Python 分析环境（uv sync${whisperEngine ? ` · 转录引擎 ${whisperEngine === 'mlx' ? 'mlx-whisper' : 'faster-whisper'}` : ''}）`,
-      // --extra transcribe（走查四轮）：基础 sync 不含可选依赖，反而会卸掉
-      // 已装引擎——转录能力静默消失。extra 自带平台标记（W9 后 win/linux
-      // =faster-whisper、darwin/arm64=mlx-whisper、Intel mac=空集），恒可安全传入。
-      command: `uv sync --project "${ctx.shufaToolDir}" --extra transcribe`,
-      probe: `uv run --no-sync --project "${ctx.shufaToolDir}" python -c "${pyProbeImports}"`,
+      // 两个额外依赖组一起同步，避免步骤运行时 uv 为某个 extra 重同步环境。
+      title: `Python 分析环境（转录与 OCR${whisperEngine ? ` · ${whisperEngine === 'mlx' ? 'mlx-whisper' : 'faster-whisper'}` : ''}）`,
+      command: `uv sync --project "${ctx.shufaToolDir}" --extra transcribe --extra ocr`,
+      probe: `uv run --no-sync --project "${ctx.shufaToolDir}" python -c "${pyProbeImports}, rapidocr, onnxruntime"`,
       targetDir: ctx.shufaToolDir,
     },
     {
@@ -344,7 +348,21 @@ export class WizardRunner {
 
   /** 全量步骤视图（setup.steps 与 admin.wizard.steps 共用）。 */
   list(): WizardStep[] {
-    return listSteps(this.db);
+    return listWizardSteps(this.db).map((row) => this.view(row));
+  }
+
+  private view(row: WizardStepRow | null): WizardStep {
+    const view = toView(row);
+    if (row?.id === 'python-env') view.ocr_size = this.selectedOcrSize();
+    return view;
+  }
+
+  private selectedOcrSize(): OcrModelId {
+    const fileEnv = this.options.envFile && existsSync(this.options.envFile)
+      ? parseDotenv(readFileSync(this.options.envFile, 'utf8'))
+      : {};
+    const value = process.env.SHUFA_OCR_SIZE ?? fileEnv.SHUFA_OCR_SIZE;
+    return isOcrModelId(value) ? value : 'medium';
   }
 
   /**
@@ -404,7 +422,16 @@ export class WizardRunner {
         if (repo) saveEnvValues(this.options.envFile, { SHUFA_WHISPER_REPO: repo });
       }
     }
-    if (!force && row.status === 'done') return toView(row);
+    if (id === 'python-env' && params?.ocr_size !== undefined) {
+      if (!isOcrModelId(params.ocr_size)) {
+        throw new Error(`未知的 OCR 档位：${params.ocr_size}`);
+      }
+      process.env.SHUFA_OCR_SIZE = params.ocr_size;
+      if (this.options.envFile) {
+        saveEnvValues(this.options.envFile, { SHUFA_OCR_SIZE: params.ocr_size });
+      }
+    }
+    if (!force && row.status === 'done') return this.view(row);
 
     if (!force) {
       const skipReason = await this.sniff(row, seed);
@@ -412,7 +439,7 @@ export class WizardRunner {
         const log = new StepLogWriter(this.db, id, row.last_log);
         log.append(skipReason);
         updateWizardProgress(this.db, id, { status: 'done' });
-        return toView(getWizardStep(this.db, id));
+        return this.view(getWizardStep(this.db, id));
       }
     }
 
@@ -477,7 +504,7 @@ export class WizardRunner {
       this.active.delete(id);
       this.running.delete(id);
     }
-    return toView(getWizardStep(this.db, id));
+    return this.view(getWizardStep(this.db, id));
   }
 
   /**

@@ -18,6 +18,7 @@ PNG（掩码/裁剪图）或可精确重建的确定性重算（帧读取/对齐
               最终 page_bg.png）
   ink         动态墨迹/旁注簇与时间线 + 焦点格（crops/anno_mask_*.png）
   clip        格字/旁注/焦点裁剪 + 回放剪辑（crops/*.png、focus_clip.mp4）
+  ocr          格字 PP-OCRv6 rec-only 机器感知（manifest.ocr）
   transcribe  音轨转录（audio.wav，平台最优引擎可选：mac=mlx / win,linux=faster）
   export      汇总导出分析包（bundle/data.json + assets/）
 """
@@ -25,6 +26,7 @@ PNG（掩码/裁剪图）或可精确重建的确定性重算（帧读取/对齐
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,6 +41,7 @@ from .frames import align_frames, load_frames, page_background, rotate_cw, sampl
 from .grid import Grid, GridDetection, detect_grids_multiframe, refine_quad
 from .ink import InkAnalysis, analyze_ink, grid_ink_curves
 from .orient import detect_orientation_steps, orient_flip_by_pinyin
+from .ocr import DEFAULT_OCR_SIZE, normalize_ocr_size, recognize_crops
 from .probe import ProbeInfo, probe
 from .summarize import Summary, load_injected, summarize
 from .transcript_lint import LintFix, lint_and_fix
@@ -449,6 +452,48 @@ def transcribe_stage(video: Path, workdir: Path, has_audio: bool) -> TranscribeS
                                         "segments": transcript.segments})
 
 
+# -------------------------------------------------------------------- ocr --
+
+def ocr_stage(
+    workdir: Path,
+    ocr_size: str | None = None,
+    grid_crops: list[str] | None = None,
+) -> dict:
+    """对 clip 步骤生成的每个格子做 PP-OCRv6 rec-only 识别。
+
+    这是独立旁路：模型下载/推理失败由 steps 层翻译为该步失败，之前的
+    grid/ink/clip 产物仍然可用；export 不要求本步存在。
+    """
+    size = normalize_ocr_size(ocr_size or os.environ.get("SHUFA_OCR_SIZE") or DEFAULT_OCR_SIZE)
+    cropdir = workdir / "crops"
+    if grid_crops is None:
+        crops = sorted(cropdir.glob("grid_*.png"), key=lambda p: int(p.stem.split("_")[-1]))
+    else:
+        crops = [workdir / rel for rel in grid_crops]
+    if not crops:
+        raise FileNotFoundError(f"工作目录缺少格字裁剪图：{cropdir}（先执行 clip 步骤）")
+    rows = recognize_crops(crops, size)
+    return {
+        "model": f"PP-OCRv6_{size}",
+        "engine": "rapidocr-onnxruntime",
+        "size": size,
+        "preprocess": "border-white-8pct-gray",
+        "failed": sum(1 for row in rows if row["failed"]),
+        "grids": rows,
+    }
+
+
+def _attach_ocr_results(grids: list[dict], rows: list[dict]) -> None:
+    """只附加机器感知字段；正式 label 始终由 labels 注入。"""
+    by_idx = {int(row["idx"]): row for row in rows}
+    for grid in grids:
+        row = by_idx.get(int(grid["idx"]))
+        if row is None:
+            continue
+        grid["label_ocr"] = str(row.get("label_ocr", ""))
+        grid["label_ocr_conf"] = float(row.get("label_ocr_conf", 0.0))
+
+
 # --------------------------------------------------------------- export --
 
 def _previews(views: Views, ts: list[float], x0: int, y0: int, x1: int, y1: int,
@@ -533,6 +578,7 @@ def export_stage(
     summary_file: Path | str | None = None,
     labels: Path | str | None = None,
     summary_source: str = "injected",
+    ocr_grids: list[dict] | None = None,
 ) -> Path:
     """摘要/标签注入、旁注↔生字关联、时间轴条目并导出分析包（原 run() [7/8] 后半 + [8/8]）。
     summary_source：摘要来源标记（agent=模型亲写 / injected=文件注入），走查
@@ -577,6 +623,10 @@ def export_stage(
         for item in lab.get("annotations", []):
             if 0 <= item["index"] < len(annos_data):
                 annos_data[item["index"]]["desc"] = item["desc"]
+    # OCR 是机器感知旁路：只写独立字段，绝不填充 label，也不参与证据核验。
+    if ocr_grids:
+        _attach_ocr_results(grids_data, ocr_grids)
+
     # 焦点字优先取焦点格 label（一个字），topic 是整段标题不该充当 focus_char。
     focus_char = (grids_data[focus_gi].get("label") or "") or summary.topic
 

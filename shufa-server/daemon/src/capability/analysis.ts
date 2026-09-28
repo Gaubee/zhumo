@@ -1,6 +1,6 @@
 /**
  * shufa 分析管线 → agent 工具面（PRODUCT_DESIGN.md §6；SKILL.md 步骤手册）。
- * 原始需求 2026-09-23（W4）：probe/sample/orient/align/bg/grid/ink/clip/transcribe
+ * 原始需求 2026-09-23（W4）：probe/sample/orient/align/bg/grid/ink/clip/ocr/transcribe
  * /export 暴露为 readonly 工具（shell → `uv run --project <shufa-tool> python
  * -m shufa_tool.steps <step>`）；summary_write 限定写任务目录内 summary.json；
  * export 完成后回调 onExported 建结果行 + 推 result 帧。summary 步骤不提供
@@ -170,9 +170,7 @@ export function createAnalysisCapabilities(deps: AnalysisCapabilityDeps): Capabi
     step: string,
     args: readonly string[],
   ): Promise<CapabilityCallResult> {
-    // --extra transcribe（W9 顺延 2026-09-27）：转录步骤的引擎依赖（mac=mlx /
-    // win,linux=faster-whisper）随运行自愈——向导 python-env 未跑/未成时，
-    // uv run 自动补装（uv run 只补缺不卸载，与 uv sync exact 语义不同）。
+    // 两个可选依赖组始终一起提供，避免 uv 在某步骤同步时移除另一组依赖。
     // PYTHONUTF8：Windows 控制台 GBK 下统一 python 子进程输出为 UTF-8，
     // 与 daemon 解码一致（管线 stdout 末行 JSON 解析依赖此点）。
     // PATH 自愈（2026-09-25 实证补全）：daemon 从旧终端继承的 PATH 可能不含
@@ -188,6 +186,8 @@ export function createAnalysisCapabilities(deps: AnalysisCapabilityDeps): Capabi
       deps.shufaToolDir,
       '--extra',
       'transcribe',
+      '--extra',
+      'ocr',
       'python',
       '-m',
       'shufa_tool.steps',
@@ -277,19 +277,6 @@ export function createAnalysisCapabilities(deps: AnalysisCapabilityDeps): Capabi
       },
     })),
     {
-      name: 'shufa.transcribe',
-      description: '步骤9：mlx-whisper 转录（无音轨/无环境时自动跳过不阻塞）',
-      authority: 'readonly',
-      input: z.object(workdirField),
-      handler: (raw) => {
-        const input = z.object(workdirField).safeParse(raw);
-        if (!input.success) return failed('参数不合法');
-        const ctx = resolveContext(input.data);
-        if ('kind' in ctx) return ctx;
-        return runStep(ctx, 'transcribe', [ctx.video, ctx.workdir]);
-      },
-    },
-    {
       name: 'shufa.clip',
       description: '步骤8：格字/旁注/焦点裁剪增强 + 焦点回放剪辑（crops/*、focus_clip.mp4）',
       authority: 'readonly',
@@ -304,6 +291,32 @@ export function createAnalysisCapabilities(deps: AnalysisCapabilityDeps): Capabi
           ctx.workdir,
           ...(input.data.enhance === true ? ['--enhance', 'on'] : []),
         ]);
+      },
+    },
+    {
+      name: 'shufa.ocr',
+      description: '步骤9：PP-OCRv6 单格机器感知（medium 默认；不写入 label 或证据字段）',
+      authority: 'readonly',
+      input: z.object(workdirField),
+      handler: (raw) => {
+        const input = z.object(workdirField).safeParse(raw);
+        if (!input.success) return failed('参数不合法');
+        const ctx = resolveContext(input.data);
+        if ('kind' in ctx) return ctx;
+        return runStep(ctx, 'ocr', [ctx.workdir]);
+      },
+    },
+    {
+      name: 'shufa.transcribe',
+      description: '步骤10：转录（无音轨/无环境时自动跳过不阻塞）',
+      authority: 'readonly',
+      input: z.object(workdirField),
+      handler: (raw) => {
+        const input = z.object(workdirField).safeParse(raw);
+        if (!input.success) return failed('参数不合法');
+        const ctx = resolveContext(input.data);
+        if ('kind' in ctx) return ctx;
+        return runStep(ctx, 'transcribe', [ctx.video, ctx.workdir]);
       },
     },
     {

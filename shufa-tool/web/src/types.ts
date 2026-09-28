@@ -55,6 +55,9 @@ export interface CharItem {
   visibility: number;
   note: string;
   label: string;
+  /** PP-OCRv6 机器感知旁路；不替代转录点名的 label。 */
+  label_ocr?: string;
+  label_ocr_conf?: number;
   crop: string;
 }
 
@@ -236,6 +239,11 @@ function validatePlayer(v: unknown): PlayerData {
 function validateChar(v: unknown, i: number): CharItem {
   const p = `chars[${i}]`;
   const o = asObject(v, p);
+  const labelOcrConf =
+    o.label_ocr_conf === undefined ? undefined : reqNumber(o, "label_ocr_conf", `${p}.label_ocr_conf`);
+  if (labelOcrConf !== undefined && (labelOcrConf < 0 || labelOcrConf > 1)) {
+    throw new DataValidationError(`${p}.label_ocr_conf 必须在 0..1 范围内`);
+  }
   return {
     idx: reqNumber(o, "idx", `${p}.idx`),
     row: reqNumber(o, "row", `${p}.row`),
@@ -243,6 +251,8 @@ function validateChar(v: unknown, i: number): CharItem {
     visibility: reqNumber(o, "visibility", `${p}.visibility`),
     note: reqString(o, "note", `${p}.note`),
     label: reqString(o, "label", `${p}.label`),
+    label_ocr: o.label_ocr === undefined ? undefined : reqString(o, "label_ocr", `${p}.label_ocr`),
+    label_ocr_conf: labelOcrConf,
     crop: reqString(o, "crop", `${p}.crop`),
   };
 }

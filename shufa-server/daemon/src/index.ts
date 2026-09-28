@@ -41,6 +41,9 @@ async function main(): Promise<void> {
   if (config.fileEnv.SHUFA_WHISPER_REPO) {
     process.env.SHUFA_WHISPER_REPO = config.fileEnv.SHUFA_WHISPER_REPO;
   }
+  if (config.fileEnv.SHUFA_OCR_SIZE) {
+    process.env.SHUFA_OCR_SIZE = config.fileEnv.SHUFA_OCR_SIZE;
+  }
   // 走查四轮：/tmp 易失目录护栏（macOS 3 天清理 / Linux 常为 tmpfs）。
   const volatile = volatileRootWarning(config.dataRoot);
   if (volatile) console.warn(`[boot] 警告：${volatile}`);

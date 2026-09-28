@@ -226,6 +226,21 @@
   font-size: 13px;
   color: var(--dim);
   margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.shufa-report .char-grid .ocr-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--dim);
+  opacity: 0.82;
+}
+.shufa-report .char-grid .ocr-label small {
+  font-size: 10px;
 }
 .shufa-report .char-info {
   flex: 1;

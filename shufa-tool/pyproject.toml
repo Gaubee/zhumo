@@ -26,6 +26,10 @@ transcribe = [
     "faster-whisper>=1.1; sys_platform == 'win32' or sys_platform == 'linux'",
     "httpx[socks]>=0.27",
 ]
+ocr = [
+    "onnxruntime>=1.19",
+    "rapidocr>=3.9.2,<4",
+]
 [project.scripts]
 shufa-analyze = "shufa_tool.cli:main"
 shufa-serve = "shufa_tool.serve:serve_bundle_main"

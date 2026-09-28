@@ -70,14 +70,22 @@ export function annotationCard(a: Annotation): string {
 
 function charRow(g: CharItem, related: Annotation[], focusBadge: string): string {
   const noteBadge = `<span class="chip">${esc(g.note)}</span>`;
+  const ocrText = (g.label_ocr ?? "").trim();
+  const ocr = ocrText !== ""
+    ? `<span class="ocr-label">识：${esc(g.label_ocr ?? "")}<small>${fmtPercent(g.label_ocr_conf ?? 0)}</small></span>`
+    : "";
+  const visibleLabel = g.label.trim()
+    ? `${esc(g.label)}${ocr}`
+    : ocr || '<span class="dim">未标注</span>';
+  const heading = g.label.trim() || (ocrText ? `识：${ocrText}` : "未标注");
   const cards =
     related.length > 0
       ? related.map(annotationCard).join("")
       : '<p class="dim anno-empty">本片段无针对该字的旁注</p>';
   return `<div class="char-row">
-  <div class="char-grid"><img src="${assetUrl(g.crop)}" alt="田字格：${esc(g.label)}" />
-    <div class="cap">${esc(g.label)}${focusBadge}</div></div>
-  <div class="char-info"><h3>「${esc(g.label)}」${noteBadge}</h3>
+  <div class="char-grid"><img src="${assetUrl(g.crop)}" alt="田字格：${esc(heading)}" />
+    <div class="cap">${visibleLabel}${focusBadge}</div></div>
+  <div class="char-info"><h3>「${esc(heading)}」${noteBadge}</h3>
     <p class="dim-line">关联旁注 ${related.length} 处</p>
     <div class="char-annos">${cards}</div></div>
 </div>`;

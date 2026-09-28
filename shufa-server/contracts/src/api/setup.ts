@@ -99,6 +99,12 @@ export const WHISPER_MIRRORS = [
   { id: 'cn', label: '国内镜像（hf-mirror.com）', base: 'https://hf-mirror.com' },
 ] as const;
 
+/** PP-OCRv6 档位：tiny 的手写识别准确率不足，不开放给管理员。 */
+export const OCR_MODEL_CATALOG = [
+  { id: 'medium', label: 'medium · 推荐 · 73MB · 手写识别率最高' },
+  { id: 'small', label: 'small · 快档 · 20MB' },
+] as const;
+
 export const WizardStepSchema = z.object({
   id: IdSchema,
   kind: WizardKindSchema,
@@ -107,6 +113,8 @@ export const WizardStepSchema = z.object({
   command: z.string().nullable(),
   /** download 步骤的来源链接；command 步骤为 null。 */
   url: z.string().nullable(),
+  /** python-env 步骤当前持久化的 OCR 档位。 */
+  ocr_size: z.enum(['medium', 'small']).optional(),
   target_dir: z.string(),
   status: WizardStatusSchema,
   /** 全量执行日志（走查 BUG1，2026-09-23）：逐行追加、64KB 截断；下载进度行
@@ -131,6 +139,8 @@ export const WizardRunInputSchema = z.object({
   model: z.string().optional(),
   /** download 参数化（whisper-model）：镜像源，缺省保持行上既有。 */
   mirror: z.enum(['official', 'cn']).optional(),
+  /** python-env 步骤持久化的 PP-OCRv6 档位；tiny 不开放。 */
+  ocr_size: z.enum(['medium', 'small']).optional(),
 });
 export type WizardRunInput = z.infer<typeof WizardRunInputSchema>;
 

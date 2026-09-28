@@ -53,7 +53,7 @@ const auth = createORPCClient(new RPCLink({ websocket: authWs })) as any;
 // ---- 3. 创建任务（真实视频 + 默认模型）----
 const dataBase64 = readFileSync(videoPath).toString('base64');
 const PROMPT =
-  '请按手册全流程分析这段讲评视频：转正对齐、田字格检测、旁注批注提取、焦点回放剪辑与语音转录；把旁注与对应生字关联，最后由你阅读转录与画面产物亲自撰写摘要（教师点评要点 + 练习建议），并导出分析包。';
+  '请按手册全流程分析这段讲评视频：转正对齐、田字格检测、旁注批注提取、焦点回放剪辑、OCR 机器感知与语音转录；OCR 不得填充正式 labels，正式格字只按转录点名；把旁注与对应生字关联，最后由你阅读转录与产物亲自撰写摘要（教师点评要点 + 练习建议），并导出分析包。';
 const created = await auth.tasks.create({
   prompt: PROMPT,
   video: { filename: path.basename(videoPath), data_base64: dataBase64 },
@@ -140,6 +140,10 @@ if (task?.status !== 'done') {
     for (const c of data.chars ?? []) {
       if (c.label) check(/^[\u4e00-\u9fff]$/.test(c.label), `data.chars[${c.idx}].label="${c.label}" 单汉字`);
     }
+    check((data.chars ?? []).every((c: any) => typeof c.label_ocr === 'string' && c.label_ocr.trim().length > 0), '每格 label_ocr 非空（不限定非焦点格字值）');
+    check((data.chars ?? []).every((c: any) => Number.isFinite(c.label_ocr_conf) && c.label_ocr_conf >= 0 && c.label_ocr_conf <= 1), '每格 label_ocr_conf 为 0..1 数值');
+    const focusChar = (data.chars ?? []).find((c: any) => c.idx === data.focus_grid_idx);
+    check(focusChar?.label === '桂' && focusChar?.label_ocr === '桂', '焦点格正式 label 与 OCR 均为桂');
     check((data.annotations ?? []).every((a: any) => typeof a.grid_idx === 'number'), 'annotations.grid_idx 全存在（格级关联）');
     check((data.summary?.paragraphs ?? []).length >= 2, 'data.summary 已注入');
     // 逐格证据产物面复核（十二审 run19 回归）：同一 label 标在 >1 格时，每格

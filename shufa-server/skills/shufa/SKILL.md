@@ -1,6 +1,6 @@
 ---
 name: shufa
-description: 书法/作业讲评视频分析管线（shufa_tool.steps）离散步骤手册 + 书法领域知识库（kb_* 工具）使用规约：probe→sample→orient→align→bg→grid→ink→clip→transcribe→export 逐步调用；总结撰写先取知识库「总结模式」按转录匹配（兜底优先，命中才叠加）；知识库管理模式（征得同意后经 kb 写工具沉淀知识，全程 git 留痕）。供编排 agent 逐步驱动分析管线时参照。
+description: 书法/作业讲评视频分析管线（shufa_tool.steps）离散步骤手册 + 书法领域知识库（kb_* 工具）使用规约：probe→sample→orient→align→bg→grid→ink→clip→ocr→transcribe→export 逐步调用；总结撰写先取知识库「总结模式」按转录匹配（兜底优先，命中才叠加）；知识库管理模式（征得同意后经 kb 写工具沉淀知识，全程 git 留痕）。供编排 agent 逐步驱动分析管线时参照。
 ---
 
 # shufa 分析步骤手册（写给 agent）
@@ -9,9 +9,10 @@ description: 书法/作业讲评视频分析管线（shufa_tool.steps）离散�
 语音转录 + 摘要 + 焦点回放剪辑）。本手册只含**稳定工作流**；书法领域知识与
 总结模式都在**知识库**里（后台长期演进，与本文件解耦）。
 
-**能力边界（重要）**：你看不到图片。格子里写了什么字、旁注画了什么记号，
-只能从语音转录与步骤返回的 JSON 元数据推断；转录没提到的，就留空、如实说明，
-不要猜。
+**能力边界（重要）**：你看不到图片。`ocr` 返回的是模型机器感知，可帮助理解
+多字练习页的对象，但不是老师口述证据，也不等于人工确认。正式 `labels.json`
+中的格字 `label` 仍只标转录明确点名的字；OCR 结果只能出现在独立的
+`label_ocr` 字段，不能填充或验证 `label`、summary fact、旁注描述。
 
 ## 调用方式
 
@@ -35,6 +36,8 @@ uv run python -m shufa_tool.steps list   # 内置说明（与本手册一致）
 - 状态接力：所有步骤读写同一 `WORKDIR`（建议 `<任务目录>/.shufa-work/`），
   产物落盘 + `WORKDIR/manifest.json` 逐步合并。步骤必须按序执行；
   跳步会得到明确报错（按提示补跑前置步骤即可）。
+- 每次完整分析在 `clip` 后都应调用 `ocr`，让结果包为每格附上机器识别候选；
+  OCR 步骤失败时记录失败并继续 `transcribe`/`export`，不得用 OCR 候选填充正式标签或证据。
 - 步骤可安全重跑（幂等覆盖）；`probe` 会重置整个 WORKDIR（= 重开一次分析）。
 - `VIDEO` 建议始终传同一段视频的同一路径（产品会话内为相对 cwd 的相对路径；
   独立 CLI 用绝对路径）；与 manifest 不一致会 stderr 警告。
@@ -51,8 +54,9 @@ uv run python -m shufa_tool.steps list   # 内置说明（与本手册一致）
 | 6 | `grid WORKDIR` | 田字格检测 + 拼音带 180° 裁决 + 角点精化 | `debug_grids.png`、`page_bg.png`（最终版）、manifest.grid{grids,sides} |
 | 7 | `ink WORKDIR` | 动态墨迹/旁注簇 + 出现时间线 + 焦点格 | `crops/anno_mask_*.png`、manifest.ink/focus |
 | 8 | `clip VIDEO WORKDIR [--enhance on]` | 格字/旁注/焦点裁剪增强 + 焦点回放剪辑 | `crops/grid_*.png`、`crops/anno_*.png`、`focus_clip.mp4`（给最终报告读者的素材；你看不到其内容） |
-| 9 | `transcribe VIDEO WORKDIR` | mlx-whisper 转录（可选依赖） | `audio.wav`、manifest.transcribe{segments} |
-| 10 | `export WORKDIR --summary-file F [--labels F] [--out-dir D]` | 你的摘要/标签注入 + 旁注↔生字关联 → 分析包 | `bundle/`（data.json + assets/） |
+| 9 | `ocr WORKDIR [--ocr-size medium\|small]` | PP-OCRv6 单格识别（独立机器感知步骤；medium 默认，tiny 不开放） | manifest.ocr{model,size,grids} |
+| 10 | `transcribe VIDEO WORKDIR` | 转录（可选依赖） | `audio.wav`、manifest.transcribe{segments} |
+| 11 | `export WORKDIR --summary-file F [--labels F] [--out-dir D]` | 你的摘要/标签注入 + 旁注↔生字关联 → 分析包 | `bundle/`（data.json + assets/） |
 
 ## 输出 JSON 样例（stdout 末行）
 
@@ -65,6 +69,7 @@ uv run python -m shufa_tool.steps list   # 内置说明（与本手册一致）
 {"step":"grid","grids":3,"sides":[75,75,75,75],"cw_steps":1,"flipped":false}
 {"step":"ink","annotations":3,"first_ts":[9.0,15.0,28.5],"dropped_clusters":0,"focus_grid_idx":1}
 {"step":"clip","duration_s":31.5,"bytes":2380000,"timeline":4,"bbox":[x0,y0,x1,y1]}
+{"step":"ocr","model":"PP-OCRv6_medium","grids":3,"recognized":3,"results":[{"idx":0,"label_ocr":"字","label_ocr_conf":0.9}]}
 {"step":"transcribe","segments":9,"model":"mlx-community/whisper-large-v3-turbo"}
 {"step":"export","bundle":"/abs/WORKDIR/bundle","grids":3,"annotations":3,"entries":13}
 ```
@@ -81,6 +86,9 @@ stdout 输出 `{"step":"transcribe","skipped":"transcribe","reason":"…"}`，
   `focus_grid_idx` 是讲评焦点格（周边旁注活动最强）。
 - **clip**：`bbox` 为焦点区（对齐坐标系）。crops 产物给最终报告的读者看，
   你的语义判断依据是转录与各步 JSON，不是这些图。
+- **ocr**：`label_ocr` 是机器识别候选；空串和 `0` 置信度是合法失败态。可参考
+  OCR 理解多字视频讲评对象，但不据此写正式 `label` 或转录事实。若模型不可用，
+  记录 OCR 步骤失败并继续导出；`export` 不要求 OCR 已成功。
 - **transcribe**：返回值携带转录全文（`transcript_text`）与 segments——
   摘要与标签撰写以它为准。
 

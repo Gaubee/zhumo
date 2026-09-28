@@ -10,7 +10,7 @@
  *       contracts/src/api/resources.ts 的 W5 六端点形状）。
  *   [5] 统一帧契约（PRODUCT_DESIGN §7：Frame{at,seq,kind,...}）。
  */
-import type { WHISPER_MIRRORS, WHISPER_MODEL_CATALOG } from "@zhumo/contracts";
+import type { OCR_MODEL_CATALOG, WHISPER_MIRRORS, WHISPER_MODEL_CATALOG } from "@zhumo/contracts";
 
 // ---- [1] bootstrap / 认证 ----
 
@@ -68,10 +68,14 @@ export type WhisperModelOption = (typeof WHISPER_MODEL_CATALOG)[number];
 /** whisper 镜像源 id（official | cn）。 */
 export type WhisperMirrorId = (typeof WHISPER_MIRRORS)[number]["id"];
 
+/** OCR 档位类型（仅 medium/small；tiny 不在可选目录中）。 */
+export type OcrModelId = (typeof OCR_MODEL_CATALOG)[number]["id"];
+
 /** 运行向导步骤的可选参数（whisper-model 步骤携带；契约 WizardRunInput 的 model/mirror 投影）。 */
 export interface WizardRunParams {
   model?: string;
   mirror?: WhisperMirrorId;
+  ocr_size?: OcrModelId;
 }
 
 export type WizardStepKind = "command" | "download";
@@ -87,6 +91,8 @@ export interface WizardStep {
   command?: string;
   /** kind=download 的来源链接。 */
   url?: string;
+  /** python-env 步骤当前保存的 PP-OCRv6 档位。 */
+  ocrSize?: OcrModelId;
   targetDir: string;
   status: WizardStepStatus;
   /** 命令类：尾行即 summary 实时预览（last-line-log）。 */

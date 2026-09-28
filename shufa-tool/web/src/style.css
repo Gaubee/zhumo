@@ -221,6 +221,16 @@ dl.meta dd {
   color: var(--dim);
   margin-top: 6px;
 }
+.char-grid .ocr-label {
+  color: var(--dim);
+  font-style: italic;
+}
+.char-grid .ocr-label small {
+  display: block;
+  font-size: 10px;
+  font-style: normal;
+  opacity: 0.78;
+}
 .char-info {
   flex: 1;
   min-width: 0;

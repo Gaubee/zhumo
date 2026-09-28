@@ -66,6 +66,10 @@ def export_bundle(
             "idx": g["idx"], "row": g["row"], "col": g["col"],
             "visibility": g["visibility"], "note": g.get("note", ""),
             "label": g.get("label", ""),
+            # 机器感知旁路；不参与 labels/summary 证据核验，也不回填 label。
+            **({"label_ocr": g["label_ocr"],
+                "label_ocr_conf": g["label_ocr_conf"]}
+               if "label_ocr" in g else {}),
             "crop": write_png(g["crop"], assets / f"grid_{g['idx']}.png"),
         })
     annos_out = []

@@ -30,6 +30,8 @@ def run(argv: list[str] | None = None) -> Path:
     ap.add_argument("--rotate", default="auto",
                     help="转正方式：auto（内容探测）/ 0/90/180/270（顺时针角度）")
     ap.add_argument("--transcribe", choices=["auto", "off"], default="auto")
+    ap.add_argument("--ocr-size", choices=["medium", "small"], default=None,
+                    help="PP-OCRv6 档位（默认 medium；tiny 不开放）")
     ap.add_argument("--enhance", choices=["on", "off"], default="on",
                     help="音画增强：afftdn+loudnorm 音频 / hqdn3d+eq 画面（默认 on）")
     ap.add_argument("--serve", dest="serve", action="store_true", default=True,
@@ -50,23 +52,23 @@ def run(argv: list[str] | None = None) -> Path:
     workdir: Path = args.workdir or video.parent / ".shufa-work" / video.stem
     workdir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[1/8] 探针 {video.name}")
+    print(f"[1/9] 探针 {video.name}")
     info = pipeline.probe_stage(video)
     print(f"      {info.width}x{info.height} {info.duration_s:.1f}s @ {info.fps:.0f}fps, "
           f"容器旋转声明 {info.metadata_rotation_cw}°")
 
-    print(f"[2/8] 抽帧 {args.fps}fps")
+    print(f"[2/9] 抽帧 {args.fps}fps")
     ts = pipeline.sample_stage(video, workdir, args.fps)
     print(f"      {len(ts)} 帧")
 
-    print("[3/8] 旋转探测")
+    print("[3/9] 旋转探测")
     orient = pipeline.orient_stage(workdir, args.rotate)
     steps, note = orient.steps, orient.note
     views = pipeline.load_views(workdir, steps)
     H, W = views.frames[0].shape[:2]
     print(f"      {note} → {W}x{H}")
 
-    print("[4/8] 对齐 + 页面背景 + 田字格检测")
+    print("[4/9] 对齐 + 页面背景 + 田字格检测")
     gs = pipeline.grid_stage(workdir, views, args.rotate, steps, note)
     views, steps, note = gs.views, gs.steps, gs.note
     det = gs.det
@@ -75,13 +77,13 @@ def run(argv: list[str] | None = None) -> Path:
           ", ".join(f"#{i}({g.center[0]:.0f},{g.center[1]:.0f})s={g.side:.0f}px"
                     for i, g in enumerate(det.grids)))
 
-    print("[5/8] 笔迹与旁注时间线")
+    print("[5/9] 笔迹与旁注时间线")
     isg = pipeline.ink_stage(workdir, views, det.grids, ts)
     ink, focus_gi = isg.analysis, isg.focus_gi
     print(f"      旁注簇 {len(ink.annotations)} 个：" +
           ", ".join(f"{a.first_ts:.1f}s({a.pixels}px)" for a in ink.annotations))
 
-    print("[6/8] 裁剪与增强")
+    print("[6/9] 裁剪与增强")
     cs = pipeline.clip_stage(
         video, workdir, views, det.grids, ts,
         annotations=[{"first_ts": a.first_ts, "bbox": list(a.bbox), "mask": a.mask_crop}
@@ -90,7 +92,16 @@ def run(argv: list[str] | None = None) -> Path:
         focus_gi=focus_gi, steps=steps, enhance=args.enhance)
     print(f"      焦点回放剪辑 {cs.clip_info['duration_s']:.1f}s / {cs.clip_info['bytes'] // 1024}KB")
 
-    print("[7/8] 转录与摘要")
+    print("[7/9] OCR 机器感知")
+    ocr_payload = None
+    try:
+        ocr_payload = pipeline.ocr_stage(workdir, args.ocr_size, cs.payload["grid_crops"])
+        recognized = sum(1 for row in ocr_payload["grids"] if row.get("label_ocr"))
+        print(f"      识别 {recognized}/{len(ocr_payload['grids'])} 格（模型 {ocr_payload['model']}）")
+    except (ImportError, RuntimeError, FileNotFoundError, ValueError) as exc:
+        print(f"      OCR 跳过：{exc}（可单独执行 steps ocr 重试）")
+
+    print("[8/9] 转录与摘要")
     transcript = None
     if args.transcribe == "auto" and info.has_audio:
         tsg = pipeline.transcribe_stage(video, workdir, has_audio=True)
@@ -100,7 +111,7 @@ def run(argv: list[str] | None = None) -> Path:
         else:
             print(f"      {len(transcript.segments)} 段")
 
-    print("[8/8] 导出分析包")
+    print("[9/9] 导出分析包")
     bundle = pipeline.export_stage(
         out_dir=args.out_dir or (workdir / "bundle"),
         views=views, grids=det.grids, ts=ts,
@@ -114,7 +125,8 @@ def run(argv: list[str] | None = None) -> Path:
                    "duration_s": cs.clip_info["duration_s"]},
         segments=transcript.segments if transcript else [],
         transcript_model=transcript.model if transcript else "",
-        summary_file=args.summary_file, labels=args.labels)
+        summary_file=args.summary_file, labels=args.labels,
+        ocr_grids=(ocr_payload or {}).get("grids"))
     print(f"✔ 分析包：{bundle}")
     if args.serve:
         from .serve import serve_bundle

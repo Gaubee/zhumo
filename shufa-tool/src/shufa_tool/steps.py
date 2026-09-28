@@ -17,6 +17,7 @@ manifest.json 状态，agent 在步骤之间可检查中间产物、亲自撰写
                 manifest.orient 更新 + manifest.grid{grids,sides}
     ink         workdir/crops/anno_mask_*.png + manifest.ink + manifest.focus
     clip        workdir/crops/*.png + focus_clip.mp4 + manifest.clip
+    ocr         manifest.ocr{model,size,grids}（机器感知，不改 label）
     transcribe  workdir/audio.wav + manifest.transcribe（不可用时 skipped）
     export      workdir/bundle/（data.json + assets/）+ manifest.export
 """
@@ -301,6 +302,24 @@ def cmd_transcribe(args: argparse.Namespace) -> dict:
             "transcript_text": trimmed}
 
 
+def cmd_ocr(args: argparse.Namespace) -> dict:
+    workdir = Path(args.workdir).resolve()
+    m = _load_manifest(workdir)
+    _require(m, "grid", "clip")
+    print(f"[ocr] PP-OCRv6 rec-only（{args.ocr_size or 'medium'}）", file=sys.stderr)
+    try:
+        payload = pipeline.ocr_stage(workdir, args.ocr_size, m["clip"].get("grid_crops"))
+    except ImportError as e:
+        raise StepError("OCR 依赖未安装，请在 shufa-tool 执行 uv sync --extra ocr") from e
+    m["ocr"] = payload
+    _save_manifest(workdir, m)
+    rows = payload["grids"]
+    recognized = sum(1 for row in rows if row.get("label_ocr"))
+    print(f"      识别 {recognized}/{len(rows)} 格（模型 {payload['model']}）", file=sys.stderr)
+    return {"step": "ocr", "model": payload["model"], "grids": len(rows),
+            "recognized": recognized, "results": rows}
+
+
 def cmd_export(args: argparse.Namespace) -> dict:
     workdir = Path(args.workdir).resolve()
     m = _load_manifest(workdir)
@@ -352,6 +371,7 @@ def cmd_export(args: argparse.Namespace) -> dict:
             "crop": _imread(m["clip"]["grid_crops"][i], what="格字裁剪图"),
             "note": m["clip"]["grid_notes"][i],
         })
+    ocr_grids = (m.get("ocr") or {}).get("grids")
     annos_data = []
     for i, ap_ in enumerate(m["ink"]["annotations"]):
         annos_data.append({
@@ -379,7 +399,7 @@ def cmd_export(args: argparse.Namespace) -> dict:
         segments=tp.get("segments", []),
         transcript_model=tp.get("model", ""),
         summary_file=args.summary_file, labels=args.labels,
-        summary_source=args.summary_source)
+        summary_source=args.summary_source, ocr_grids=ocr_grids)
     data = json.loads((bundle / "data.json").read_text("utf-8"))
     m["export"] = {"bundle": str(bundle), "grids": len(data["chars"]),
                    "annotations": len(data["annotations"]),
@@ -420,6 +440,7 @@ _LIST_TEXT = _LIST_HEADER + """\
                                                     → crops/anno_mask_*.png + manifest.ink/focus
   clip     VIDEO WORKDIR [--enhance on|off]         裁剪/增强/回放剪辑
                                                     → crops/*.png + focus_clip.mp4 + manifest.clip
+  ocr      WORKDIR [--ocr-size medium|small]       PP-OCRv6 单格机器感知，不改 label
   transcribe VIDEO WORKDIR                          音轨转录（mlx-whisper）
                                                     → audio.wav + manifest.transcribe
                                                     无 mlx 环境时 {"skipped":"transcribe"}，不阻塞
@@ -435,6 +456,7 @@ _LIST_TEXT = _LIST_HEADER + """\
   grid        {"step":"grid","grids":3,"sides":[75,75,75,75],"cw_steps":1,"flipped":false}
   ink         {"step":"ink","annotations":3,"first_ts":[6.0,15.0,22.5],"focus_grid_idx":1}
   clip        {"step":"clip","duration_s":24.5,"bytes":1536000,"timeline":4,"bbox":[x,y,x,y]}
+  ocr         {"step":"ocr","model":"PP-OCRv6_medium","grids":3,"recognized":3}
   transcribe  {"step":"transcribe","segments":9,"model":"mlx-community/whisper-large-v3-turbo"}
   export      {"step":"export","bundle":"/…/bundle","grids":3,"annotations":3,"entries":15}
 """
@@ -485,6 +507,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("video", type=Path)
     p.add_argument("workdir", type=Path)
 
+    p = sub.add_parser("ocr", help="PP-OCRv6 单格识别（机器感知旁路）")
+    p.add_argument("workdir", type=Path)
+    p.add_argument("--ocr-size", choices=["medium", "small"], default=None,
+                   help="识别档位（默认 medium；tiny 不开放）")
+
     p = sub.add_parser("export", help="汇总导出分析包 bundle/")
     p.add_argument("workdir", type=Path)
     p.add_argument("--out-dir", type=Path, default=None, help="分析包目录（默认 WORKDIR/bundle）")
@@ -501,7 +528,7 @@ def build_parser() -> argparse.ArgumentParser:
 _COMMANDS = {
     "probe": cmd_probe, "sample": cmd_sample, "orient": cmd_orient,
     "align": cmd_align, "bg": cmd_bg, "grid": cmd_grid, "ink": cmd_ink,
-    "clip": cmd_clip, "transcribe": cmd_transcribe, "export": cmd_export,
+    "clip": cmd_clip, "transcribe": cmd_transcribe, "ocr": cmd_ocr, "export": cmd_export,
 }
 
 
