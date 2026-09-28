@@ -240,7 +240,7 @@ describe('shufa capability 工具面', () => {
     expect((badIndex as { message: string }).message).toContain('从 0 起');
   });
 
-  it('summary_write × manifest 交叉警告（2026-09-25 lint）：越界/缺格软警告随返回值', async () => {
+  it('summary_write × manifest 交叉警告：越界软警告；缺格不警告（f202ed82：留空是一等公民）', async () => {
     // 构造 manifest：2 格 + 2 旁注（index 0/1）。
     mkdirSync(path.join(taskDir, '.shufa-work'), { recursive: true });
     writeFileSync(
@@ -260,8 +260,20 @@ describe('shufa capability 工具面', () => {
     expect(linted).toMatchObject({ kind: 'ok' });
     const warnings = (linted as { value: { warnings?: string[] } }).value.warnings ?? [];
     expect(warnings.some((w) => w.includes('grids index 越界'))).toBe(true);
-    expect(warnings.some((w) => w.includes('未标注 label'))).toBe(true);
+    // 缺格不再警告（转录没点名是常态；警告曾诱导 agent 编造「未点名格」）。
+    expect(warnings.some((w) => w.includes('未标注 label'))).toBe(false);
     expect(warnings.some((w) => w.includes('未给 desc'))).toBe(true);
+    // 空串 label 合法（留空一等公民）。
+    const blank = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content: '{"topic":"桂","paragraphs":["左右结构"],"key_points":["两土对齐"]}',
+        labels: '{"grids":[{"index":0,"label":"桂"},{"index":1,"label":""}],"annotations":[{"index":0,"desc":"指出主笔"}]}',
+      },
+      'agent',
+    );
+    expect(blank).toMatchObject({ kind: 'ok' });
   });
 
   it('summary_write 语义 lint（2026-09-28 CCxdbVrruwNO 复盘）：引文忠实/时间在界/旁注时间一致——硬校验拒写', async () => {

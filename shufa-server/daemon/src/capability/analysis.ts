@@ -507,7 +507,8 @@ function lintContentSemantics(
   // 1) 引文忠实（≥4 字才核对：短引文同音/变体太易误伤）。
   const norm = (t: string) =>
     t.replace(/[\s，。、；：？！,.;:?!"'（）()「」『』…—·]/g, '');
-  const quoteRe = /「([^」]{4,})」/g;
+  // 引号族（e2e 013b8c78 实证：agent 常用弯引号 “” 引原话——只认 「」 会被绕过）。
+  const quoteRe = /[「“『]([^」”』]{4,})[」”』]/g;
   const quotes: string[] = [];
   for (const para of [...summary.paragraphs, ...summary.key_points]) {
     for (const m of para.matchAll(quoteRe)) quotes.push(m[1]!);
@@ -566,7 +567,9 @@ const LabelsContentSchema = z.object({
     .array(
       z.object({
         index: z.number().int().min(0, 'index 从 0 起'),
-        label: z.string().min(1, 'label 不能为空'),
+        // 空串 = 转录未点名的格（f202ed82 实证：min(1) + 缺格警告会诱导
+        // agent 编造「未点名格」类占位标签骗过校验——留空必须是一等公民）。
+        label: z.string(),
         note: z.string().optional(),
       }),
     )
@@ -607,11 +610,8 @@ function lintLabelsAgainstManifest(taskDir: string, labels: unknown): string[] {
         `labels.grids index 越界：${outOfRange.map((g) => g.index).join(',')} ≥ 检测格数 ${gridCount}（index 从 0 起、对应检测顺序）`,
       );
     }
-    const labeled = new Set(grids.map((g) => g.index));
-    const missing = Array.from({ length: gridCount }, (_, i) => i).filter((i) => !labeled.has(i));
-    if (missing.length > 0) {
-      warnings.push(`检测出 ${gridCount} 个田字格中有 ${missing.length} 个未标注 label（缺格 index：${missing.join(',')}）——转录与生字的关联会缺失`);
-    }
+    // 「缺格未标」不再警告（f202ed82 实证：转录没点名的格留空是手册要求的
+    // 正确行为，警告会把 agent 推向编造占位标签「未点名格」骗过校验）。
   }
   if (annoCount > 0) {
     const outOfRange = annotations.filter((a) => a.index >= annoCount);

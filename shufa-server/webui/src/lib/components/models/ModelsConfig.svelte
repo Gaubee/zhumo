@@ -252,15 +252,14 @@
     onsaved?.();
   }
 
-  /** 默认模型当前的 efforts 目录（默认强度选择器的选项源）。 */
+  /** 默认模型当前的 efforts 目录（默认强度选择器的选项源；anthropic-messages
+   * 协议是 thinking-budget 语义、不支持档位——选择器隐藏，e2e 实证）。 */
   const defaultEfforts = $derived.by(() => {
     const def = settings?.default;
     if (def == null) return [];
-    return (
-      routes
-        .find((route) => route.provider === def.provider)
-        ?.models.find((model) => model.id === def.model)?.efforts ?? []
-    );
+    const route = routes.find((r) => r.provider === def.provider);
+    if (route?.api === "anthropic-messages") return [];
+    return route?.models.find((model) => model.id === def.model)?.efforts ?? [];
   });
 
   async function saveDefaultEffort(effort: string | null): Promise<void> {

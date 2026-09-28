@@ -6,6 +6,10 @@
  * 上游 revision 30；20 模板 / 244 模型；生成于 2026-09-24。
  * 语义备注：模型 efforts = ZCode reasoningLevel 档位（含 disabled/enabled 这类开关型档）；
  * account:* 账号型 provider 不在内（本项目路由仅支持 apiKey）。
+ * 勘误（2026-09-28，e2e acd2a841 实证）：zai 两组 GLM-5.3/GLM-5.3-Flash 的
+ * efforts 由上游 [low,high,max] 修正为 [low,medium,high]——pi-ai 的 zai 目录未声明
+ * xhigh/max 映射（未声明=不支持），max 档会被内核 UNSUPPORTED_REASONING_EFFORT
+ * 拒绝；上游重跑提取脚本后需复核此勘误是否仍适用。
  */
 import type { ModelPreset } from '@zhumo/contracts';
 
@@ -28,8 +32,8 @@ export const zcodePresets: readonly ModelPreset[] = [
         ],
         "efforts": [
           "low",
-          "high",
-          "max"
+          "medium",
+          "high"
         ]
       },
       {
@@ -41,8 +45,8 @@ export const zcodePresets: readonly ModelPreset[] = [
         ],
         "efforts": [
           "low",
-          "high",
-          "max"
+          "medium",
+          "high"
         ]
       },
       {
@@ -74,8 +78,8 @@ export const zcodePresets: readonly ModelPreset[] = [
         ],
         "efforts": [
           "low",
-          "high",
-          "max"
+          "medium",
+          "high"
         ]
       },
       {
@@ -87,8 +91,8 @@ export const zcodePresets: readonly ModelPreset[] = [
         ],
         "efforts": [
           "low",
-          "high",
-          "max"
+          "medium",
+          "high"
         ]
       },
       {
