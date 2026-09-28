@@ -96,6 +96,22 @@ export type AnalysisTranscript = z.infer<typeof AnalysisTranscriptSchema>;
  * 总结。source 词表（2026-09-25 对齐生产端）：agent=模型亲写（summary_write 注入，
  * daemon 默认）/ injected=summary 文件注入（CLI 旧路径）/ heuristic=CLI 规则摘要。
  */
+/** fact 展示性标签白名单（十审 P2：自由文本 label 是事实契约旁路——
+ * 枚举封闭，新增类别走契约变更）。 */
+export const CLAIM_LABELS = [
+  '讲评对象',
+  '开场点题',
+  '结构定性',
+  '书写要领',
+  '核心要点',
+  '指出问题',
+  '卷面问题',
+  '处理动作',
+  '练习要点',
+  '补充说明',
+] as const;
+export type ClaimLabel = (typeof CLAIM_LABELS)[number];
+
 /** 终态写契约（Codex 五审 P1-1：写入/导出门禁用）：fact 必带非空 source
  * （转录段下标）；纯 string 不再接受。 */
 export const TerminalClaimSchema = z.union([
@@ -103,9 +119,8 @@ export const TerminalClaimSchema = z.union([
     kind: z.literal('fact'),
     text: z.string().min(1),
     source: z.array(z.number().int().min(0)).min(1),
-    /** 展示性标签（「结构定性」「书写要领」类前缀）：纯呈现字段，不参与
-     * 证据核验（九审 P1：文本内「标签：」前缀不再豁免锚点）。 */
-    label: z.string().max(12).optional(),
+    /** 展示性标签：枚举白名单，纯呈现字段，不参与证据核验。 */
+    label: z.enum(CLAIM_LABELS).optional(),
   }),
   z.object({ kind: z.enum(['inference', 'suggestion']), text: z.string().min(1) }),
 ]);
@@ -118,7 +133,7 @@ export type TerminalClaim = z.infer<typeof TerminalClaimSchema>;
 export const AnalysisClaimSchema = z.union([
   TerminalClaimSchema,
   z.string(),
-  z.object({ kind: z.literal('fact'), text: z.string(), label: z.string().max(12).optional() }).strict(),
+  z.object({ kind: z.literal('fact'), text: z.string(), label: z.enum(CLAIM_LABELS).optional() }).strict(),
 ]);
 export type AnalysisClaim = z.infer<typeof AnalysisClaimSchema>;
 

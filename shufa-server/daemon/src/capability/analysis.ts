@@ -20,7 +20,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { TerminalAnalysisSummarySchema } from '@zhumo/contracts';
+import { CLAIM_LABELS, TerminalAnalysisSummarySchema } from '@zhumo/contracts';
 import { refreshWindowsPath } from '../win-path-refresh.js';
 import type { CapabilityCallResult, CapabilityDefinition } from './core.js';
 
@@ -518,6 +518,40 @@ export function quoteOf(m: RegExpMatchArray): string {
 }
 
 /**
+ * 引号形状校验（十审 P2：同样式嵌套/不成对会被配对正则截断——截断内容
+ * 归一化后可能恰好命中，后半段只需一个锚点即通过。拒嵌套、拒悬空）。
+ * daemon lint 与 e2e 共用。
+ */
+export function quoteShapeErrors(text: string, where: string): string[] {
+  const styles: Array<[string, string]> = [
+    ['「', '」'],
+    ['『', '』'],
+    ['\u201c', '\u201d'],
+  ];
+  const errors: string[] = [];
+  for (const [open, close] of styles) {
+    let depth = 0;
+    for (const ch of text) {
+      if (ch === open) {
+        depth += 1;
+        if (depth > 1) {
+          errors.push(`${where}：${open}${close} 引号嵌套——引文用单层引号`);
+          depth = 1; // 只报一次
+        }
+      } else if (ch === close) {
+        depth -= 1;
+        if (depth < 0) {
+          errors.push(`${where}：${close} 悬空闭引号`);
+          depth = 0;
+        }
+      }
+    }
+    if (depth > 0) errors.push(`${where}：${open} 未闭合`);
+  }
+  return errors;
+}
+
+/**
  * fact 证据核验（终态唯一事实门，六审并档）：
  * 1. source 界内（引用不存在的转录段 → 拒）；
  * 2. 引文逐字：text 里**任意长度**的配对引号（「」“”『』），其内容
@@ -577,12 +611,32 @@ export function factEvidenceErrors(
   //    散文：
   //    - 冒号/任何位置的无证据散文一律核（九审 P1：文本内「标签：」不再
   //      豁免——展示性标签走 claim.label 字段，不占 text）；
-  //    - 引文**前**的 ≤6 字散文仅在「含言语动词（说/强调/指出…）且无
-  //      否定词」时视为引导语豁免（九审 P1：『每日练习「…」』『老师没有
-  //      说过「…」』类不再放行——否定词会翻转引文语义）；
+  //    - 引文**前**的散文仅当**全等**命中引导语白名单（十审 P1：子串匹配
+  //      可被「每天说/讲义/小明要求」绕过——全等无子串余地）时豁免；
   //    - 引文**后**的散文必须锚定。
-  const SPEECH_VERB_RE = /(说|讲|强调|指出|要求|叮嘱|嘱咐|重复|谈到|点题|定性|交代)/;
-  const NEGATION_RE = /(不|没|未|别|无|非)/;
+  const GUIDE_WHITELIST = new Set([
+    '',
+    '老师',
+    '老师说',
+    '老师强调',
+    '老师指出',
+    '老师要求',
+    '老师叮嘱',
+    '老师重复',
+    '老师讲到',
+    '老师谈到',
+    '老师交代',
+    '并说',
+    '并强调',
+    '再次强调',
+    '再次说',
+    '随后说',
+    '接着说',
+    '先说',
+    '又说',
+    '还说',
+    '原话是',
+  ]);
   const masked = claim.text.replace(ANY_QUOTE_RE, '◇');
   const clauses = masked
     .split(/(?<=[。；！？\n，、：])|(?<=——)/)
@@ -617,9 +671,8 @@ export function factEvidenceErrors(
       const after = clause.slice(quoteIdx + 1);
       const beforeNorm = normalizeClaimText(before);
       const afterNorm = normalizeClaimText(after);
-      // 引文前引导语：≤6 字 + 言语动词 + 无否定 → 豁免；否则核锚点。
-      const guide =
-        beforeNorm.length <= 6 && SPEECH_VERB_RE.test(before) && !NEGATION_RE.test(beforeNorm);
+      // 引文前引导语：全等白名单 → 豁免；否则核锚点。
+      const guide = GUIDE_WHITELIST.has(beforeNorm);
       if (!guide) {
         const err = anchorCheck(beforeNorm, before);
         if (err) errors.push(err);
@@ -700,6 +753,9 @@ function lintContentSemantics(
   // 0) fact 证据核验（终态唯一事实门，六审并档）：source 界内 + 任意长度
   // 引文逐字（只对所引段）+ 逐句 ≥4 字原文锚点（不跨段）。
   const segmentTexts = segments.map((s) => String(s.text ?? ''));
+  claims.forEach((claim, i) => {
+    errors.push(...quoteShapeErrors(claimText(claim), `第 ${i + 1} 条`));
+  });
   claims.forEach((claim, i) => {
     errors.push(
       ...factEvidenceErrors(claim as { kind: string; text: string; source: number[] }, segmentTexts, `第 ${i + 1} 条 fact`),
@@ -803,7 +859,7 @@ const SummaryClaimSchema = z.union([
     kind: z.literal('fact'),
     text: z.string().min(1),
     source: z.array(z.number().int().min(0)).min(1),
-    label: z.string().max(12).optional(),
+    label: z.enum(CLAIM_LABELS).optional(),
   }),
   z.object({
     kind: z.enum(['inference', 'suggestion']),

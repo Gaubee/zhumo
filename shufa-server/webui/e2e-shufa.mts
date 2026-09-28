@@ -12,7 +12,7 @@ import path from 'node:path';
 import { RPCLink } from '@orpc/client/websocket';
 import { createORPCClient } from '@orpc/client';
 // 校验表与 daemon 同源（Codex 五审 P2：两份复制表漂移=网内自洽假阳性）。
-const { VISUAL_RE, RISKY_RE, ANY_QUOTE_RE, factEvidenceErrors, nonFactQuoteErrors } = await import(
+const { VISUAL_RE, RISKY_RE, ANY_QUOTE_RE, factEvidenceErrors, nonFactQuoteErrors, quoteShapeErrors } = await import(
   '../daemon/src/capability/analysis.js'
 );
 
@@ -117,6 +117,7 @@ if (task?.status !== 'done') {
         check(false, `${where} 为合法三态对象（得到 ${JSON.stringify(c)?.slice(0, 40)}）`);
         continue;
       }
+      for (const err of quoteShapeErrors(String(c.text ?? ''), where)) check(false, err);
       if (c.kind === 'fact') {
         for (const err of factEvidenceErrors(c as { kind: string; text: string; source: number[] }, segments, where)) {
           check(false, err);

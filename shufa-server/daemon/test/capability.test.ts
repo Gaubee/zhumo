@@ -13,7 +13,7 @@ import { mkdtempSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createAnalysisCapabilities, execShell, factEvidenceErrors, nonFactQuoteErrors, parseLastJsonLine, type ShellOutcome } from '../src/capability/analysis.js';
+import { createAnalysisCapabilities, execShell, factEvidenceErrors, nonFactQuoteErrors, parseLastJsonLine, quoteShapeErrors, type ShellOutcome } from '../src/capability/analysis.js';
 import { createCapabilityRegistry } from '../src/capability/core.js';
 import { mcpToolName } from '../src/capability/mcp.js';
 
@@ -533,7 +533,7 @@ describe('shufa capability 工具面', () => {
       {
         workdir: taskDir,
         content:
-          '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师讲了「重心」的讲评甲字的内容。","source":[0]}],"key_points":[{"kind":"fact","text":"乙字的内容","source":[0]}]}',
+          '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师讲到「重心」的讲评甲字的内容。","source":[0]}],"key_points":[{"kind":"fact","text":"乙字的内容","source":[0]}]}',
       },
       'agent',
     );
@@ -646,6 +646,62 @@ describe('shufa capability 工具面', () => {
         e.includes('无原文锚点'),
       ),
     ).toBe(true);
+  });
+
+  it('十审补测：引导语全等白名单（子串绕过关闭）/引号形状/label 枚举', () => {
+    const segs = ['老师说上下要对齐'];
+    // 子串绕过四连（每天说/小明要求/讲义/裸要求——含动词字但非白名单全等）。
+    for (const bad of ['每天说「上下要对齐」。', '小明要求「上下要对齐」。', '讲义「上下要对齐」。', '要求「上下要对齐」。']) {
+      expect(factEvidenceErrors({ kind: 'fact', text: bad, source: [0] }, segs, 'x').some((e) => e.includes('无原文锚点') || e.includes('无原文支撑'))).toBe(true);
+    }
+    // 白名单全等引导语仍豁免。
+    expect(factEvidenceErrors({ kind: 'fact', text: '老师强调「上下要对齐」。', source: [0] }, segs, 'x')).toEqual([]);
+    expect(factEvidenceErrors({ kind: 'fact', text: '再次强调「上下要对齐」。', source: [0] }, segs, 'x')).toEqual([]);
+    // 引号形状：同样式嵌套/悬空/未闭合（十审 P2：截断可绕证据边界）。
+    expect(quoteShapeErrors('「真实「内」这是伪造」', 'x').some((e) => e.includes('嵌套'))).toBe(true);
+    expect(quoteShapeErrors('老师说「上下要对齐', 'x').some((e) => e.includes('未闭合'))).toBe(true);
+    expect(quoteShapeErrors('上下要对齐」今天', 'x').some((e) => e.includes('悬空'))).toBe(true);
+    // 跨样式嵌套合法（外层『』内层「」——转录自带「」时的正确写法）。
+    expect(quoteShapeErrors('『这个「桂」字啊』', 'x')).toEqual([]);
+  });
+
+  it('十审补测（registry 级）：label 枚举越权拒、白名单过；嵌套引文拒写', async () => {
+    mkdirSync(path.join(taskDir, '.shufa-work'), { recursive: true });
+    writeFileSync(
+      path.join(taskDir, '.shufa-work', 'manifest.json'),
+      JSON.stringify({ probe: { duration_s: 30 }, transcribe: { segments: [{ start: 0, end: 4, text: '老师说上下要对齐' }] } }),
+    );
+    const badLabel = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content:
+          '{"topic":"甲","paragraphs":[{"kind":"fact","label":"每天练习一百遍","text":"老师强调「上下要对齐」。","source":[0]}],"key_points":[{"kind":"fact","text":"上下要对齐","source":[0]}]}',
+      },
+      'agent',
+    );
+    expect(badLabel).toMatchObject({ kind: 'failed' });
+    const okLabel = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content:
+          '{"topic":"甲","paragraphs":[{"kind":"fact","label":"书写要领","text":"老师强调「上下要对齐」。","source":[0]}],"key_points":[{"kind":"fact","text":"上下要对齐","source":[0]}]}',
+      },
+      'agent',
+    );
+    expect(okLabel).toMatchObject({ kind: 'ok' });
+    const nested = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content:
+          '{"topic":"甲","paragraphs":[{"kind":"fact","text":"「真实「内」这是老师伪造」","source":[0]}],"key_points":[{"kind":"fact","text":"上下要对齐","source":[0]}]}',
+      },
+      'agent',
+    );
+    expect(nested).toMatchObject({ kind: 'failed' });
+    expect((nested as { message: string }).message).toContain('嵌套');
   });
 
   it('export 终态门禁（五审 P1-1）：bundle summary 退化为纯 string → 拒绝导出', async () => {

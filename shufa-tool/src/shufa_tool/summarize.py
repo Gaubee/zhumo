@@ -116,10 +116,12 @@ def load_injected(path: Path, source: str = "injected") -> Summary:
                 )
             if not isinstance(item.get("text"), str) or not item["text"]:
                 raise ValueError(f"summary 结构未达终态契约：{field_name}[{i}].text 必须是非空字符串")
+            if "label" in item and (not isinstance(item["label"], str) or item["label"] not in CLAIM_LABELS):
+                raise ValueError(
+                    f"summary 结构未达终态契约：{field_name}[{i}].label 须是枚举白名单之一"
+                    f"（{'/'.join(CLAIM_LABELS)}）且不得为 null"
+                )
             if item["kind"] == "fact":
-                label = item.get("label")
-                if label is not None and (not isinstance(label, str) or len(label) > 12):
-                    raise ValueError(f"summary 结构未达终态契约：{field_name}[{i}].label 须是 ≤12 字的展示性标签")
                 src = item.get("source")
                 if (
                     not isinstance(src, list)
@@ -148,11 +150,66 @@ _QUOTE_CAP_RE = re.compile(r"「([^」]+)」|“([^”]+)”|『([^』]+)』")
 _CLAUSE_SPLIT_RE = re.compile(r"(?<=[。；！？\n，、：])|(?<=——)")
 # 引号整段剥除（锚点核验只针对非引文散文）。
 _QUOTE_STRIP_RE = re.compile(r"「[^」]*」|“[^”]*”|『[^』]*』")
-# 言语动词（引导语豁免的语法类判定——九审 P1：『每日练习「…」』类无言语
-# 动词的散文不再豁免）。
-_SPEECH_VERB_RE = re.compile(r"(说|讲|强调|指出|要求|叮嘱|嘱咐|重复|谈到|点题|定性|交代)")
-# 否定词守卫（九审 P1：『老师没有说过「…」』的否定会翻转引文语义）。
-_NEGATION_RE = re.compile(r"(不|没|未|别|无|非)")
+# 引导语白名单（十审 P1：子串匹配可被「每天说/讲义/小明要求」绕过——
+# 全等匹配无子串余地；与 daemon GUIDE_WHITELIST 同表）。
+_GUIDE_WHITELIST = {
+    "",
+    "老师",
+    "老师说",
+    "老师强调",
+    "老师指出",
+    "老师要求",
+    "老师叮嘱",
+    "老师重复",
+    "老师讲到",
+    "老师谈到",
+    "老师交代",
+    "并说",
+    "并强调",
+    "再次强调",
+    "再次说",
+    "随后说",
+    "接着说",
+    "先说",
+    "又说",
+    "还说",
+    "原话是",
+}
+# fact 展示性标签枚举（与 contracts CLAIM_LABELS 同表）。
+CLAIM_LABELS = (
+    "讲评对象",
+    "开场点题",
+    "结构定性",
+    "书写要领",
+    "核心要点",
+    "指出问题",
+    "卷面问题",
+    "处理动作",
+    "练习要点",
+    "补充说明",
+)
+
+
+def _quote_shape_errors(text: str, where: str) -> list[str]:
+    """引号形状（十审 P2：同样式嵌套/不成对会被配对正则截断绕过）。"""
+    errors: list[str] = []
+    for oc in (("「", "」"), ("『", "』"), ("\u201c", "\u201d")):
+        depth = 0
+        reported = False
+        for ch in text:
+            if ch == oc[0]:
+                depth += 1
+                if depth > 1 and not reported:
+                    errors.append(f"{where}：{oc[0]}{oc[1]} 引号嵌套——引文用单层引号")
+                    reported = True
+            elif ch == oc[1]:
+                depth -= 1
+                if depth < 0:
+                    errors.append(f"{where}：{oc[1]} 悬空闭引号")
+                    depth = 0
+        if depth > 0:
+            errors.append(f"{where}：{oc[0]} 未闭合")
+    return errors
 
 
 def _norm(t: str) -> str:
@@ -187,6 +244,7 @@ def validate_summary_evidence(summary: dict, segment_texts: list[str]) -> list[s
             where = f"{field_name}[{i}]"
             kind = item.get("kind")
             text = item.get("text") if isinstance(item.get("text"), str) else ""
+            errors.extend(_quote_shape_errors(text, where))
             if kind == "fact":
                 if not segment_texts:
                     errors.append(f"{where} 无转录可引（fact 需要转录证据；改用 inference/suggestion）")
@@ -244,12 +302,7 @@ def validate_summary_evidence(summary: dict, segment_texts: list[str]) -> list[s
                         continue
                     before, after = clause[:qi], clause[qi + 1 :]
                     before_ns, after_ns = _norm(before), _norm(after)
-                    guide = (
-                        len(before_ns) <= 6
-                        and _SPEECH_VERB_RE.search(before)
-                        and not _NEGATION_RE.search(before_ns)
-                    )
-                    if not guide:
+                    if before_ns not in _GUIDE_WHITELIST:
                         err = _anchor_err(before_ns, before)
                         if err:
                             errors.append(err)
