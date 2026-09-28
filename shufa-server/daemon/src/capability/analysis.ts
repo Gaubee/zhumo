@@ -731,7 +731,9 @@ function lintContentSemantics(
   let manifest: {
     probe?: { duration_s?: number };
     transcribe?: { segments?: Array<{ text?: string }> };
-    ink?: { annotations?: Array<{ first_ts?: number }> };
+    ink?: { annotations?: Array<{ first_ts?: number; bbox?: number[] }> };
+    grid?: { grids?: Array<{ idx?: number; center?: number[]; side?: number }> };
+    focus?: { grid_idx?: number };
   } | null = null;
   try {
     manifest = JSON.parse(readFileSync(path.join(taskDir, '.shufa-work', 'manifest.json'), 'utf8'));
@@ -829,6 +831,41 @@ function lintContentSemantics(
         );
       }
     });
+    // 逐格证据（十二审 run19 回归：三格全标「桂」而转录只支撑焦点格——
+    // f202ed82「留空一等公民」契约机器化）：同一非空 label 标在 >1 格时，
+    // 每格要么是焦点格，要么有旁注墨迹中心落在该格内（manifest 几何可算）。
+    const mGrids = manifest?.grid?.grids ?? [];
+    const focusIdx = manifest?.focus?.grid_idx;
+    const inkAnnos = manifest?.ink?.annotations ?? [];
+    const gridHasInk = (gidx: number): boolean => {
+      const grid = mGrids.find((x) => x.idx === gidx);
+      if (!grid?.center || typeof grid.side !== 'number') return false;
+      const [cx, cy] = grid.center;
+      const r = grid.side / 2 + 20; // 墨迹中心容差
+      return inkAnnos.some((a) => {
+        const [x, y, w, h] = a.bbox ?? [];
+        if ([x, y, w, h].some((v) => typeof v !== 'number')) return false;
+        const ax = x! + w! / 2;
+        const ay = y! + h! / 2;
+        return Math.abs(ax - cx!) <= r && Math.abs(ay - cy!) <= r;
+      });
+    };
+    const byLabel = new Map<string, number[]>();
+    (labelsObj!.grids as Array<{ index?: unknown; label?: unknown }>).forEach((g) => {
+      if (typeof g.label !== 'string' || g.label === '' || typeof g.index !== 'number') return;
+      const list = byLabel.get(g.label) ?? [];
+      list.push(g.index);
+      byLabel.set(g.label, list);
+    });
+    for (const [label, idxs] of byLabel) {
+      if (idxs.length <= 1) continue;
+      for (const gidx of idxs) {
+        if (gidx === focusIdx || gridHasInk(gidx)) continue;
+        errors.push(
+          `labels：label「${label}」标了 ${idxs.length} 格，格 ${gidx} 无逐格证据（非焦点格且无旁注墨迹落入）——只标有证据的格，其余留空`,
+        );
+      }
+    }
   }
 
   // 5) fact 兜底词表（终态主门=source+锚点；此表只拦已知的无源分析词形，

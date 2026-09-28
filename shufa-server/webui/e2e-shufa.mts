@@ -142,6 +142,23 @@ if (task?.status !== 'done') {
     }
     check((data.annotations ?? []).every((a: any) => typeof a.grid_idx === 'number'), 'annotations.grid_idx 全存在（格级关联）');
     check((data.summary?.paragraphs ?? []).length >= 2, 'data.summary 已注入');
+    // 逐格证据产物面复核（十二审 run19 回归）：同一 label 标在 >1 格时，每格
+    // 须为焦点格或有旁注挂到该格（export 的 grid_idx 关联）。
+    const labelIdxs = new Map<string, number[]>();
+    for (const c of data.chars ?? []) {
+      if (!c.label) continue;
+      const list = labelIdxs.get(c.label) ?? [];
+      list.push(c.idx);
+      labelIdxs.set(c.label, list);
+    }
+    const focusIdx = data.focus_grid_idx ?? null;
+    const annGrids = new Set((data.annotations ?? []).map((a: any) => a.grid_idx));
+    for (const [label, idxs] of labelIdxs) {
+      if (idxs.length <= 1) continue;
+      for (const gidx of idxs) {
+        check(gidx === focusIdx || annGrids.has(gidx), `label「${label}」格 ${gidx} 有逐格证据（焦点或旁注挂载）`);
+      }
+    }
     // 7) desc 无视觉动作词（daemon 硬拦后的产物面复核；同源 VISUAL_RE。
     //    用 .match 而非 .test——g 旗标下 test 的 lastIndex 跨调用有状态）。
     for (const a of labels.annotations ?? []) {

@@ -269,7 +269,7 @@ describe('shufa capability 工具面', () => {
       {
         workdir: taskDir,
         content: '{"topic":"桂","paragraphs":[{"kind":"fact","text":"本段讲评桂字","source":[0]}],"key_points":[{"kind":"fact","text":"讲评桂字要领","source":[0]}]}',
-        labels: '{"grids":[{"index":0,"label":"桂"},{"index":2,"label":"桂"}],"annotations":[{"index":0,"desc":"指出主笔"}]}',
+        labels: '{"grids":[{"index":0,"label":"桂"},{"index":2,"label":"字"}],"annotations":[{"index":0,"desc":"指出主笔"}]}',
       },
       'agent',
     );
@@ -358,7 +358,7 @@ describe('shufa capability 工具面', () => {
         content:
           '{"topic":"桂","paragraphs":[{"kind":"fact","text":"老师强调「要注意这个土跟这个土上下要对齐」","source":[1]}],"key_points":[{"kind":"fact","text":"上下要对齐（t≈15s）","source":[1]}]}',
         labels:
-          '{"grids":[{"index":0,"label":"桂"},{"index":1,"label":"桂"},{"index":2,"label":"桂"}],"annotations":[{"index":1,"desc":"t≈15s：强调上下两土对齐"}]}',
+          '{"grids":[{"index":0,"label":"桂"}],"annotations":[{"index":1,"desc":"t≈15s：强调上下两土对齐"}]}',
       },
       'agent',
     );
@@ -705,6 +705,53 @@ describe('shufa capability 工具面', () => {
     );
     expect(nested).toMatchObject({ kind: 'failed' });
     expect((nested as { message: string }).message).toContain('嵌套');
+  });
+
+  it('十二审补测：多格同 label 逐格证据（run19 几何实据——三格全标「桂」拒）', async () => {
+    // run19 真实 manifest 几何：focus=1；三旁注墨迹中心均不在格 0/2 内。
+    mkdirSync(path.join(taskDir, '.shufa-work'), { recursive: true });
+    writeFileSync(
+      path.join(taskDir, '.shufa-work', 'manifest.json'),
+      JSON.stringify({
+        probe: { duration_s: 30 },
+        transcribe: { segments: [{ start: 0, end: 4, text: '讲评桂字' }] },
+        grid: { grids: [
+          { idx: 0, center: [749.5, 109.5], side: 76 },
+          { idx: 1, center: [812.8, 249.0], side: 82 },
+          { idx: 2, center: [666.2, 252.2], side: 75 },
+        ] },
+        ink: { annotations: [
+          { index: 0, bbox: [784, 290, 65, 74], first_ts: 9.0 },
+          { index: 1, bbox: [945, 264, 107, 32], first_ts: 15.0 },
+          { index: 2, bbox: [862, 308, 34, 50], first_ts: 28.5 },
+        ] },
+        focus: { grid_idx: 1 },
+      }),
+    );
+    const content = '{"topic":"桂","paragraphs":[{"kind":"fact","text":"讲评桂字","source":[0]}],"key_points":[{"kind":"fact","text":"讲评桂字","source":[0]}]}';
+    // run19 回归形态：三格全标 → 拒（格 0/2 无逐格证据）。
+    const overLabel = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content,
+        labels: '{"grids":[{"index":0,"label":"桂"},{"index":1,"label":"桂"},{"index":2,"label":"桂"}],"annotations":[{"index":0,"desc":"指出结构"}]}',
+      },
+      'agent',
+    );
+    expect(overLabel).toMatchObject({ kind: 'failed' });
+    expect((overLabel as { message: string }).message).toContain('无逐格证据');
+    // run17/18 形态：仅焦点格 → 过。
+    const focusOnly = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content,
+        labels: '{"grids":[{"index":1,"label":"桂"}],"annotations":[{"index":0,"desc":"指出结构"}]}',
+      },
+      'agent',
+    );
+    expect(focusOnly).toMatchObject({ kind: 'ok' });
   });
 
   it('export 终态门禁（五审 P1-1）：bundle summary 退化为纯 string → 拒绝导出', async () => {
