@@ -822,10 +822,12 @@ function lintContentSemantics(
       }
     });
   }
-  if (transcriptText && Array.isArray(labelsObj?.grids)) {
+  // 十三审 P1：逐格证据不依赖转录是否为空（空转录+三格同标曾绕过）——
+  // 非空 label 一律要求转录点名（空转录＝无证据可标）。
+  if (Array.isArray(labelsObj?.grids)) {
     (labelsObj!.grids as Array<{ index?: unknown; label?: unknown }>).forEach((g, i) => {
       if (typeof g.label !== 'string' || g.label === '') return;
-      if (!transcriptText.includes(g.label)) {
+      if (!transcriptText || !transcriptText.includes(g.label)) {
         errors.push(
           `labels.grids[${i}].label「${g.label}」未在转录中出现——无逐格证据的字不标（留空）`,
         );

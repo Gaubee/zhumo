@@ -752,6 +752,21 @@ describe('shufa capability 工具面', () => {
       'agent',
     );
     expect(focusOnly).toMatchObject({ kind: 'ok' });
+    // 十三审 P1：空转录也不能绕过（label 无证据可标，一律拒）。
+    const noTranscript = JSON.parse(readFileSync(path.join(taskDir, '.shufa-work', 'manifest.json'), 'utf8'));
+    noTranscript.transcribe = { segments: [] };
+    writeFileSync(path.join(taskDir, '.shufa-work', 'manifest.json'), JSON.stringify(noTranscript));
+    const emptyTranscript = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content: '{"topic":"桂","paragraphs":[{"kind":"inference","text":"分析"}],"key_points":[{"kind":"suggestion","text":"建议"}]}',
+        labels: '{"grids":[{"index":0,"label":"桂"},{"index":1,"label":"桂"},{"index":2,"label":"桂"}],"annotations":[]}',
+      },
+      'agent',
+    );
+    expect(emptyTranscript).toMatchObject({ kind: 'failed' });
+    expect((emptyTranscript as { message: string }).message).toContain('未在转录中出现');
   });
 
   it('export 终态门禁（五审 P1-1）：bundle summary 退化为纯 string → 拒绝导出', async () => {

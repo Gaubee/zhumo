@@ -459,6 +459,51 @@ def _previews(views: Views, ts: list[float], x0: int, y0: int, x1: int, y1: int,
     return out
 
 
+def validate_labels_evidence(
+    lab: dict, grids: list, annos_data: list[dict], focus_gi: int, transcript_text: str
+) -> list[str]:
+    """labels 逐格证据核验（十三审 P1：--labels 注入曾绕过——空转录+三格
+    同标直接导出。与 daemon lintContentSemantics 同规）：
+    - 非空 label 必须在转录中出现（空转录＝无证据可标）；
+    - 同一 label 标在 >1 格时，每格须为焦点格或有旁注墨迹中心落入该格
+      （Grid.center/side 与 annos bbox 几何，容差 side/2+20px）。"""
+    errors: list[str] = []
+    by_label: dict[str, list[int]] = {}
+    for item in lab.get("grids", []):
+        label = item.get("label", "")
+        idx = item.get("index")
+        if not isinstance(label, str) or label == "" or not isinstance(idx, int):
+            continue
+        if not transcript_text or label not in transcript_text:
+            errors.append(f'labels.grids label「{label}」未在转录中出现——无逐格证据的字不标（留空）')
+        by_label.setdefault(label, []).append(idx)
+    for label, idxs in by_label.items():
+        if len(idxs) <= 1:
+            continue
+        for gidx in idxs:
+            if gidx == focus_gi:
+                continue
+            g = grids[gidx] if 0 <= gidx < len(grids) else None
+            if g is None:
+                errors.append(f'labels：label「{label}」的格 {gidx} 越界')
+                continue
+            cx, cy = g.center
+            r = g.side / 2 + 20
+            hit = False
+            for a in annos_data:
+                x, y, w, h = a.get("bbox", [None] * 4)
+                if None in (x, y, w, h):
+                    continue
+                if abs(x + w / 2 - cx) <= r and abs(y + h / 2 - cy) <= r:
+                    hit = True
+                    break
+            if not hit:
+                errors.append(
+                    f'labels：label「{label}」标了 {len(idxs)} 格，格 {gidx} 无逐格证据（非焦点格且无旁注墨迹落入）'
+                )
+    return errors
+
+
 def export_stage(
     *,
     out_dir: Path,
@@ -514,6 +559,9 @@ def export_stage(
             raise ValueError(f"标签 JSON 读取失败（{labels}）：{e}") from e
         if isinstance(lab, list):  # 裸数组 = 仅格标签
             lab = {"grids": lab}
+        lab_ev = validate_labels_evidence(lab, grids, annos_data, focus_gi, text)
+        if lab_ev:
+            raise ValueError("labels 证据核验未过：" + "；".join(lab_ev))
         for item in lab.get("grids", []):
             if 0 <= item["index"] < len(grids_data):
                 grids_data[item["index"]]["label"] = item["label"]
