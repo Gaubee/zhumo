@@ -102,7 +102,7 @@ if (task?.status !== 'done') {
     check((summary.key_points ?? []).length >= 1, 'summary.key_points ≥ 1');
     // 3) 引文逐字复核（与 daemon 同规：≥4 字「」去标点后子串命中）
     const norm = (t: string) => t.replace(/[\s，。、；：？！,.;:?!"'（）()「」『』…—·]/g, '');
-    const quotes = [...(summary.paragraphs ?? []), ...(summary.key_points ?? [])].join('\n').match(/[「“『]([^」”』]{4,})[」”』]/g) ?? [];
+    const quotes = [...(summary.paragraphs ?? []), ...(summary.key_points ?? [])].join('\n').match(/「([^」]{4,})」|“([^”]{4,})”|『([^』]{4,})』/g) ?? [];
     for (const q of quotes) {
       const inner = q.slice(1, -1);
       check(norm(transcript).includes(norm(inner)), `引文逐字见于转录：「${inner}」`);
@@ -123,9 +123,18 @@ if (task?.status !== 'done') {
     }
     for (const para of [...(summary.paragraphs ?? []), ...(summary.key_points ?? [])]) {
       const t = typeof para === 'string' ? para : para?.text ?? '';
-      check(!VISUAL.test(t.replace(/[「“『]([^」”』]{4,})[」”』]/g, '')), 'summary 段落无未豁免视觉动作词');
+      check(!VISUAL.test(t.replace(/「[^」]{4,}」|“[^”]{4,}”|『[^』]{4,}』/g, '')), 'summary 段落无未豁免视觉动作词');
     }
-    // 7) 建议条已声明（无「练习建议：」开头纯字符串）。
+    // 7) 高风险分析词不得出现在纯 string 事实段（Codex 三审 PASS 条件；
+    //    inference/suggestion 对象段的 text 不查；引号内原话豁免）。
+    // 与 daemon lintContentSemantics riskyRe 同表（四审要求一致；daemon 改表时同步此处）。
+    const RISKY = /(中轴|垂直线|竖直线|重心|最关键|最容易|正对|正下方|匀称|比例|部件错位|对位标准|动手纠正|未对齐|逐字精讲)/;
+    for (const [i, c] of [...(summary.paragraphs ?? []), ...(summary.key_points ?? [])].entries()) {
+      if (typeof c === 'string') {
+        check(!RISKY.test(c.replace(/「[^」]{4,}」|“[^”]{4,}”|『[^』]{4,}』/g, '')), `第 ${i + 1} 条事实段无高风险分析词`);
+      }
+    }
+    // 8) 建议条已声明（无「练习建议：」开头纯字符串）。
     for (const [i, c] of [...(summary.paragraphs ?? []), ...(summary.key_points ?? [])].entries()) {
       if (typeof c === 'string') check(!/^(练习建议|练习路径|建议)[:：]/.test(c), `第 ${i + 1} 条非未声明建议`);
     }

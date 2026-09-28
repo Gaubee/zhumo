@@ -465,6 +465,25 @@ describe('shufa capability 工具面', () => {
     );
     expect(bareSuggestion.kind).toBe('failed');
     expect((bareSuggestion as { message: string }).message).toContain('显式声明');
+    // 四审补测：已知漏项形态（动手纠正/未对齐/逐字精讲）拒写。
+    const leak1 = await registry.call(
+      'shufa.summary_write',
+      { workdir: taskDir, content: '{"topic":"甲","paragraphs":["老师当场动手纠正了问题"],"key_points":["要点"]}' },
+      'agent',
+    );
+    expect(leak1.kind).toBe('failed');
+    const leak2 = await registry.call(
+      'shufa.summary_write',
+      { workdir: taskDir, content: '{"topic":"甲","paragraphs":["上下两土未对齐"],"key_points":["要点"]}' },
+      'agent',
+    );
+    expect(leak2.kind).toBe('failed');
+    const leak3 = await registry.call(
+      'shufa.summary_write',
+      { workdir: taskDir, content: '{"topic":"甲","paragraphs":["老师逐字精讲该字"],"key_points":["要点"]}' },
+      'agent',
+    );
+    expect(leak3.kind).toBe('failed');
     // 5) 混合类型合法：转录事实（string）+ 推断/建议（对象形态）→ ok 落盘。
     const mixed = await registry.call(
       'shufa.summary_write',

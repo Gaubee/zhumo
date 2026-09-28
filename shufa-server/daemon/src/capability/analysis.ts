@@ -513,11 +513,13 @@ function lintContentSemantics(
   // = 转录原话，视觉动词黑名单对其豁免。
   const norm = (t: string) =>
     t.replace(/[\s，。、；：？！,.;:?!"'（）()「」『』…—·]/g, '');
-  const quoteRe = /[「“『]([^」”』]{4,})[」”』]/g;
+  // 配对一致（run7 实证 agent 会混用「…" 错配——跨族正则切出怪引文）。
+  const quoteRe = /「([^」]{4,})」|“([^”]{4,})”|『([^』]{4,})』/g;
+  const quoteOf = (m: RegExpMatchArray): string => m[1] ?? m[2] ?? m[3] ?? '';
   const strippedQuotes = (t: string): string => t.replace(quoteRe, '');
   const quotes: string[] = [];
   for (const para of texts) {
-    for (const m of para.matchAll(quoteRe)) quotes.push(m[1]!);
+    for (const m of para.matchAll(quoteRe)) quotes.push(quoteOf(m));
   }
   if (transcriptText && quotes.length > 0) {
     const haystack = norm(transcriptText);
@@ -538,9 +540,10 @@ function lintContentSemantics(
   };
   texts.forEach((t, i) => checkVisual(t, `summary 第 ${i + 1} 条`));
 
-  // 3) 时间全遍历（topic/段落/要点/labels desc；秒字变体；负数显式拒绝）。
-  const timeRe = /(?:t≈|约)\s*(\d+(?:\.\d+)?)\s*(?:s|秒)/g;
-  const negTimeRe = /(?:t≈|约)\s*-(\d+(?:\.\d+)?)/;
+  // 3) 时间全遍历（topic/段落/要点/labels desc；秒字变体；负数显式拒绝；
+  // 三审补充：裸「15s/28.5秒」列表形态也核——凡 数字+s/秒 一律对时长）。
+  const timeRe = /(\d+(?:\.\d+)?)\s*(?:s|秒)/g;
+  const negTimeRe = /(?<!\d)-(\d+(?:\.\d+)?)\s*(?:s|秒)/; // 前邻数字=范围写法（5.4-11.2s）不算负数
   const checkTime = (text: string, where: string) => {
     if (duration <= 0) return;
     if (negTimeRe.test(text)) {
@@ -587,7 +590,22 @@ function lintContentSemantics(
     });
   }
 
-  // 5) 练习建议必须显式声明（Codex 三审边界：混在纯文本里的建议条 → 拒）。
+  // 5) 高风险分析词不得混入纯 string 事实段（三审 run6/run7 两轮实证模型
+  //    不执行自检——升为拒写级驱动拆分或 inference 声明；词表为过渡方案，
+  //    终态是 Codex 建议的证据字段。引号内原话豁免。
+  // 词表四审封版（不再扩：终态换 source+segment 证据字段）。
+  const riskyRe = /(中轴|垂直线|竖直线|重心|最关键|最容易|正对|正下方|匀称|比例|部件错位|对位标准|动手纠正|未对齐|逐字精讲)/;
+  claims.forEach((claim, i) => {
+    if (typeof claim !== 'string') return;
+    const hit = riskyRe.exec(strippedQuotes(claim));
+    if (hit) {
+      errors.push(
+        `第 ${i + 1} 条事实段含分析判断「${hit[1]}」——老师没说过的几何/机理/重要性判断须拆为 {"kind":"inference","text":…} 或删除`,
+      );
+    }
+  });
+
+  // 6) 练习建议必须显式声明（Codex 三审边界：混在纯文本里的建议条 → 拒）。
   claims.forEach((claim, i) => {
     if (typeof claim !== 'string') return;
     if (/^(练习建议|练习路径|建议)[:：]/.test(claim)) {
