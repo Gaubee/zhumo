@@ -290,12 +290,16 @@
                 </div>
                 <div class="char-info">
                   <h3>{row.label ? `「${row.label}」` : "未标注"}{#if row.chars.length > 1}<span class="chip">{row.chars.length} 格</span>{:else if row.chars[0]?.note && !["开场已写好", "片段内书写"].includes(row.chars[0].note)}<span class="chip">{row.chars[0].note}</span>{/if}</h3>
-                  <p class="dim-line">关联旁注 {row.related.length} 处</p>
+                  {#if row.related.length > 0}
+                    <p class="dim-line">关联旁注 {row.related.length} 处</p>
+                  {:else if row.label}
+                    <p class="dim-line">本片段无针对该字的旁注</p>
+                  {:else}
+                    <p class="dim-line">转录未点名该格 · 无关联旁注</p>
+                  {/if}
                   <div class="char-annos">
                     {#if row.related.length > 0}
                       {#each row.related as a (a.idx)}{@render annoCard(a)}{/each}
-                    {:else}
-                      <p class="dim anno-empty">本片段无针对该字的旁注</p>
                     {/if}
                   </div>
                 </div>
