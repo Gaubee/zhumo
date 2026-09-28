@@ -542,6 +542,13 @@ export function factEvidenceErrors(
   }
   const segNorms = claim.source.map((idx) => normalizeClaimText(segments[idx] ?? ''));
   const scopeNorm = segNorms.join('');
+  // source 有序性（七审 P2：乱序/重复拼接可造出不存在的短语）。
+  for (let i = 1; i < claim.source.length; i += 1) {
+    if (claim.source[i]! <= claim.source[i - 1]!) {
+      errors.push(`${where} 的 source 必须是严格递增的去重下标序列`);
+      return errors;
+    }
+  }
   // 2) 引文逐字（任意长度；跨段拼接核——老师的句子可能被分段切开）。
   for (const m of claim.text.matchAll(ANY_QUOTE_CAPTURE_RE)) {
     const q = quoteOf(m);
@@ -549,11 +556,17 @@ export function factEvidenceErrors(
       errors.push(`${where} 引文「${q}」未见于其声明的来源段（fact 只能引 source 所指段的原话）`);
     }
   }
-  // 3) 逐句锚点（≥4 字连续原文；逐段核防跨段伪锚点）。
+  // 3) 逐句锚点（≥4 字连续原文；逐段核防跨段伪锚点；<4 字短句要求整句
+  //    出现在单一 source 段——七审 P2：短句跳过是夹带缝隙）。
   for (const sent of claim.text.split(/[。；！？\n]/)) {
     const ns = normalizeClaimText(sent);
-    // <4 字的残句（引导语/语气词）单独核无意义，并入相邻句由整句锚点覆盖。
-    if (ns.length < 4) continue;
+    if (ns.length === 0) continue;
+    if (ns.length < 4) {
+      if (!segNorms.some((seg) => seg.includes(ns))) {
+        errors.push(`${where} 的句子无原文支撑：「${sent}」（短句须整句出现在所引某段中）`);
+      }
+      continue;
+    }
     let anchored = false;
     for (const seg of segNorms) {
       for (let k = 0; k + 4 <= ns.length && !anchored; k += 1) {
@@ -565,6 +578,28 @@ export function factEvidenceErrors(
       errors.push(
         `${where} 的句子无原文锚点：「${sent}」——每句须含所引段 ≥4 字连续原话；夹带内容改 {"kind":"inference"} 或删除`,
       );
+    }
+  }
+  return errors;
+}
+
+/**
+ * 非 fact claim（inference/suggestion）的引文核验（七审 P1：1 字引号同样
+ * 是原话声明，「老师说「丙」」在全文无「丙」时是伪造——任意长度、对转录
+ * 全文逐字）。daemon lint 与 e2e 共用。
+ */
+export function nonFactQuoteErrors(
+  claim: { kind: string; text: string },
+  transcriptText: string,
+  where: string,
+): string[] {
+  if (claim.kind === 'fact') return [];
+  const haystack = normalizeClaimText(transcriptText);
+  const errors: string[] = [];
+  for (const m of claim.text.matchAll(ANY_QUOTE_CAPTURE_RE)) {
+    const q = quoteOf(m);
+    if (!haystack.includes(normalizeClaimText(q))) {
+      errors.push(`${where} 引文「${q}」未见于转录（分析/建议段引老师原话同样要忠实）`);
     }
   }
   return errors;
@@ -619,20 +654,13 @@ function lintContentSemantics(
     );
   });
 
-  // 1) 引文忠实：inference/suggestion 的 ≥4 字引文对转录全文核（分析段
-  // 引老师原话同样要忠实；fact 的引文已由 0) 分域核过）。
-  const norm = normalizeClaimText;
-  const quoteRe = QUOTE_RE;
-  const quoteOfLocal = quoteOf;
+  // 1) 引文忠实：inference/suggestion 的**任意长度**引文对转录全文核
+  // （七审 P1：1 字引号也是原话声明；fact 的引文已由 0) 分域核过。
+  // 空转录＝无证据：带引号即拒——与 python validator 同规）。
   const strippedQuotes = (t: string): string => t.replace(ANY_QUOTE_RE, '');
   claims.forEach((claim, i) => {
-    if (claim.kind === 'fact' || transcriptText === '') return;
-    for (const m of claim.text.matchAll(quoteRe)) {
-      const q = quoteOfLocal(m);
-      if (!norm(transcriptText).includes(norm(q))) {
-        errors.push(`第 ${i + 1} 条引文未见于转录：「${q}」`);
-      }
-    }
+    if (claim.kind === 'fact') return;
+    errors.push(...nonFactQuoteErrors(claim as { kind: string; text: string }, transcriptText, `第 ${i + 1} 条`));
   });
 
   // 2) 视觉动词黑名单（Codex 三审 P1：agent 看不到画面，任何视觉动作断言

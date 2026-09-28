@@ -12,7 +12,7 @@ import path from 'node:path';
 import { RPCLink } from '@orpc/client/websocket';
 import { createORPCClient } from '@orpc/client';
 // 校验表与 daemon 同源（Codex 五审 P2：两份复制表漂移=网内自洽假阳性）。
-const { VISUAL_RE, RISKY_RE, ANY_QUOTE_RE, factEvidenceErrors } = await import(
+const { VISUAL_RE, RISKY_RE, ANY_QUOTE_RE, factEvidenceErrors, nonFactQuoteErrors } = await import(
   '../daemon/src/capability/analysis.js'
 );
 
@@ -119,6 +119,10 @@ if (task?.status !== 'done') {
       }
       if (c.kind === 'fact') {
         for (const err of factEvidenceErrors(c as { kind: string; text: string; source: number[] }, segments, where)) {
+          check(false, err);
+        }
+      } else {
+        for (const err of nonFactQuoteErrors(c as { kind: string; text: string }, transcript, where)) {
           check(false, err);
         }
       }

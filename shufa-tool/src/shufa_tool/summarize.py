@@ -97,10 +97,13 @@ def load_injected(path: Path, source: str = "injected") -> Summary:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("summary 结构未达终态契约：顶层必须是 JSON 对象")
+    topic = data.get("topic", "")
+    if not isinstance(topic, str) or not topic:
+        raise ValueError("summary 结构未达终态契约：topic 必须是非空字符串")
     for field_name in ("paragraphs", "key_points"):
         items = data.get(field_name, [])
-        if not isinstance(items, list):
-            raise ValueError(f"summary 结构未达终态契约：{field_name} 必须是数组")
+        if not isinstance(items, list) or not items:
+            raise ValueError(f"summary 结构未达终态契约：{field_name} 必须是非空数组")
         for i, item in enumerate(items):
             if not isinstance(item, dict) or item.get("kind") not in (
                 "fact",
@@ -144,38 +147,62 @@ def _norm(t: str) -> str:
 
 
 def validate_summary_evidence(summary: dict, segment_texts: list[str]) -> list[str]:
-    """fact 证据核验（daemon factEvidenceErrors 的 Python 对等实现——Codex
-    六审 P1：CLI 注入路径不能只查形状，须同样核语义证据）：
-    1. source 界内；2. 任意长度引文逐字出自所引段拼接；3. 每句 ≥4 字连续
-    原文锚点且不跨段。返回错误列表（空=通过）。"""
+    """claim 证据核验（daemon factEvidenceErrors/nonFactQuoteErrors 的 Python
+    对等实现——Codex 六/七审：CLI 注入路径不能只查形状，须同样核语义证据）：
+    - 空转录：fact 一律拒绝（无证据可引；仅允许 inference/suggestion）；
+    - fact：source 界内且严格递增；任意长度引文逐字出自所引段拼接；每句
+      ≥4 字连续原文锚点且不跨段，<4 字短句须整句出现在所引某段；
+    - 非 fact：任意长度引文对转录全文逐字（1 字引号同样是原话声明）。
+    顶层/元素形状不稳定输入返回结构错误而非抛 AttributeError。返回错误
+    列表（空=通过）。"""
+    if not isinstance(summary, dict):
+        return ["summary 顶层必须是 JSON 对象"]
+    full_norm = _norm("".join(segment_texts))
     errors: list[str] = []
     for field_name in ("paragraphs", "key_points"):
-        for i, item in enumerate(summary.get(field_name, [])):
-            if item.get("kind") != "fact":
+        items = summary.get(field_name, [])
+        if not isinstance(items, list):
+            errors.append(f"{field_name} 必须是数组")
+            continue
+        for i, item in enumerate(items):
+            if not isinstance(item, dict):
+                errors.append(f"{field_name}[{i}] 必须是对象")
                 continue
             where = f"{field_name}[{i}]"
-            src = item.get("source", [])
-            if any(not isinstance(x, int) or x >= len(segment_texts) or x < 0 for x in src):
-                errors.append(f"{where} 引用了不存在的转录段（共 {len(segment_texts)} 段）")
-                continue
-            seg_norms = [_norm(segment_texts[x]) for x in src]
-            scope = "".join(seg_norms)
-            for m in _QUOTE_CAP_RE.finditer(item.get("text", "")):
-                inner = m.group(1) or m.group(2) or m.group(3) or ""
-                if _norm(inner) not in scope:
-                    errors.append(f'{where} 引文「{inner}」未见于其声明的来源段')
-            for sent in re.split(r"[。；！？\n]", item.get("text", "")):
-                ns = _norm(sent)
-                if len(ns) < 4:
+            kind = item.get("kind")
+            if kind == "fact":
+                if not segment_texts:
+                    errors.append(f"{where} 无转录可引（fact 需要转录证据；改用 inference/suggestion）")
                     continue
-                anchored = False
-                for seg in seg_norms:
-                    for k in range(len(ns) - 3):
-                        if ns[k : k + 4] in seg:
-                            anchored = True
-                            break
-                    if anchored:
-                        break
-                if not anchored:
-                    errors.append(f'{where} 的句子无原文锚点：「{sent}」')
+                src = item.get("source", [])
+                if any(not isinstance(x, int) or isinstance(x, bool) or x >= len(segment_texts) or x < 0 for x in src):
+                    errors.append(f"{where} 引用了不存在的转录段（共 {len(segment_texts)} 段）")
+                    continue
+                if any(src[k] <= src[k - 1] for k in range(1, len(src))):
+                    errors.append(f"{where} 的 source 必须是严格递增的去重下标序列")
+                    continue
+                seg_norms = [_norm(segment_texts[x]) for x in src]
+                scope = "".join(seg_norms)
+                text = item.get("text", "") if isinstance(item.get("text"), str) else ""
+                for m in _QUOTE_CAP_RE.finditer(text):
+                    inner = m.group(1) or m.group(2) or m.group(3) or ""
+                    if _norm(inner) not in scope:
+                        errors.append(f'{where} 引文「{inner}」未见于其声明的来源段')
+                for sent in re.split(r"[。；！？\n]", text):
+                    ns = _norm(sent)
+                    if not ns:
+                        continue
+                    if len(ns) < 4:
+                        if not any(ns in seg for seg in seg_norms):
+                            errors.append(f'{where} 的句子无原文支撑：「{sent}」')
+                        continue
+                    anchored = any(ns[k : k + 4] in seg for seg in seg_norms for k in range(len(ns) - 3))
+                    if not anchored:
+                        errors.append(f'{where} 的句子无原文锚点：「{sent}」')
+            else:
+                text = item.get("text", "") if isinstance(item.get("text"), str) else ""
+                for m in _QUOTE_CAP_RE.finditer(text):
+                    inner = m.group(1) or m.group(2) or m.group(3) or ""
+                    if _norm(inner) not in full_norm:
+                        errors.append(f'{where} 引文「{inner}」未见于转录')
     return errors

@@ -13,7 +13,7 @@ import { mkdtempSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createAnalysisCapabilities, execShell, factEvidenceErrors, parseLastJsonLine, type ShellOutcome } from '../src/capability/analysis.js';
+import { createAnalysisCapabilities, execShell, factEvidenceErrors, nonFactQuoteErrors, parseLastJsonLine, type ShellOutcome } from '../src/capability/analysis.js';
 import { createCapabilityRegistry } from '../src/capability/core.js';
 import { mcpToolName } from '../src/capability/mcp.js';
 
@@ -373,7 +373,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"X","paragraphs":[{"kind":"fact","text":"内容","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
+        content: '{"topic":"X","paragraphs":[{"kind":"fact","text":"内容","source":[0]}],"key_points":[{"kind":"fact","text":"乙字的内容","source":[0]}]}',
       },
       'agent',
     );
@@ -394,7 +394,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"X","paragraphs":[{"kind":"fact","text":"老师讲到（约99s）","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
+        content: '{"topic":"X","paragraphs":[{"kind":"fact","text":"老师讲到（约99s）","source":[0]}],"key_points":[{"kind":"fact","text":"乙字的内容","source":[0]}]}',
       },
       'agent',
     );
@@ -418,7 +418,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师圈画了部件","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
+        content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师圈画了部件","source":[0]}],"key_points":[{"kind":"fact","text":"乙字的内容","source":[0]}]}',
       },
       'agent',
     );
@@ -428,7 +428,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"内容","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
+        content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"内容","source":[0]}],"key_points":[{"kind":"fact","text":"乙字的内容","source":[0]}]}',
         labels: '{"grids":[{"index":0,"label":"甲"}],"annotations":[{"index":0,"desc":"约9秒圈画了偏差"}]}',
       },
       'agent',
@@ -440,7 +440,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"内容","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
+        content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"内容","source":[0]}],"key_points":[{"kind":"fact","text":"乙字的内容","source":[0]}]}',
         labels: '{"grids":[{"index":0,"label":"甲"}],"annotations":[{"index":0,"desc":"约9秒指出问题；另见约99秒的重复"}]}',
       },
       'agent',
@@ -452,7 +452,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"内容","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
+        content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"内容","source":[0]}],"key_points":[{"kind":"fact","text":"乙字的内容","source":[0]}]}',
         labels: '{"grids":[{"index":0,"label":"甲"},{"index":1,"label":"丙"}],"annotations":[{"index":0,"desc":"约9秒指出问题"}]}',
       },
       'agent',
@@ -475,7 +475,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"内容","source":[3]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
+        content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"内容","source":[3]}],"key_points":[{"kind":"fact","text":"乙字的内容","source":[0]}]}',
       },
       'agent',
     );
@@ -484,19 +484,19 @@ describe('shufa capability 工具面', () => {
     // 四审补测：已知漏项形态（动手纠正/未对齐/逐字精讲）拒写。
     const leak1 = await registry.call(
       'shufa.summary_write',
-      { workdir: taskDir, content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师当场动手纠正了问题","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}' },
+      { workdir: taskDir, content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师当场动手纠正了问题","source":[0]}],"key_points":[{"kind":"fact","text":"乙字的内容","source":[0]}]}' },
       'agent',
     );
     expect(leak1.kind).toBe('failed');
     const leak2 = await registry.call(
       'shufa.summary_write',
-      { workdir: taskDir, content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"上下两土未对齐","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}' },
+      { workdir: taskDir, content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"上下两土未对齐","source":[0]}],"key_points":[{"kind":"fact","text":"乙字的内容","source":[0]}]}' },
       'agent',
     );
     expect(leak2.kind).toBe('failed');
     const leak3 = await registry.call(
       'shufa.summary_write',
-      { workdir: taskDir, content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师逐字精讲该字","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}' },
+      { workdir: taskDir, content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师逐字精讲该字","source":[0]}],"key_points":[{"kind":"fact","text":"乙字的内容","source":[0]}]}' },
       'agent',
     );
     expect(leak3.kind).toBe('failed');
@@ -506,7 +506,7 @@ describe('shufa capability 工具面', () => {
       {
         workdir: taskDir,
         content:
-          '{"topic":"甲","paragraphs":[{"kind":"fact","text":"讲评甲字的内容","source":[0]},{"kind":"inference","text":"从画面产物看属部件错位（分析）"},{"kind":"suggestion","text":"练习建议：每天对照自查"}],"key_points":[{"kind":"fact","text":"要点甲","source":[0]},{"kind":"suggestion","text":"建议路径：先单练再整字"}]}',
+          '{"topic":"甲","paragraphs":[{"kind":"fact","text":"讲评甲字的内容","source":[0]},{"kind":"inference","text":"从画面产物看属部件错位（分析）"},{"kind":"suggestion","text":"练习建议：每天对照自查"}],"key_points":[{"kind":"fact","text":"讲评乙字的内容","source":[0]},{"kind":"suggestion","text":"建议路径：先单练再整字"}]}',
         labels: '{"grids":[{"index":0,"label":"甲"},{"index":1,"label":"乙"}],"annotations":[{"index":0,"desc":"约9秒指出问题"}]}',
       },
       'agent',
@@ -520,7 +520,7 @@ describe('shufa capability 工具面', () => {
       {
         workdir: taskDir,
         content:
-          '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师说这是左右结构。而且每天练习一百遍。","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
+          '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师说这是左右结构。而且每天练习一百遍。","source":[0]}],"key_points":[{"kind":"fact","text":"乙字的内容","source":[0]}]}',
       },
       'agent',
     );
@@ -533,7 +533,7 @@ describe('shufa capability 工具面', () => {
       {
         workdir: taskDir,
         content:
-          '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师讲了「重心」的讲评甲字的内容。","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
+          '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师讲了「重心」的讲评甲字的内容。","source":[0]}],"key_points":[{"kind":"fact","text":"乙字的内容","source":[0]}]}',
       },
       'agent',
     );
@@ -544,7 +544,7 @@ describe('shufa capability 工具面', () => {
       {
         workdir: taskDir,
         content:
-          '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师讲「丙」的讲评甲字的内容。","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
+          '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师讲「丙」的讲评甲字的内容。","source":[0]}],"key_points":[{"kind":"fact","text":"乙字的内容","source":[0]}]}',
       },
       'agent',
     );
@@ -563,6 +563,18 @@ describe('shufa capability 工具面', () => {
         e.includes('未见于其声明的来源段'),
       ),
     ).toEqual([]);
+  });
+
+  it('七审补测：source 严格递增 / 短句整句在段 / 非 fact 任意长度引文对全文核', () => {
+    const segs = ['讲评甲字和乙字的内容', '重心要稳'];
+    // source 乱序 → 拒（乱序拼接可造出不存在的短语）。
+    expect(factEvidenceErrors({ kind: 'fact', text: '讲评甲字。', source: [1, 0] }, segs, 'x').some((e) => e.includes('严格递增'))).toBe(true);
+    // <4 字短句须整句出现在所引某段。
+    expect(factEvidenceErrors({ kind: 'fact', text: '重心要稳。', source: [1] }, segs, 'x')).toEqual([]);
+    expect(factEvidenceErrors({ kind: 'fact', text: '很稳。', source: [1] }, segs, 'x').some((e) => e.includes('无原文支撑'))).toBe(true);
+    // inference 的 1 字引号同样是原话声明——全文无此字即伪造。
+    expect(nonFactQuoteErrors({ kind: 'inference', text: '老师说「丙」' }, '讲评甲字和乙字的内容重心要稳', 'x').some((e) => e.includes('未见于转录'))).toBe(true);
+    expect(nonFactQuoteErrors({ kind: 'inference', text: '老师强调「重心」要稳' }, '讲评甲字和乙字的内容重心要稳', 'x')).toEqual([]);
   });
 
   it('export 终态门禁（五审 P1-1）：bundle summary 退化为纯 string → 拒绝导出', async () => {

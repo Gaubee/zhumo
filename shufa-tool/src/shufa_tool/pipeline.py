@@ -495,6 +495,16 @@ def export_stage(
             summary: Summary = load_injected(Path(summary_file), source=summary_source)
         except Exception as e:
             raise ValueError(f"摘要 JSON 读取失败（{summary_file}）：{e}") from e
+        # 证据核验（Codex 七审 P1：完整管线 --summary-file 入口与 steps CLI
+        # 同规——形状之外核 source 界内/引文逐字/锚点；空转录时 fact 一律拒）。
+        from .summarize import validate_summary_evidence
+
+        ev = validate_summary_evidence(
+            {"paragraphs": summary.paragraphs, "key_points": summary.key_points},
+            [s.get("text", "") for s in segments],
+        )
+        if ev:
+            raise ValueError("summary 证据核验未过（fact 须有转录支撑）：" + "；".join(ev))
     else:
         summary = summarize(text)
     if labels:
