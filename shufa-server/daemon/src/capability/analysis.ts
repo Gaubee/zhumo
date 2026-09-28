@@ -309,6 +309,8 @@ export function createAnalysisCapabilities(deps: AnalysisCapabilityDeps): Capabi
       name: 'shufa.summary_write',
       description:
         '把你亲自撰写的讲评摘要写入任务目录 summary.json（topic/paragraphs/key_points）。'
+        + 'paragraphs/key_points 元素一律为对象：{"kind":"fact","text":…,"source":[转录段下标]}（老师说过的话，引文逐字出自所引段）、'
+        + '{"kind":"inference","text":…}（你的分析判断）、{"kind":"suggestion","text":…}（练习建议）；纯字符串会被拒绝。'
         + '存在旁注/田字格时必须同时给 labels（语义标注：旁注描述、生字格标签），否则结果页语义层为空',
       authority: 'readonly',
       input: z.object({
@@ -508,6 +510,17 @@ function lintContentSemantics(
 
   const claims = [...summary.paragraphs, ...summary.key_points];
   const texts = claims.map(claimText);
+  const segments = manifest?.transcribe?.segments ?? [];
+
+  // 0) fact 证据核验（终态）：source 索引必须存在；引文只对所引 segments
+  // 逐字核（引用哪段就在哪段里——编造内容伪造不了来源）。
+  claims.forEach((claim, i) => {
+    if (claim.kind !== 'fact') return;
+    const bad = claim.source.filter((idx) => idx >= segments.length);
+    if (bad.length > 0) {
+      errors.push(`第 ${i + 1} 条 fact 引用了不存在的转录段（${bad.join(',')}；共 ${segments.length} 段）`);
+    }
+  });
 
   // 1) 引文忠实（≥4 字才核对：短引文同音/变体太易误伤）。引号内已逐字核过
   // = 转录原话，视觉动词黑名单对其豁免。
@@ -521,18 +534,24 @@ function lintContentSemantics(
   for (const para of texts) {
     for (const m of para.matchAll(quoteRe)) quotes.push(quoteOf(m));
   }
-  if (transcriptText && quotes.length > 0) {
-    const haystack = norm(transcriptText);
-    for (const q of quotes) {
+  claims.forEach((claim, i) => {
+    if (transcriptText === '' || quotes.length === 0) return;
+    const scope =
+      claim.kind === 'fact'
+        ? claim.source.map((idx) => segments[idx]?.text ?? '').join('')
+        : transcriptText;
+    const haystack = norm(scope);
+    for (const m of texts[i]!.matchAll(quoteRe)) {
+      const q = quoteOf(m);
       if (!haystack.includes(norm(q))) {
-        errors.push(`引文未见于转录（逐字转述原话，或去掉引号改为转述）：「${q}」`);
+        errors.push(`第 ${i + 1} 条引文未见于其声明的来源段：「${q}」（fact 只能引 source 所指的转录段原话）`);
       }
     }
-  }
+  });
 
   // 2) 视觉动词黑名单（Codex 三审 P1：agent 看不到画面，任何视觉动作断言
   // 都是编造——run5 三条 desc 全写「圈画」实证）。
-  const visualRe = /(圈画|画了圈|划出|勾出|红笔|笔迹|示范)/g;
+  const visualRe = /(圈画|画了圈|圈出|圈点|划出|勾出|红笔|笔迹|示范|归位纠正)/g;
   const checkVisual = (text: string, where: string) => {
     for (const m of strippedQuotes(text).matchAll(visualRe)) {
       errors.push(`${where}：视觉动作「${m[1]}」无证据——你看不到画面，删除或改为转录原话引用`);
@@ -594,34 +613,34 @@ function lintContentSemantics(
   //    不执行自检——升为拒写级驱动拆分或 inference 声明；词表为过渡方案，
   //    终态是 Codex 建议的证据字段。引号内原话豁免。
   // 词表四审封版（不再扩：终态换 source+segment 证据字段）。
-  const riskyRe = /(中轴|垂直线|竖直线|重心|最关键|最容易|正对|正下方|匀称|比例|部件错位|对位标准|动手纠正|未对齐|逐字精讲)/;
+  // 词表兜底（终态下事实段已强制 source；此表仍拦 fact 里的无源分析词形——
+  // 补 AFk7oLRzFQlm 实证漏项：圈出/圈点/先肯定/搭对/同一条竖线/迎让/归位）。
+  const riskyRe = /(中轴|垂直线|竖直线|同一条竖线|重心|最关键|最容易|正对|正下方|匀称|比例|部件错位|对位标准|动手纠正|未对齐|逐字精讲|圈出|圈点|先肯定|以鼓励|搭对了|迎让|归位)/;
   claims.forEach((claim, i) => {
-    if (typeof claim !== 'string') return;
-    const hit = riskyRe.exec(strippedQuotes(claim));
+    if (claim.kind !== 'fact') return;
+    const hit = riskyRe.exec(strippedQuotes(claim.text));
     if (hit) {
       errors.push(
-        `第 ${i + 1} 条事实段含分析判断「${hit[1]}」——老师没说过的几何/机理/重要性判断须拆为 {"kind":"inference","text":…} 或删除`,
+        `第 ${i + 1} 条 fact 含分析判断「${hit[1]}」——老师没说过的判断须改为 {"kind":"inference"} 或删除`,
       );
     }
   });
 
-  // 6) 练习建议必须显式声明（Codex 三审边界：混在纯文本里的建议条 → 拒）。
-  claims.forEach((claim, i) => {
-    if (typeof claim !== 'string') return;
-    if (/^(练习建议|练习路径|建议)[:：]/.test(claim)) {
-      errors.push(`第 ${i + 1} 条是练习建议却用纯文本——请改为 {"kind":"suggestion","text":…} 显式声明`);
-    }
-  });
   return errors;
 }
 
 /**
- * summary 段落元素（Codex 复审 2026-09-28：三类分栏从提示词升级为可验证
- * 契约）：纯 string = 自称转录事实（引文逐字核）；对象形态显式声明推断
- * （inference）或建议（suggestion）——渲染端带标记展示。
+ * summary 段落元素（2026-09-28 终态：AFk7oLRzFQlm 词表漏检实证——黑名单
+ * 追不上措辞变体，改为证据强制）：fact 必须引转录 segment（source 索引
+ * 数组，机器核存在性）；推断/建议自认 kind。纯 string 不再允许——每条
+ * 陈述被迫显式归类（无源内容进不了 fact）。
  */
 const SummaryClaimSchema = z.union([
-  z.string().min(1),
+  z.object({
+    kind: z.literal('fact'),
+    text: z.string().min(1),
+    source: z.array(z.number().int().min(0)).min(1),
+  }),
   z.object({
     kind: z.enum(['inference', 'suggestion']),
     text: z.string().min(1),
@@ -638,7 +657,7 @@ const SummaryContentSchema = z.object({
 
 /** 段落纯文本（lint 与渲染面统一取 text）。 */
 function claimText(claim: SummaryClaim): string {
-  return typeof claim === 'string' ? claim : claim.text;
+  return claim.text;
 }
 
 /** labels.json 内容结构（语义层：grids[].label 生字 / annotations[].desc 旁注）。 */

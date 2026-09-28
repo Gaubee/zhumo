@@ -1,32 +1,34 @@
 /**
  * 真实端到端测试（Owner 2026-09-28 授权：复用 .env 与数据库、烧真实 LLM）：
- * 临时用户 → WS login → tasks.create（真实视频）→ 轮询终态 → 产物质量断言 → 清场。
- * 运行（mini 上）：cd ~/Documents/书法/shufa-server && node --experimental-strip-types 不行——用：
- *   cd daemon && npx tsx ../e2e-shufa.mts [视频路径] [daemon-url]
- * 断言门槛（f202ed82 复盘）：labels 非空 label 必须单汉字（挡「未点名格」类
- * 编造占位）；summary 引文逐字复核；annotations desc 全给；grid_idx 存在。
+ * 临时用户 → WS login → tasks.create（真实视频）→ 轮询终态 → 产物质量断言。
+ * 2026-09-27 起不再清场：任务、results 行与产物目录全部保留，结果页链接打印
+ * 在尾部供 Owner 亲验（Owner 质询「你的会话历史呢？」——每轮 e2e 都可回溯）。
+ * 运行（mini 上）：cd daemon && npx tsx ../e2e-shufa.mts [视频路径] [daemon-url]
+ * 断言门槛（终态契约）：fact 必带 source 段引用且引文逐字出自所引段；高风险
+ * 分析词不得混入 fact；labels 非空 label 单汉字；grid_idx 存在。
  */
-import { readFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { RPCLink } from '@orpc/client/websocket';
 import { createORPCClient } from '@orpc/client';
 
 const videoPath = process.argv[2] ?? '';
 const daemonUrl = process.argv[3] ?? 'ws://127.0.0.1:8217';
+const webuiBase = process.env.E2E_WEBUI_URL ?? 'http://127.0.0.1:5173';
 const DATA_ROOT = process.env.E2E_DATA_ROOT ?? path.join(process.env.HOME!, 'Library/Application Support/zhumo');
 if (!existsSync(videoPath)) {
   console.error('用法: npx tsx ../e2e-shufa.mts <视频绝对路径> [ws-url]');
   process.exit(2);
 }
 
-// ---- 1. 临时用户（走查账号用完即弃）----
+// ---- 1. 临时用户（账号保留——产物供审计，不再即弃）----
 const { hashPassword } = await import('../daemon/src/auth.js');
 const { openDatabase } = await import('../daemon/src/db/database.js');
 const { createUser } = await import('../daemon/src/db/store.js');
 const db = openDatabase(DATA_ROOT);
 const TEST_USER = `e2e-${Date.now().toString(36)}`;
 createUser(db, { username: TEST_USER, passwordHash: hashPassword('e2e-pass'), role: 'user' });
-console.log(`[e2e] 临时用户 ${TEST_USER} 已建`);
+console.log(`[e2e] 临时用户 ${TEST_USER} 已建（本轮保留，供 Owner 审计）`);
 
 // ---- 2. oRPC over WS ----
 function wsOpen(url: string): Promise<WebSocket> {
@@ -65,7 +67,7 @@ while (Date.now() < deadline) {
 }
 console.log(`[e2e] 终态: ${task?.status ?? 'TIMEOUT'}${task?.error ? ` error=${task.error}` : ''}`);
 
-// ---- 5. 产物断言 ----
+// ---- 5. 产物断言（终态三态契约）----
 const failures: string[] = [];
 function check(cond: boolean, label: string): void {
   console.log(`${cond ? '  ✓' : '  ✗'} ${label}`);
@@ -86,7 +88,8 @@ if (task?.status !== 'done') {
     const summary = JSON.parse(readFileSync(path.join(shufaDir, 'summary.json'), 'utf8'));
     const manifest = JSON.parse(readFileSync(path.join(shufaDir, '.shufa-work', 'manifest.json'), 'utf8'));
     const data = JSON.parse(readFileSync(path.join(shufaDir, '.shufa-work', 'bundle', 'data.json'), 'utf8'));
-    const transcript = (manifest.transcribe?.segments ?? []).map((s: any) => s.text ?? '').join('');
+    const segments: string[] = (manifest.transcribe?.segments ?? []).map((s: any) => s.text ?? '');
+    const transcript = segments.join('');
 
     console.log('\n=== labels ===');
     console.log(JSON.stringify(labels, null, 2));
@@ -100,60 +103,66 @@ if (task?.status !== 'done') {
     // 2) summary 结构
     check((summary.paragraphs ?? []).length >= 2, 'summary.paragraphs ≥ 2');
     check((summary.key_points ?? []).length >= 1, 'summary.key_points ≥ 1');
-    // 3) 引文逐字复核（与 daemon 同规：≥4 字「」去标点后子串命中）
+    // 3) 三态契约：每条 claim 必须是合法对象（纯 string 已被 daemon 拒绝——
+    //    产物里再出现即契约回退）；fact 的 source 必须非空且在段界内。
+    const claims = [...(summary.paragraphs ?? []), ...(summary.key_points ?? [])];
     const norm = (t: string) => t.replace(/[\s，。、；：？！,.;:?!"'（）()「」『』…—·]/g, '');
-    const quotes = [...(summary.paragraphs ?? []), ...(summary.key_points ?? [])].join('\n').match(/「([^」]{4,})」|“([^”]{4,})”|『([^』]{4,})』/g) ?? [];
-    for (const q of quotes) {
-      const inner = q.slice(1, -1);
-      check(norm(transcript).includes(norm(inner)), `引文逐字见于转录：「${inner}」`);
+    const quoteRe = /「([^」]{4,})」|“([^”]{4,})”|『([^』]{4,})』/g;
+    const quoteOf = (m: RegExpMatchArray): string => m[1] ?? m[2] ?? m[3] ?? '';
+    for (const [i, c] of claims.entries()) {
+      const where = i < (summary.paragraphs ?? []).length ? `paragraphs[${i}]` : `key_points[${i - (summary.paragraphs ?? []).length}]`;
+      if (typeof c === 'string' || c === null || !['fact', 'inference', 'suggestion'].includes(c?.kind)) {
+        check(false, `${where} 为合法三态对象（得到 ${JSON.stringify(c)?.slice(0, 40)}）`);
+        continue;
+      }
+      if (c.kind === 'fact') {
+        const src: number[] = Array.isArray(c.source) ? c.source : [];
+        check(src.length >= 1 && src.every((idx) => Number.isInteger(idx) && idx >= 0 && idx < segments.length),
+          `${where} fact.source 非空且在段界内（${JSON.stringify(src)} / ${segments.length} 段）`);
+        // 引文分域：fact 引文只对 source 所指段逐字核（daemon 同规的产物面复核）。
+        const scope = src.map((idx) => segments[idx] ?? '').join('');
+        for (const m of String(c.text ?? '').matchAll(quoteRe)) {
+          check(norm(scope).includes(norm(quoteOf(m))), `${where} fact 引文逐字出自所引段：「${quoteOf(m)}」`);
+        }
+      }
     }
-    // 4) annotations desc 全给
+    // 4) 高风险分析词不得混入 fact（词表与 daemon riskyRe 同表；daemon 改表时
+    //    同步此处。fact 段外的 inference/suggestion 不查；引号内原话豁免）。
+    const RISKY = /(中轴|垂直线|竖直线|同一条竖线|重心|最关键|最容易|正对|正下方|匀称|比例|部件错位|对位标准|动手纠正|未对齐|逐字精讲|圈出|圈点|先肯定|以鼓励|搭对了|迎让|归位)/;
+    for (const [i, c] of claims.entries()) {
+      if (c?.kind !== 'fact') continue;
+      check(!RISKY.test(String(c.text ?? '').replace(quoteRe, '')), `第 ${i + 1} 条 fact 无高风险分析词`);
+    }
+    // 5) annotations desc 全给
     const annoCount = manifest.ink?.annotations?.length ?? 0;
     check((labels.annotations ?? []).length >= annoCount && annoCount > 0, `annotations desc 全给（${(labels.annotations ?? []).length}/${annoCount}）`);
-    // 5) data.json 面板
+    // 6) data.json 面板
     for (const c of data.chars ?? []) {
       if (c.label) check(/^[\u4e00-\u9fff]$/.test(c.label), `data.chars[${c.idx}].label="${c.label}" 单汉字`);
     }
     check((data.annotations ?? []).every((a: any) => typeof a.grid_idx === 'number'), 'annotations.grid_idx 全存在（格级关联）');
     check((data.summary?.paragraphs ?? []).length >= 2, 'data.summary 已注入');
-    // 6) desc 无视觉动作词（Codex 三审硬拦后的产物面复核）。
-    const VISUAL = /(圈画|画了圈|划出|勾出|红笔|笔迹|示范)/;
+    // 7) desc 无视觉动作词（daemon 硬拦后的产物面复核）。
+    const VISUAL = /(圈画|画了圈|圈出|圈点|划出|勾出|红笔|笔迹|示范|归位纠正)/;
     for (const a of labels.annotations ?? []) {
       check(!VISUAL.test(a.desc ?? ''), `labels.annotations[${a.index}].desc 无视觉动作词`);
     }
-    for (const para of [...(summary.paragraphs ?? []), ...(summary.key_points ?? [])]) {
-      const t = typeof para === 'string' ? para : para?.text ?? '';
-      check(!VISUAL.test(t.replace(/「[^」]{4,}」|“[^”]{4,}”|『[^』]{4,}』/g, '')), 'summary 段落无未豁免视觉动作词');
-    }
-    // 7) 高风险分析词不得出现在纯 string 事实段（Codex 三审 PASS 条件；
-    //    inference/suggestion 对象段的 text 不查；引号内原话豁免）。
-    // 与 daemon lintContentSemantics riskyRe 同表（四审要求一致；daemon 改表时同步此处）。
-    const RISKY = /(中轴|垂直线|竖直线|重心|最关键|最容易|正对|正下方|匀称|比例|部件错位|对位标准|动手纠正|未对齐|逐字精讲)/;
-    for (const [i, c] of [...(summary.paragraphs ?? []), ...(summary.key_points ?? [])].entries()) {
-      if (typeof c === 'string') {
-        check(!RISKY.test(c.replace(/「[^」]{4,}」|“[^”]{4,}”|『[^』]{4,}』/g, '')), `第 ${i + 1} 条事实段无高风险分析词`);
-      }
-    }
-    // 8) 建议条已声明（无「练习建议：」开头纯字符串）。
-    for (const [i, c] of [...(summary.paragraphs ?? []), ...(summary.key_points ?? [])].entries()) {
-      if (typeof c === 'string') check(!/^(练习建议|练习路径|建议)[:：]/.test(c), `第 ${i + 1} 条非未声明建议`);
+    for (const c of claims) {
+      check(!VISUAL.test(String(typeof c === 'string' ? c : c?.text ?? '').replace(quoteRe, '')), 'summary 段落无未豁免视觉动作词');
     }
   }
 }
 
-// ---- 6. 清场（临时用户 + 任务）----
+// ---- 6. 产物保留 + 审计链接（不清场）----
 authWs.close();
-try {
-  db.prepare('DELETE FROM resources WHERE owner_id = (SELECT id FROM users WHERE username = ?)').run(TEST_USER);
-  db.prepare('DELETE FROM task_queue WHERE task_id IN (SELECT id FROM tasks WHERE owner_id = (SELECT id FROM users WHERE username = ?))').run(TEST_USER);
-  db.prepare('DELETE FROM results WHERE task_id IN (SELECT id FROM tasks WHERE owner_id = (SELECT id FROM users WHERE username = ?))').run(TEST_USER);
-  db.prepare('DELETE FROM tasks WHERE owner_id = (SELECT id FROM users WHERE username = ?)').run(TEST_USER);
-  db.prepare('DELETE FROM users WHERE username = ?').run(TEST_USER);
-  rmSync(path.join(DATA_ROOT, 'users', TEST_USER), { recursive: true, force: true });
-  console.log(`\n[e2e] 清场完成（${TEST_USER} 用户/任务/数据已删）`);
-} catch (e) {
-  console.warn('[e2e] 清场失败（手动清理）:', e);
-}
+const resultRow = db
+  .prepare('SELECT public_id FROM results WHERE task_id = ? ORDER BY created_at DESC LIMIT 1')
+  .get(created.id) as { public_id: string } | undefined;
+console.log('\n=== 审计材料（保留，未清场）===');
+console.log(`  用户: ${TEST_USER} / 密码: e2e-pass`);
+console.log(`  任务: ${created.id}（终态 ${task?.status ?? 'TIMEOUT'}）`);
+if (resultRow) console.log(`  结果页: ${webuiBase}/r/${resultRow.public_id}`);
+console.log(`  产物目录: ${path.join(DATA_ROOT, 'users', TEST_USER)}`);
 
 console.log(failures.length === 0 ? '\n[e2e] 全部断言通过 ✓' : `\n[e2e] 失败 ${failures.length} 项:\n- ${failures.join('\n- ')}`);
 process.exit(failures.length === 0 ? 0 : 1);

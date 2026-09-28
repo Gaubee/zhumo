@@ -192,7 +192,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"桂","paragraphs":["左右结构"],"key_points":["两土对齐"]}',
+        content: '{"topic":"桂","paragraphs":[{"kind":"fact","text":"左右结构","source":[0]}],"key_points":[{"kind":"fact","text":"两土对齐","source":[0]}]}',
       },
       'agent',
     );
@@ -220,7 +220,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"桂","paragraphs":["左右结构"],"key_points":["两土对齐"]}',
+        content: '{"topic":"桂","paragraphs":[{"kind":"fact","text":"左右结构","source":[0]}],"key_points":[{"kind":"fact","text":"两土对齐","source":[0]}]}',
         labels: '{"grids":[{"index":0,"label":"桂"}],"annotations":[{"index":0,"desc":"指出主笔"}]}',
       },
       'agent',
@@ -231,7 +231,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"桂","paragraphs":["左右结构"],"key_points":["两土对齐"]}',
+        content: '{"topic":"桂","paragraphs":[{"kind":"fact","text":"左右结构","source":[0]}],"key_points":[{"kind":"fact","text":"两土对齐","source":[0]}]}',
         labels: 'not-json',
       },
       'agent',
@@ -242,7 +242,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"桂","paragraphs":["左右结构"],"key_points":["两土对齐"]}',
+        content: '{"topic":"桂","paragraphs":[{"kind":"fact","text":"左右结构","source":[0]}],"key_points":[{"kind":"fact","text":"两土对齐","source":[0]}]}',
         labels: '{"grids":[{"index":-1,"label":"桂"}],"annotations":[]}',
       },
       'agent',
@@ -256,15 +256,20 @@ describe('shufa capability 工具面', () => {
     mkdirSync(path.join(taskDir, '.shufa-work'), { recursive: true });
     writeFileSync(
       path.join(taskDir, '.shufa-work', 'manifest.json'),
-      JSON.stringify({ grid: { grids: [{ idx: 0 }, { idx: 1 }] }, ink: { annotations: [{ index: 0 }, { index: 1 }] } }),
+      JSON.stringify({
+        probe: { duration_s: 30 },
+        transcribe: { segments: [{ start: 0, end: 3, text: '讲评桂字' }] },
+        grid: { grids: [{ idx: 0 }, { idx: 1 }] },
+        ink: { annotations: [{ index: 0 }, { index: 1 }] },
+      }),
     );
     // labels：grids 只标 0 且出现越界 index 2；annotations 只标 0。
     const linted = await registry.call(
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"桂","paragraphs":["左右结构"],"key_points":["两土对齐"]}',
-        labels: '{"grids":[{"index":0,"label":"桂"},{"index":2,"label":"错位"}],"annotations":[{"index":0,"desc":"指出主笔"}]}',
+        content: '{"topic":"桂","paragraphs":[{"kind":"fact","text":"左右结构","source":[0]}],"key_points":[{"kind":"fact","text":"两土对齐","source":[0]}]}',
+        labels: '{"grids":[{"index":0,"label":"桂"},{"index":2,"label":"桂"}],"annotations":[{"index":0,"desc":"指出主笔"}]}',
       },
       'agent',
     );
@@ -279,7 +284,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"桂","paragraphs":["左右结构"],"key_points":["两土对齐"]}',
+        content: '{"topic":"桂","paragraphs":[{"kind":"fact","text":"左右结构","source":[0]}],"key_points":[{"kind":"fact","text":"两土对齐","source":[0]}]}',
         labels: '{"grids":[{"index":0,"label":"桂"},{"index":1,"label":""}],"annotations":[{"index":0,"desc":"指出主笔"}]}',
       },
       'agent',
@@ -310,12 +315,12 @@ describe('shufa capability 工具面', () => {
       {
         workdir: taskDir,
         content:
-          '{"topic":"桂","paragraphs":["老师强调「上下必须完全对齐一致」"],"key_points":["对齐"]}',
+          '{"topic":"桂","paragraphs":[{"kind":"fact","text":"老师强调「上下必须完全对齐一致」","source":[0]}],"key_points":[{"kind":"fact","text":"对齐","source":[0]}]}',
       },
       'agent',
     );
     expect(misquoted.kind).toBe('failed');
-    expect((misquoted as { message: string }).message).toContain('引文未见于转录');
+    expect((misquoted as { message: string }).message).toContain('未见于其声明的来源段');
     expect(existsSync(path.join(taskDir, 'summary.json'))).toBe(false);
     // 2) t≈ 超出视频时长 → 拒写。
     const overtime = await registry.call(
@@ -323,7 +328,7 @@ describe('shufa capability 工具面', () => {
       {
         workdir: taskDir,
         content:
-          '{"topic":"桂","paragraphs":["老师强调「上下要对齐」（t≈99s）"],"key_points":["对齐"]}',
+          '{"topic":"桂","paragraphs":[{"kind":"fact","text":"老师强调「上下要对齐」（t≈99s）","source":[0]}],"key_points":[{"kind":"fact","text":"对齐","source":[0]}]}',
       },
       'agent',
     );
@@ -336,7 +341,7 @@ describe('shufa capability 工具面', () => {
       {
         workdir: taskDir,
         content:
-          '{"topic":"桂","paragraphs":["老师强调「上下要对齐」"],"key_points":["对齐"]}',
+          '{"topic":"桂","paragraphs":[{"kind":"fact","text":"老师强调「上下要对齐」","source":[0]}],"key_points":[{"kind":"fact","text":"对齐","source":[0]}]}',
         labels:
           '{"grids":[{"index":0,"label":"桂"},{"index":1,"label":"桂"},{"index":2,"label":"桂"}],"annotations":[{"index":1,"desc":"t≈28.5s：指出下土偏内"}]}',
       },
@@ -351,7 +356,7 @@ describe('shufa capability 工具面', () => {
       {
         workdir: taskDir,
         content:
-          '{"topic":"桂","paragraphs":["老师强调「要注意这个土跟这个土上下要对齐」"],"key_points":["两土对齐（t≈15s）"]}',
+          '{"topic":"桂","paragraphs":[{"kind":"fact","text":"老师强调「要注意这个土跟这个土上下要对齐」","source":[1]}],"key_points":[{"kind":"fact","text":"两土对齐（t≈15s）","source":[1]}]}',
         labels:
           '{"grids":[{"index":0,"label":"桂"},{"index":1,"label":"桂"},{"index":2,"label":"桂"}],"annotations":[{"index":1,"desc":"t≈15s：强调上下两土对齐"}]}',
       },
@@ -368,7 +373,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"X","paragraphs":["内容"],"key_points":["要点"]}',
+        content: '{"topic":"X","paragraphs":[{"kind":"fact","text":"内容","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
       },
       'agent',
     );
@@ -389,7 +394,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"X","paragraphs":["老师讲到（约99s）"],"key_points":["要点"]}',
+        content: '{"topic":"X","paragraphs":[{"kind":"fact","text":"老师讲到（约99s）","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
       },
       'agent',
     );
@@ -413,7 +418,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"甲","paragraphs":["老师圈画了部件"],"key_points":["要点"]}',
+        content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师圈画了部件","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
       },
       'agent',
     );
@@ -423,7 +428,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"甲","paragraphs":["内容"],"key_points":["要点"]}',
+        content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"内容","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
         labels: '{"grids":[{"index":0,"label":"甲"}],"annotations":[{"index":0,"desc":"约9秒圈画了偏差"}]}',
       },
       'agent',
@@ -435,7 +440,7 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"甲","paragraphs":["内容"],"key_points":["要点"]}',
+        content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"内容","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
         labels: '{"grids":[{"index":0,"label":"甲"}],"annotations":[{"index":0,"desc":"约9秒指出问题；另见约99秒的重复"}]}',
       },
       'agent',
@@ -447,40 +452,51 @@ describe('shufa capability 工具面', () => {
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"甲","paragraphs":["内容"],"key_points":["要点"]}',
+        content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"内容","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
         labels: '{"grids":[{"index":0,"label":"甲"},{"index":1,"label":"丙"}],"annotations":[{"index":0,"desc":"约9秒指出问题"}]}',
       },
       'agent',
     );
     expect(ghost.kind).toBe('failed');
     expect((ghost as { message: string }).message).toContain('未在转录中出现');
-    // 4) 建议未声明（纯文本「练习建议：」→ 拒）。
-    const bareSuggestion = await registry.call(
+    // 4) 终态分域引文：fact 只能引 source 所指段的原话——引文不在所引段 → 拒。
+    const scopedQuote = await registry.call(
       'shufa.summary_write',
       {
         workdir: taskDir,
-        content: '{"topic":"甲","paragraphs":["内容"],"key_points":["练习建议：每天写三遍"]}',
+        content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师强调「上下要对齐」","source":[0]}],"key_points":[{"kind":"inference","text":"老师最看重对齐"}]}',
       },
       'agent',
     );
-    expect(bareSuggestion.kind).toBe('failed');
-    expect((bareSuggestion as { message: string }).message).toContain('显式声明');
+    expect(scopedQuote.kind).toBe('failed');
+    expect((scopedQuote as { message: string }).message).toContain('引文未见于其声明的来源段');
+    // 5) fact 的 source 索引越界（终态：证据段必须真实存在）→ 拒。
+    const ghostSource = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"内容","source":[3]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
+      },
+      'agent',
+    );
+    expect(ghostSource.kind).toBe('failed');
+    expect((ghostSource as { message: string }).message).toContain('不存在的转录段');
     // 四审补测：已知漏项形态（动手纠正/未对齐/逐字精讲）拒写。
     const leak1 = await registry.call(
       'shufa.summary_write',
-      { workdir: taskDir, content: '{"topic":"甲","paragraphs":["老师当场动手纠正了问题"],"key_points":["要点"]}' },
+      { workdir: taskDir, content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师当场动手纠正了问题","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}' },
       'agent',
     );
     expect(leak1.kind).toBe('failed');
     const leak2 = await registry.call(
       'shufa.summary_write',
-      { workdir: taskDir, content: '{"topic":"甲","paragraphs":["上下两土未对齐"],"key_points":["要点"]}' },
+      { workdir: taskDir, content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"上下两土未对齐","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}' },
       'agent',
     );
     expect(leak2.kind).toBe('failed');
     const leak3 = await registry.call(
       'shufa.summary_write',
-      { workdir: taskDir, content: '{"topic":"甲","paragraphs":["老师逐字精讲该字"],"key_points":["要点"]}' },
+      { workdir: taskDir, content: '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师逐字精讲该字","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}' },
       'agent',
     );
     expect(leak3.kind).toBe('failed');
@@ -490,7 +506,7 @@ describe('shufa capability 工具面', () => {
       {
         workdir: taskDir,
         content:
-          '{"topic":"甲","paragraphs":["讲评甲字的内容",{"kind":"inference","text":"从画面产物看属部件错位（分析）"},{"kind":"suggestion","text":"练习建议：每天对照自查"}],"key_points":["要点甲",{"kind":"suggestion","text":"建议路径：先单练再整字"}]}',
+          '{"topic":"甲","paragraphs":[{"kind":"fact","text":"讲评甲字的内容","source":[0]},{"kind":"inference","text":"从画面产物看属部件错位（分析）"},{"kind":"suggestion","text":"练习建议：每天对照自查"}],"key_points":[{"kind":"fact","text":"要点甲","source":[0]},{"kind":"suggestion","text":"建议路径：先单练再整字"}]}',
         labels: '{"grids":[{"index":0,"label":"甲"},{"index":1,"label":"乙"}],"annotations":[{"index":0,"desc":"约9秒指出问题"}]}',
       },
       'agent',

@@ -96,11 +96,16 @@ export type AnalysisTranscript = z.infer<typeof AnalysisTranscriptSchema>;
  * 总结。source 词表（2026-09-25 对齐生产端）：agent=模型亲写（summary_write 注入，
  * daemon 默认）/ injected=summary 文件注入（CLI 旧路径）/ heuristic=CLI 规则摘要。
  */
-/** 段落元素（Codex 三审 2026-09-28：三类分栏结构化）：纯 string = 转录
- * 事实段；对象形态显式声明推断（inference）/建议（suggestion）。heuristic
- * 摘要仍产纯 string 段（兼容）。 */
+/** 段落元素（终态契约 2026-09-27：fact 必带转录段引用）：fact = 转录事实
+ * （source=segments 下标）；inference/suggestion = 显式声明的推断/建议。
+ * 纯 string 仅旧 bundle 兼容（heuristic 摘要仍产 string 段）。 */
 export const AnalysisClaimSchema = z.union([
   z.string(),
+  z.object({
+    kind: z.literal('fact'),
+    text: z.string(),
+    source: z.array(z.number().int().min(0)).optional(),
+  }),
   z.object({ kind: z.enum(['inference', 'suggestion']), text: z.string() }),
 ]);
 export type AnalysisClaim = z.infer<typeof AnalysisClaimSchema>;
