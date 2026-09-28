@@ -54,6 +54,9 @@ export const AnalysisCharSchema = z.object({
   note: z.string(),
   label: z.string(),
   crop: z.string(),
+  /** 墨迹时序检测（背景帧减首帧差分）：true=开拍前已写（作业），false=
+   * 视频中书写。机器检测事实，非语义标注（note 才是语义说明位）。 */
+  pre_written: z.boolean().optional(),
 });
 export type AnalysisChar = z.infer<typeof AnalysisCharSchema>;
 

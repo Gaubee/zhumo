@@ -279,7 +279,7 @@
                 <div class="char-grid char-grid-multi">
                   {#each row.chars as char (char.idx)}
                     <div class="char-cell">
-                      <img src={asset(char.crop)} alt="田字格：{char.label || '未识别'}" />
+                      <img src={asset(char.crop)} alt="田字格：{char.label || '未标注'}" />
                       <div class="cap">
                         {char.label}{#if char.idx === data.focus_grid_idx}<span class="chip"
                           >讲解焦点</span
@@ -289,7 +289,7 @@
                   {/each}
                 </div>
                 <div class="char-info">
-                  <h3>{row.label ? `「${row.label}」` : "未识别"}<span class="chip">{row.chars.length > 1 ? `${row.chars.length} 格` : (row.chars[0]?.note || "")}</span></h3>
+                  <h3>{row.label ? `「${row.label}」` : "未标注"}{#if row.chars.length > 1}<span class="chip">{row.chars.length} 格</span>{:else if row.chars[0]?.note && !["开场已写好", "片段内书写"].includes(row.chars[0].note)}<span class="chip">{row.chars[0].note}</span>{/if}</h3>
                   <p class="dim-line">关联旁注 {row.related.length} 处</p>
                   <div class="char-annos">
                     {#if row.related.length > 0}

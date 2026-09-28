@@ -370,7 +370,12 @@ def clip_stage(
             "idx": gi, "row": g.row, "col": g.col,
             "visibility": round(g.visibility, 2),
             "crop": crop,  # ndarray，导出时落盘
-            "note": "开场已写好" if pre_written else "片段内书写",
+            # 墨迹时序检测（背景帧减首帧差分）：开拍前已写=学生作业，否则
+            # 视频中书写。属机器检测事实，保留在数据里；语义说明 note 默认空
+            # （Owner 2026-09-28：「开场已写好/片段内书写」占位文案混进静态
+            # 分析展示面——labels 可给逐格真说明）。
+            "pre_written": bool(pre_written),
+            "note": "",
         })
         cv2.imwrite(str(cropdir / f"grid_{gi}.png"), crop)
 
@@ -565,8 +570,8 @@ def export_stage(
         for item in lab.get("grids", []):
             if 0 <= item["index"] < len(grids_data):
                 grids_data[item["index"]]["label"] = item["label"]
-                # note 覆盖（走查 2026-09-23）：无语义标注时 note 退化为管线占位
-                # 文案（"开场已写好/片段内书写"），labels 可给逐格真说明。
+                # note 覆盖（走查 2026-09-23；Owner 2026-09-28 复盘：占位文案
+                # 移除）：note 语义说明位默认空，labels 可给逐格真说明。
                 if item.get("note"):
                     grids_data[item["index"]]["note"] = item["note"]
         for item in lab.get("annotations", []):
@@ -646,8 +651,7 @@ def export_stage(
                     "画面 hqdn3d 降噪 + 轻度统一调色") if enhance else "未启用（--enhance off）"
     # 数据质量告警（走查 2026-09-23）：语义缺失显性化，导出面自检不静默。
     stage_warnings: list[str] = []
-    degenerate_notes = sum(
-        1 for g in grids_data if g.get("note") in ("开场已写好", "片段内书写"))
+    degenerate_notes = sum(1 for g in grids_data if not g.get("note"))
     if grids_data and degenerate_notes == len(grids_data):
         stage_warnings.append(
             "田字格说明为管线占位文案（无逐格语义标注，labels 未覆盖 note）")
