@@ -518,36 +518,35 @@ export function quoteOf(m: RegExpMatchArray): string {
 }
 
 /**
- * 引号形状校验（十审 P2：同样式嵌套/不成对会被配对正则截断——截断内容
- * 归一化后可能恰好命中，后半段只需一个锚点即通过。拒嵌套、拒悬空）。
- * daemon lint 与 e2e 共用。
+ * 引号形状校验（十审 P2 + 十一审 P1：统一引号栈）。规则：
+ * - 同样式嵌套拒（「…「…」…」——配对正则会截断）；
+ * - 跨样式**正确**嵌套合法（『…「…」…』——转录自带「」时的写法）；
+ * - 交叉闭合拒（『真实「内』伪造」——「 未闭而外层先闭；独立计数检不出，
+ *   统一栈按后开先闭配对）；
+ * - 悬空闭引号/未闭合拒。daemon lint 与 e2e 共用。
  */
 export function quoteShapeErrors(text: string, where: string): string[] {
-  const styles: Array<[string, string]> = [
-    ['「', '」'],
-    ['『', '』'],
-    ['\u201c', '\u201d'],
-  ];
+  const PAIR: Record<string, string> = { '「': '」', '『': '』', '\u201c': '\u201d' };
+  const CLOSE: Record<string, string> = { '」': '「', '』': '『', '\u201d': '\u201c' };
   const errors: string[] = [];
-  for (const [open, close] of styles) {
-    let depth = 0;
-    for (const ch of text) {
-      if (ch === open) {
-        depth += 1;
-        if (depth > 1) {
-          errors.push(`${where}：${open}${close} 引号嵌套——引文用单层引号`);
-          depth = 1; // 只报一次
-        }
-      } else if (ch === close) {
-        depth -= 1;
-        if (depth < 0) {
-          errors.push(`${where}：${close} 悬空闭引号`);
-          depth = 0;
-        }
+  const stack: string[] = [];
+  for (const ch of text) {
+    if (PAIR[ch] !== undefined) {
+      if (stack.includes(ch)) {
+        errors.push(`${where}：${ch}${PAIR[ch]} 引号同样式嵌套——外层换用其它引号`);
+        continue;
+      }
+      stack.push(ch);
+    } else if (CLOSE[ch] !== undefined) {
+      const open = stack.pop();
+      if (open === undefined) {
+        errors.push(`${where}：${ch} 悬空闭引号`);
+      } else if (PAIR[open] !== ch) {
+        errors.push(`${where}：引号交叉闭合（${open}…${ch}）——按后开先闭配对`);
       }
     }
-    if (depth > 0) errors.push(`${where}：${open} 未闭合`);
   }
+  if (stack.length > 0) errors.push(`${where}：${stack[stack.length - 1]} 未闭合`);
   return errors;
 }
 

@@ -663,6 +663,9 @@ describe('shufa capability 工具面', () => {
     expect(quoteShapeErrors('上下要对齐」今天', 'x').some((e) => e.includes('悬空'))).toBe(true);
     // 跨样式嵌套合法（外层『』内层「」——转录自带「」时的正确写法）。
     expect(quoteShapeErrors('『这个「桂」字啊』', 'x')).toEqual([]);
+    // 十一审 P1：交叉闭合（『真实「内』伪造』——「 未闭而外层先闭；
+    // 独立计数检不出，统一栈拒绝）。
+    expect(quoteShapeErrors('『真实「内』这是老师伪造』', 'x').some((e) => e.includes('交叉闭合'))).toBe(true);
   });
 
   it('十审补测（registry 级）：label 枚举越权拒、白名单过；嵌套引文拒写', async () => {

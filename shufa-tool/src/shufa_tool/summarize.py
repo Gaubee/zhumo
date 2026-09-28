@@ -191,24 +191,26 @@ CLAIM_LABELS = (
 
 
 def _quote_shape_errors(text: str, where: str) -> list[str]:
-    """引号形状（十审 P2：同样式嵌套/不成对会被配对正则截断绕过）。"""
+    """引号形状（十审 P2 + 十一审 P1：统一引号栈——同样式嵌套/交叉闭合/
+    悬空/未闭合均拒；跨样式正确嵌套合法。与 daemon quoteShapeErrors 同规）。"""
+    pair = {"「": "」", "『": "』", "\u201c": "\u201d"}
+    close = {"」": "「", "』": "『", "\u201d": "\u201c"}
     errors: list[str] = []
-    for oc in (("「", "」"), ("『", "』"), ("\u201c", "\u201d")):
-        depth = 0
-        reported = False
-        for ch in text:
-            if ch == oc[0]:
-                depth += 1
-                if depth > 1 and not reported:
-                    errors.append(f"{where}：{oc[0]}{oc[1]} 引号嵌套——引文用单层引号")
-                    reported = True
-            elif ch == oc[1]:
-                depth -= 1
-                if depth < 0:
-                    errors.append(f"{where}：{oc[1]} 悬空闭引号")
-                    depth = 0
-        if depth > 0:
-            errors.append(f"{where}：{oc[0]} 未闭合")
+    stack: list[str] = []
+    for ch in text:
+        if ch in pair:
+            if ch in stack:
+                errors.append(f"{where}：{ch}{pair[ch]} 引号同样式嵌套——外层换用其它引号")
+                continue
+            stack.append(ch)
+        elif ch in close:
+            open_ch = stack.pop() if stack else None
+            if open_ch is None:
+                errors.append(f"{where}：{ch} 悬空闭引号")
+            elif pair[open_ch] != ch:
+                errors.append(f"{where}：引号交叉闭合（{open_ch}…{ch}）——按后开先闭配对")
+    if stack:
+        errors.append(f"{where}：{stack[-1]} 未闭合")
     return errors
 
 
