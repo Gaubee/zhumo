@@ -89,6 +89,12 @@ export function getTaskById(db: SqliteDb, id: string): TaskRow | null {
   return (row as TaskRow | undefined) ?? null;
 }
 
+/** boot 恢复清单（2026-09-28：daemon 重启后 running 任务无会话收敛、
+ * 永远卡「分析中」——aac8ccfe 实证）。 */
+export function listRunningTasks(db: SqliteDb): TaskRow[] {
+  return db.prepare("SELECT * FROM tasks WHERE status = 'running'").all() as TaskRow[];
+}
+
 export function listTasksByOwner(db: SqliteDb, ownerId: string): TaskRow[] {
   return db
     .prepare('SELECT * FROM tasks WHERE owner_id = ? ORDER BY created_at DESC')

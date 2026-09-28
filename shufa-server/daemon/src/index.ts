@@ -200,6 +200,15 @@ const sessions = createTaskSessions({
       console.log(
         `[boot] dsh 内核已挂载：entries=${kernel.record.entries.length} tools=${kernel.globalToolNames().length}`,
       );
+      // boot 恢复（2026-09-28）：重启前 running 的任务复活会话续跑（队列随
+      // 装配回队泵出——「分析中」不再悬挂）。必须在内核挂载后（首个实证：
+      // 挂载前恢复全部「kernel is not mounted」收敛 failed）。
+      try {
+        const resumed = await tasks.resumeInterruptedTasks();
+        if (resumed > 0) console.log(`[boot] 已恢复 ${resumed} 个重启前运行中的任务`);
+      } catch (error) {
+        console.warn(`[boot] 运行中任务恢复异常：${error instanceof Error ? error.message : String(error)}`);
+      }
     } else {
       console.warn(`[boot] dsh 内核未挂载：${mounted.reason ?? 'unknown'}`);
     }

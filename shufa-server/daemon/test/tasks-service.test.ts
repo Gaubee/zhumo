@@ -19,6 +19,7 @@ import { TaskService, resolveModelRoutesFromStore, modelsRouteInfo } from '../sr
 import type { TaskSessions } from '../src/kernel/sessions.js';
 import { ensureAnonymousUser, hashPassword } from '../src/auth.js';
 import { createUser, putSetting } from '../src/db/store.js';
+import { getTaskById, updateTask } from '../src/db/tasks.js';
 import { BlobStore } from '../src/db/blobs.js';
 import { KbStore } from '../src/kb/store.js';
 import { FrameStore } from '../src/kernel/frame-store.js';
@@ -297,6 +298,25 @@ describe('TaskService 创建链', () => {
     expect(cancelled.status).toBe('cancelled');
     expect(sessions.raw.cancel).toHaveBeenCalledWith(`task-${1}`);
     expect(sessions.emitted.some((f) => f.kind === 'status' && (f.payload as { status: string }).status === 'cancelled')).toBe(true);
+  });
+
+  it('boot 恢复（aac8ccfe 实证 2026-09-28）：running 任务复活会话；复活失败收敛 failed', async () => {
+    const item = await service.create(user, {
+      prompt: 'x',
+      video: { filename: 'v.mp4', data_base64: Buffer.from('bytes').toString('base64') },
+    });
+    // 造 running 态（无 live 会话 = 重启后的形态）。
+    updateTask(env.db, item.id, { status: 'running' });
+    sessions.raw.isLive.mockReturnValue(false);
+    const count = await service.resumeInterruptedTasks();
+    expect(count).toBeGreaterThanOrEqual(1);
+    expect(sessions.raw.resumeTaskSession).toHaveBeenCalledWith(item.id, expect.objectContaining({ sessionId: 'task-1' }));
+    // 复活失败 → failed 收敛（不悬挂 running）。
+    sessions.raw.resumeTaskSession.mockRejectedValueOnce(new Error('内核爆炸'));
+    updateTask(env.db, item.id, { status: 'running' });
+    await service.resumeInterruptedTasks();
+    expect(getTaskById(env.db, item.id)?.status).toBe('failed');
+    expect(getTaskById(env.db, item.id)?.error).toContain('会话恢复失败');
   });
 
   it('走查 R6：setModel 更新覆盖列 + live 会话热切（dispose→resume）；running 拒绝；悬空拒绝', async () => {

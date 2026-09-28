@@ -43,6 +43,7 @@ import {
   createTask,
   getTaskById,
   getResourceById,
+  listRunningTasks,
   listTasksByOwner,
   parseResourceMeta,
   updateResourceMeta,
@@ -670,6 +671,22 @@ export class TaskService {
     if (!task.agent_session_id || !this.deps.sessions.isLive(task.agent_session_id)) {
       throw new ORPCError('CONFLICT', { message: '会话不在运行，队列不可操作（先发送一条消息重开对话）' });
     }
+  }
+
+  /**
+   * boot 恢复（aac8ccfe 实证 2026-09-28）：daemon 重启会把进行中的 turn 打成
+   * aborted(disposed)，任务停在 running 但无 live 会话——永远卡「分析中」。
+   * boot 时对全部 running 任务复活会话（W10 队列 restore 语义随装配回队并
+   * 泵续跑）；复活失败由 tryResume 收敛 failed。返回恢复计数。
+   */
+  async resumeInterruptedTasks(): Promise<number> {
+    const rows = listRunningTasks(this.deps.db);
+    for (const task of rows) {
+      if (!task.agent_session_id) continue;
+      if (this.deps.sessions.isLive(task.agent_session_id)) continue;
+      await this.tryResume(task);
+    }
+    return rows.length;
   }
 
   private async tryResume(task: TaskRow): Promise<void> {
