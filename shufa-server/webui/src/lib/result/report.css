@@ -976,3 +976,9 @@
   color: #1a7f37;
   border-color: #1a7f3740;
 }
+
+/* fact 展示性标签前缀（九审：标签从 text 前缀迁到独立 label 字段）。 */
+.shufa-report .claim-label {
+  font-weight: 600;
+  margin-right: 2px;
+}

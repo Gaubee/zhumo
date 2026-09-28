@@ -316,14 +316,14 @@
           <div class="summary">
             {#each data.summary.paragraphs as para, i (i)}
               <p>
-                {#if typeof para !== "string" && para.kind !== "fact"}<span class="claim-chip claim-{para.kind}">{para.kind === "inference" ? "分析" : "建议"}</span>{/if}{typeof para === "string" ? para : para.text}
+                {#if typeof para !== "string" && para.kind !== "fact"}<span class="claim-chip claim-{para.kind}">{para.kind === "inference" ? "分析" : "建议"}</span>{/if}{#if typeof para !== "string" && (para as { label?: string }).label}<strong class="claim-label">{(para as { label?: string }).label}：</strong>{/if}{typeof para === "string" ? para : para.text}
               </p>
             {/each}
             {#if data.summary.key_points.length > 0}
               <ul class="points">
                 {#each data.summary.key_points as point, i (i)}
                   <li>
-                    {#if typeof point !== "string" && point.kind !== "fact"}<span class="claim-chip claim-{point.kind}">{point.kind === "inference" ? "分析" : "建议"}</span>{/if}{typeof point === "string" ? point : point.text}
+                    {#if typeof point !== "string" && point.kind !== "fact"}<span class="claim-chip claim-{point.kind}">{point.kind === "inference" ? "分析" : "建议"}</span>{/if}{#if typeof point !== "string" && (point as { label?: string }).label}<strong class="claim-label">{(point as { label?: string }).label}：</strong>{/if}{typeof point === "string" ? point : point.text}
                   </li>
                 {/each}
               </ul>

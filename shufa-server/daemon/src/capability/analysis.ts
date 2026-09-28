@@ -529,7 +529,7 @@ export function quoteOf(m: RegExpMatchArray): string {
  * 判据经 run12/run13 真实产物校准。返回错误列表（空=通过）。
  */
 export function factEvidenceErrors(
-  claim: { kind: string; text: string; source: number[] },
+  claim: { kind: string; text: string; source: number[]; label?: string },
   segments: string[],
   where: string,
 ): string[] {
@@ -571,41 +571,65 @@ export function factEvidenceErrors(
       errors.push(`${where} 引文「${q}」未见于其声明的来源段（fact 只能引 source 所指连续段的原话）`);
     }
   }
-  // 3) 子句锚点（八审 P1：只按句号切句挡不住「真话，夹带。」——逗号/
-  //    顿号/冒号/破折号从句各自须有锚点；≥4 字含 ≥4 字连续原文且不跨段，
-  //    <4 字须整句出现在所引某段。以冒号结尾的前导子句是中文标签惯例
-  //    （「讲解对象：…」），标签不是陈述，豁免锚点）。
-  const clauses = claim.text
+  // 3) 子句锚点（八审 P1 引入、九审收紧：逗号/顿号/冒号/破折号从句各自
+  //    须有锚点）。引文已对连续 run 逐字核过（自证）——先把引文整段替换
+  //    为占位符再切子句（引文内部的标点不产生子句边界），锚点只核非引文
+  //    散文：
+  //    - 冒号/任何位置的无证据散文一律核（九审 P1：文本内「标签：」不再
+  //      豁免——展示性标签走 claim.label 字段，不占 text）；
+  //    - 引文**前**的 ≤6 字散文仅在「含言语动词（说/强调/指出…）且无
+  //      否定词」时视为引导语豁免（九审 P1：『每日练习「…」』『老师没有
+  //      说过「…」』类不再放行——否定词会翻转引文语义）；
+  //    - 引文**后**的散文必须锚定。
+  const SPEECH_VERB_RE = /(说|讲|强调|指出|要求|叮嘱|嘱咐|重复|谈到|点题|定性|交代)/;
+  const NEGATION_RE = /(不|没|未|别|无|非)/;
+  const masked = claim.text.replace(ANY_QUOTE_RE, '◇');
+  const clauses = masked
     .split(/(?<=[。；！？\n，、：])|(?<=——)/)
     .map((c) => c.trim())
     .filter((c) => c.length > 0);
-  for (const clause of clauses) {
-    if (clause.endsWith('：') || clause.endsWith(':')) continue; // 前导标签
-    // 引文内容已对 source 连续 run 逐字核过（自证）。锚点只核**非引文
-    // 散文**：含已核引文的子句，其 ≤6 字散文视为引导/连接语（「老师强调」
-    // 「并再次重复」类）豁免；>6 字仍须锚点（防借引文夹带长编造）。
-    const prose = clause.replace(ANY_QUOTE_RE, '');
-    const hasVerifiedQuote = prose !== clause;
-    const ns = normalizeClaimText(prose);
-    if (ns.length === 0) continue;
-    if (hasVerifiedQuote && ns.length <= 6) continue;
-    if (ns.length < 4) {
-      if (!segNorms.some((seg) => seg.includes(ns))) {
-        errors.push(`${where} 的子句无原文支撑：「${clause}」（短子句须整句出现在所引某段中）`);
-      }
-      continue;
+  const anchorCheck = (proseNorm: string, display: string): string | null => {
+    if (proseNorm.length === 0) return null;
+    if (proseNorm.length < 4) {
+      return segNorms.some((seg) => seg.includes(proseNorm))
+        ? null
+        : `${where} 的子句无原文支撑：「${display}」（短子句须整句出现在所引某段中）`;
     }
     let anchored = false;
     for (const seg of segNorms) {
-      for (let k = 0; k + 4 <= ns.length && !anchored; k += 1) {
-        if (seg.includes(ns.slice(k, k + 4))) anchored = true;
+      for (let k = 0; k + 4 <= proseNorm.length && !anchored; k += 1) {
+        if (seg.includes(proseNorm.slice(k, k + 4))) anchored = true;
       }
       if (anchored) break;
     }
-    if (!anchored) {
-      errors.push(
-        `${where} 的子句无原文锚点：「${clause}」——每个子句须含所引段 ≥4 字连续原话；夹带内容改 {"kind":"inference"} 或删除`,
-      );
+    return anchored
+      ? null
+      : `${where} 的子句无原文锚点：「${display}」——每个子句须含所引段 ≥4 字连续原话；夹带内容改 {"kind":"inference"} 或删除`;
+  };
+  for (const clause of clauses) {
+    const quoteIdx = clause.indexOf('◇');
+    const hasQuote = quoteIdx >= 0;
+    const proseRaw = clause.replace(/◇/g, '');
+    const proseNorm = normalizeClaimText(proseRaw);
+    if (proseNorm.length === 0) continue;
+    if (hasQuote) {
+      const before = clause.slice(0, quoteIdx);
+      const after = clause.slice(quoteIdx + 1);
+      const beforeNorm = normalizeClaimText(before);
+      const afterNorm = normalizeClaimText(after);
+      // 引文前引导语：≤6 字 + 言语动词 + 无否定 → 豁免；否则核锚点。
+      const guide =
+        beforeNorm.length <= 6 && SPEECH_VERB_RE.test(before) && !NEGATION_RE.test(beforeNorm);
+      if (!guide) {
+        const err = anchorCheck(beforeNorm, before);
+        if (err) errors.push(err);
+      }
+      // 引文后散文：一律核锚点。
+      const err = anchorCheck(afterNorm, after);
+      if (err) errors.push(err);
+    } else {
+      const err = anchorCheck(proseNorm, proseRaw);
+      if (err) errors.push(err);
     }
   }
   return errors;
@@ -779,6 +803,7 @@ const SummaryClaimSchema = z.union([
     kind: z.literal('fact'),
     text: z.string().min(1),
     source: z.array(z.number().int().min(0)).min(1),
+    label: z.string().max(12).optional(),
   }),
   z.object({
     kind: z.enum(['inference', 'suggestion']),

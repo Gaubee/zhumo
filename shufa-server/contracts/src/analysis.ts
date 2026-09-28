@@ -103,6 +103,9 @@ export const TerminalClaimSchema = z.union([
     kind: z.literal('fact'),
     text: z.string().min(1),
     source: z.array(z.number().int().min(0)).min(1),
+    /** 展示性标签（「结构定性」「书写要领」类前缀）：纯呈现字段，不参与
+     * 证据核验（九审 P1：文本内「标签：」前缀不再豁免锚点）。 */
+    label: z.string().max(12).optional(),
   }),
   z.object({ kind: z.enum(['inference', 'suggestion']), text: z.string().min(1) }),
 ]);
@@ -115,7 +118,7 @@ export type TerminalClaim = z.infer<typeof TerminalClaimSchema>;
 export const AnalysisClaimSchema = z.union([
   TerminalClaimSchema,
   z.string(),
-  z.object({ kind: z.literal('fact'), text: z.string() }).strict(),
+  z.object({ kind: z.literal('fact'), text: z.string(), label: z.string().max(12).optional() }).strict(),
 ]);
 export type AnalysisClaim = z.infer<typeof AnalysisClaimSchema>;
 

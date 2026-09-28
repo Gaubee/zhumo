@@ -590,11 +590,59 @@ describe('shufa capability 工具面', () => {
         e.includes('无原文锚点'),
       ),
     ).toBe(true);
-    // 冒号前导标签豁免（中文惯例：「讲解对象：…」的标签不是陈述）。
-    expect(factEvidenceErrors({ kind: 'fact', text: '讲解对象：老师带大家看考卷上桂花的「桂」字。', source: [0] }, ['我们看考卷上桂花的桂字'], 'x')).toEqual([]);
+    // 冒号前导标签（九审收紧：文本内「标签：」不再豁免——展示性标签走
+    // label 字段；本用例验证两种形态的分流）。
+    expect(
+      factEvidenceErrors({ kind: 'fact', text: '讲解对象：老师带大家看考卷上桂花的「桂」字。', source: [0] }, ['我们看考卷上桂花的桂字'], 'x').some((e) =>
+        e.includes('无原文锚点'),
+      ),
+    ).toBe(true);
+    expect(
+      factEvidenceErrors(
+        { kind: 'fact', label: '讲解对象', text: '老师带大家看考卷上桂花的「桂」字。', source: [0] },
+        ['我们看考卷上桂花的桂字'],
+        'x',
+      ),
+    ).toEqual([]);
     // 破折号追加（run15 残余形态：正文有据，追加评注无据）。
     expect(
       factEvidenceErrors({ kind: 'fact', text: '这个土有点靠里面，纠正一下——这就是本次讲评要改的问题点。', source: [0] }, ['这个土有点靠里面纠正一下'], 'x').some((e) =>
+        e.includes('无原文锚点'),
+      ),
+    ).toBe(true);
+  });
+
+  it('九审补测：冒号伪标签拒（标签走 label 字段）/否定翻转拒/引文后散文核/无言语动词引导拒', () => {
+    const segs = ['老师说上下要对齐'];
+    // 冒号前无证据散文（旧「标签豁免」滥用形态）→ 拒。
+    expect(
+      factEvidenceErrors({ kind: 'fact', text: '老师其实说了每天练习一百遍：老师说上下要对齐。', source: [0] }, segs, 'x').some((e) =>
+        e.includes('无原文锚点'),
+      ),
+    ).toBe(true);
+    // 否定翻转（九审最危险反例）→ 拒。
+    expect(
+      factEvidenceErrors({ kind: 'fact', text: '老师没有说过「上下要对齐」。', source: [0] }, segs, 'x').some((e) =>
+        e.includes('无原文锚点'),
+      ),
+    ).toBe(true);
+    // 引文后的散文必须锚定（『上下要对齐』每天练习。→ 拒）。
+    expect(
+      factEvidenceErrors({ kind: 'fact', text: '『上下要对齐』每天练习。', source: [0] }, segs, 'x').some((e) =>
+        e.includes('无原文锚点'),
+      ),
+    ).toBe(true);
+    // 引文前无言语动词的散文（每日练习「上下要对齐」。→ 拒）。
+    expect(
+      factEvidenceErrors({ kind: 'fact', text: '每日练习「上下要对齐」。', source: [0] }, segs, 'x').some((e) =>
+        e.includes('无原文锚点'),
+      ),
+    ).toBe(true);
+    // 合法引导语（含言语动词、无否定、≤6 字）仍豁免。
+    expect(factEvidenceErrors({ kind: 'fact', text: '老师强调「上下要对齐」。', source: [0] }, segs, 'x')).toEqual([]);
+    // 长引导语（>6 字）须锚定——「老师把这一要点重复强调了两次」拒。
+    expect(
+      factEvidenceErrors({ kind: 'fact', text: '老师把这一要点重复强调了两次，「上下要对齐」。', source: [0] }, segs, 'x').some((e) =>
         e.includes('无原文锚点'),
       ),
     ).toBe(true);

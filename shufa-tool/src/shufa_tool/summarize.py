@@ -117,6 +117,9 @@ def load_injected(path: Path, source: str = "injected") -> Summary:
             if not isinstance(item.get("text"), str) or not item["text"]:
                 raise ValueError(f"summary 结构未达终态契约：{field_name}[{i}].text 必须是非空字符串")
             if item["kind"] == "fact":
+                label = item.get("label")
+                if label is not None and (not isinstance(label, str) or len(label) > 12):
+                    raise ValueError(f"summary 结构未达终态契约：{field_name}[{i}].label 须是 ≤12 字的展示性标签")
                 src = item.get("source")
                 if (
                     not isinstance(src, list)
@@ -145,6 +148,11 @@ _QUOTE_CAP_RE = re.compile(r"「([^」]+)」|“([^”]+)”|『([^』]+)』")
 _CLAUSE_SPLIT_RE = re.compile(r"(?<=[。；！？\n，、：])|(?<=——)")
 # 引号整段剥除（锚点核验只针对非引文散文）。
 _QUOTE_STRIP_RE = re.compile(r"「[^」]*」|“[^”]*”|『[^』]*』")
+# 言语动词（引导语豁免的语法类判定——九审 P1：『每日练习「…」』类无言语
+# 动词的散文不再豁免）。
+_SPEECH_VERB_RE = re.compile(r"(说|讲|强调|指出|要求|叮嘱|嘱咐|重复|谈到|点题|定性|交代)")
+# 否定词守卫（九审 P1：『老师没有说过「…」』的否定会翻转引文语义）。
+_NEGATION_RE = re.compile(r"(不|没|未|别|无|非)")
 
 
 def _norm(t: str) -> str:
@@ -162,6 +170,9 @@ def validate_summary_evidence(summary: dict, segment_texts: list[str]) -> list[s
     列表（空=通过）。"""
     if not isinstance(summary, dict):
         return ["summary 顶层必须是 JSON 对象"]
+    # segment 形状守卫（九审 P2：None/整数 segment 不再 TypeError——与
+    # daemon 的字符串归一化一致）。
+    segment_texts = [s if isinstance(s, str) else ("" if s is None else str(s)) for s in segment_texts]
     full_norm = _norm("".join(segment_texts))
     errors: list[str] = []
     for field_name in ("paragraphs", "key_points"):
@@ -204,27 +215,47 @@ def validate_summary_evidence(summary: dict, segment_texts: list[str]) -> list[s
                     inner = m.group(1) or m.group(2) or m.group(3) or ""
                     if not any(_norm(inner) in run for run in runs):
                         errors.append(f'{where} 引文「{inner}」未见于其声明的来源段')
-                # 子句锚点（八审 P1：逗号/顿号/冒号/破折号从句各自核；
-                # 冒号结尾的前导子句=中文标签惯例，豁免）。
-                for clause in _CLAUSE_SPLIT_RE.split(text):
-                    clause = clause.strip()
-                    if not clause or clause.endswith(("：", ":")):
-                        continue
-                    # 引文已对连续 run 逐字核过（自证）。锚点只核非引文散文：
-                    # 含引文的子句其 ≤6 字散文=引导/连接语豁免（与 daemon 同规）。
-                    prose = _QUOTE_STRIP_RE.sub("", clause)
-                    ns = _norm(prose)
+                # 子句锚点（八审 P1 引入、九审收紧：逗号/顿号/冒号/破折号
+                # 从句各自核。引文先整段替换为占位符再切子句；文本内
+                # 「标签：」不再豁免——展示性标签走 label 字段；引文前的
+                # ≤6 字散文仅在含言语动词且无否定词时豁免（否定会翻转引文
+                # 语义）；引文后的散文一律核。与 daemon factEvidenceErrors 同规。
+                masked = _QUOTE_STRIP_RE.sub("◇", text)
+
+                def _anchor_err(ns: str, display: str) -> str | None:
                     if not ns:
-                        continue
-                    if prose != clause and len(ns) <= 6:
-                        continue
+                        return None
                     if len(ns) < 4:
-                        if not any(ns in seg for seg in seg_norms):
-                            errors.append(f'{where} 的子句无原文支撑：「{clause}」')
-                        continue
+                        if any(ns in seg for seg in seg_norms):
+                            return None
+                        return f'{where} 的子句无原文支撑：「{display}」'
                     anchored = any(ns[k : k + 4] in seg for seg in seg_norms for k in range(len(ns) - 3))
-                    if not anchored:
-                        errors.append(f'{where} 的子句无原文锚点：「{clause}」')
+                    return None if anchored else f'{where} 的子句无原文锚点：「{display}」'
+
+                for clause in _CLAUSE_SPLIT_RE.split(masked):
+                    clause = clause.strip()
+                    if not clause:
+                        continue
+                    qi = clause.find("◇")
+                    if qi < 0:
+                        err = _anchor_err(_norm(clause), clause)
+                        if err:
+                            errors.append(err)
+                        continue
+                    before, after = clause[:qi], clause[qi + 1 :]
+                    before_ns, after_ns = _norm(before), _norm(after)
+                    guide = (
+                        len(before_ns) <= 6
+                        and _SPEECH_VERB_RE.search(before)
+                        and not _NEGATION_RE.search(before_ns)
+                    )
+                    if not guide:
+                        err = _anchor_err(before_ns, before)
+                        if err:
+                            errors.append(err)
+                    err = _anchor_err(after_ns, after)
+                    if err:
+                        errors.append(err)
             else:
                 for m in _QUOTE_CAP_RE.finditer(text):
                     inner = m.group(1) or m.group(2) or m.group(3) or ""
