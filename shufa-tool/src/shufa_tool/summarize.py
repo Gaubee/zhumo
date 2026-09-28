@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -38,8 +39,10 @@ KEYWORDS: dict[str, str] = {
 @dataclass
 class Summary:
     topic: str = ""                       # 本片段讲解对象（如「桂」）
-    paragraphs: list[str] = field(default_factory=list)
-    key_points: list[str] = field(default_factory=list)
+    # 终态契约：元素为 {kind,text[,source]} 三态对象（heuristic 摘要仍产
+    # 纯 string——读端兼容；类型上二者并存，故不标 str）。
+    paragraphs: list = field(default_factory=list)
+    key_points: list = field(default_factory=list)
     keywords_found: dict[str, list[str]] = field(default_factory=dict)  # 类别 → 词
     source: str = "heuristic"             # heuristic | injected
 
@@ -91,42 +94,88 @@ def load_injected(path: Path, source: str = "injected") -> Summary:
     {kind,text[,source]} 对象——fact 必带非空 source（转录段下标整数数组，
     从 0 起）；纯字符串不再接受（与 daemon summary_write 同规）。"""
 
-    class _SummaryShapeError(Exception):
-        pass
-
     data = json.loads(path.read_text(encoding="utf-8"))
-    try:
-        for field_name in ("paragraphs", "key_points"):
-            items = data.get(field_name, [])
-            if not isinstance(items, list):
-                raise _SummaryShapeError(f"{field_name} 必须是数组")
-            for i, item in enumerate(items):
-                if not isinstance(item, dict) or item.get("kind") not in (
-                    "fact",
-                    "inference",
-                    "suggestion",
-                ):
-                    raise _SummaryShapeError(
-                        f"{field_name}[{i}] 必须是 {{kind,text[,source]}} 对象（纯字符串已废弃）："
-                        "fact=老师原话（必带 source 段下标）/ inference=分析 / suggestion=建议"
+    if not isinstance(data, dict):
+        raise ValueError("summary 结构未达终态契约：顶层必须是 JSON 对象")
+    for field_name in ("paragraphs", "key_points"):
+        items = data.get(field_name, [])
+        if not isinstance(items, list):
+            raise ValueError(f"summary 结构未达终态契约：{field_name} 必须是数组")
+        for i, item in enumerate(items):
+            if not isinstance(item, dict) or item.get("kind") not in (
+                "fact",
+                "inference",
+                "suggestion",
+            ):
+                raise ValueError(
+                    f"summary 结构未达终态契约：{field_name}[{i}] 必须是 {{kind,text[,source]}} 对象（纯字符串已废弃）："
+                    "fact=老师原话（必带 source 段下标）/ inference=分析 / suggestion=建议"
+                )
+            if not isinstance(item.get("text"), str) or not item["text"]:
+                raise ValueError(f"summary 结构未达终态契约：{field_name}[{i}].text 必须是非空字符串")
+            if item["kind"] == "fact":
+                src = item.get("source")
+                if (
+                    not isinstance(src, list)
+                    or not src
+                    or not all(
+                        isinstance(x, int) and not isinstance(x, bool) and x >= 0 for x in src
                     )
-                if item["kind"] == "fact":
-                    src = item.get("source")
-                    if (
-                        not isinstance(src, list)
-                        or not src
-                        or not all(
-                            isinstance(x, int) and not isinstance(x, bool) and x >= 0 for x in src
-                        )
-                    ):
-                        raise _SummaryShapeError(
-                            f"{field_name}[{i}].source 必须是非空转录段下标数组（整数，从 0 起）"
-                        )
-    except _SummaryShapeError as e:
-        raise ValueError(f"summary 结构未达终态契约：{e}") from e
+                ):
+                    raise ValueError(
+                        f"summary 结构未达终态契约：{field_name}[{i}].source 必须是非空转录段下标数组（整数，从 0 起）"
+                    )
     return Summary(
         topic=data.get("topic", ""),
         paragraphs=data.get("paragraphs", []),
         key_points=data.get("key_points", []),
         source=source,
     )
+
+
+# 归一化：与 daemon normalizeClaimText 同规（去空白与标点）。
+_STRIP_RE = re.compile(r"[\s，。、；：？！,.;:?!\"'（）()「」『』…—·]")
+# 任意长度配对引号（捕获组供逐字核验）。
+_QUOTE_CAP_RE = re.compile(r"「([^」]+)」|“([^”]+)”|『([^』]+)』")
+
+
+def _norm(t: str) -> str:
+    return _STRIP_RE.sub("", t)
+
+
+def validate_summary_evidence(summary: dict, segment_texts: list[str]) -> list[str]:
+    """fact 证据核验（daemon factEvidenceErrors 的 Python 对等实现——Codex
+    六审 P1：CLI 注入路径不能只查形状，须同样核语义证据）：
+    1. source 界内；2. 任意长度引文逐字出自所引段拼接；3. 每句 ≥4 字连续
+    原文锚点且不跨段。返回错误列表（空=通过）。"""
+    errors: list[str] = []
+    for field_name in ("paragraphs", "key_points"):
+        for i, item in enumerate(summary.get(field_name, [])):
+            if item.get("kind") != "fact":
+                continue
+            where = f"{field_name}[{i}]"
+            src = item.get("source", [])
+            if any(not isinstance(x, int) or x >= len(segment_texts) or x < 0 for x in src):
+                errors.append(f"{where} 引用了不存在的转录段（共 {len(segment_texts)} 段）")
+                continue
+            seg_norms = [_norm(segment_texts[x]) for x in src]
+            scope = "".join(seg_norms)
+            for m in _QUOTE_CAP_RE.finditer(item.get("text", "")):
+                inner = m.group(1) or m.group(2) or m.group(3) or ""
+                if _norm(inner) not in scope:
+                    errors.append(f'{where} 引文「{inner}」未见于其声明的来源段')
+            for sent in re.split(r"[。；！？\n]", item.get("text", "")):
+                ns = _norm(sent)
+                if len(ns) < 4:
+                    continue
+                anchored = False
+                for seg in seg_norms:
+                    for k in range(len(ns) - 3):
+                        if ns[k : k + 4] in seg:
+                            anchored = True
+                            break
+                    if anchored:
+                        break
+                if not anchored:
+                    errors.append(f'{where} 的句子无原文锚点：「{sent}」')
+    return errors

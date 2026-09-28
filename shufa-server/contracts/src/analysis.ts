@@ -109,11 +109,13 @@ export const TerminalClaimSchema = z.union([
 export type TerminalClaim = z.infer<typeof TerminalClaimSchema>;
 
 /** 读契约：终态形态 + 旧 bundle 形态（纯 string＝heuristic/旧产物、无
- * source 的 fact＝中间态）——仅渲染兼容，不作为写入依据。 */
+ * source 的 fact＝中间态）——仅渲染兼容，不作为写入依据。source 若出现
+ * 则必须形如非空下标数组（非法 source 不静默剥除——六审：剥除会把坏
+ * 数据伪装成旧形态放行）。 */
 export const AnalysisClaimSchema = z.union([
   TerminalClaimSchema,
   z.string(),
-  z.object({ kind: z.literal('fact'), text: z.string() }),
+  z.object({ kind: z.literal('fact'), text: z.string() }).strict(),
 ]);
 export type AnalysisClaim = z.infer<typeof AnalysisClaimSchema>;
 

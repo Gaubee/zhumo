@@ -308,6 +308,21 @@ def cmd_export(args: argparse.Namespace) -> dict:
     if not args.summary_file or not Path(args.summary_file).is_file():
         raise StepError(f"摘要文件不存在：{args.summary_file}"
                         f"（请阅读转录全文与旁注截图后撰写 summary.json）")
+    # fact 证据核验（Codex 六审 P1：CLI 注入不能只查形状——转录在场时与
+    # daemon summary_write 同规核 source 界内/引文逐字/逐句锚点）。
+    _segs = (m.get("transcribe") or {}).get("segments") or []
+    if _segs:
+        import json as _json
+
+        from .summarize import validate_summary_evidence
+
+        try:
+            _summary_raw = _json.loads(Path(args.summary_file).read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001
+            raise StepError(f"摘要 JSON 读取失败：{e}") from e
+        _ev = validate_summary_evidence(_summary_raw, [s.get("text", "") for s in _segs])
+        if _ev:
+            raise StepError("summary 证据核验未过（fact 须有转录支撑）：" + "；".join(_ev))
     labels_note = f", labels={args.labels}" if args.labels else ""
     print(f"[export] 汇总导出分析包（summary={args.summary_file}{labels_note}）",
           file=sys.stderr)

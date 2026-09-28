@@ -12,7 +12,7 @@ import path from 'node:path';
 import { RPCLink } from '@orpc/client/websocket';
 import { createORPCClient } from '@orpc/client';
 // 校验表与 daemon 同源（Codex 五审 P2：两份复制表漂移=网内自洽假阳性）。
-const { VISUAL_RE, RISKY_RE, QUOTE_RE, ANY_QUOTE_RE, normalizeClaimText, quoteOf, factAnchorErrors } = await import(
+const { VISUAL_RE, RISKY_RE, ANY_QUOTE_RE, factEvidenceErrors } = await import(
   '../daemon/src/capability/analysis.js'
 );
 
@@ -108,10 +108,9 @@ if (task?.status !== 'done') {
     check((summary.paragraphs ?? []).length >= 2, 'summary.paragraphs ≥ 2');
     check((summary.key_points ?? []).length >= 1, 'summary.key_points ≥ 1');
     // 3) 三态契约：每条 claim 必须是合法对象（纯 string 已被 daemon 拒绝——
-    //    产物里再出现即契约回退）；fact 的 source 必须非空且在段界内。
+    //    产物里再出现即契约回退）；fact 证据（source 界内 + 任意长度引文
+    //    逐字 + 逐句锚点）用 daemon 同源 helper 复核。
     const claims = [...(summary.paragraphs ?? []), ...(summary.key_points ?? [])];
-    const norm = normalizeClaimText;
-    const quoteRe = QUOTE_RE;
     for (const [i, c] of claims.entries()) {
       const where = i < (summary.paragraphs ?? []).length ? `paragraphs[${i}]` : `key_points[${i - (summary.paragraphs ?? []).length}]`;
       if (typeof c === 'string' || c === null || !['fact', 'inference', 'suggestion'].includes(c?.kind)) {
@@ -119,16 +118,7 @@ if (task?.status !== 'done') {
         continue;
       }
       if (c.kind === 'fact') {
-        const src: number[] = Array.isArray(c.source) ? c.source : [];
-        check(src.length >= 1 && src.every((idx) => Number.isInteger(idx) && idx >= 0 && idx < segments.length),
-          `${where} fact.source 非空且在段界内（${JSON.stringify(src)} / ${segments.length} 段）`);
-        // 引文分域：fact 引文只对 source 所指段逐字核（daemon 同规的产物面复核）。
-        const scope = src.map((idx) => segments[idx] ?? '').join('');
-        for (const m of String(c.text ?? '').matchAll(quoteRe)) {
-          check(norm(scope).includes(norm(quoteOf(m))), `${where} fact 引文逐字出自所引段：「${quoteOf(m)}」`);
-        }
-        // 溯源锚点（五审 P1-2 的产物面复核：每句 ≥4 字连续原文锚点）。
-        for (const err of factAnchorErrors(c as { kind: string; text: string; source: number[] }, segments, where)) {
+        for (const err of factEvidenceErrors(c as { kind: string; text: string; source: number[] }, segments, where)) {
           check(false, err);
         }
       }

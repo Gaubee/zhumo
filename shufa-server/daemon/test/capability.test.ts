@@ -13,7 +13,7 @@ import { mkdtempSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createAnalysisCapabilities, execShell, parseLastJsonLine, type ShellOutcome } from '../src/capability/analysis.js';
+import { createAnalysisCapabilities, execShell, factEvidenceErrors, parseLastJsonLine, type ShellOutcome } from '../src/capability/analysis.js';
 import { createCapabilityRegistry } from '../src/capability/core.js';
 import { mcpToolName } from '../src/capability/mcp.js';
 
@@ -408,7 +408,7 @@ describe('shufa capability 工具面', () => {
       path.join(taskDir, '.shufa-work', 'manifest.json'),
       JSON.stringify({
         probe: { duration_s: 31.88 },
-        transcribe: { segments: [{ start: 0, end: 4, text: '讲评甲字和乙字的内容' }] },
+        transcribe: { segments: [{ start: 0, end: 4, text: '讲评甲字和乙字的内容，重心要稳' }] },
         grid: { grids: [{ idx: 0 }, { idx: 1 }] },
         ink: { annotations: [{ index: 0, first_ts: 9.0 }] },
       }),
@@ -469,7 +469,7 @@ describe('shufa capability 工具面', () => {
       'agent',
     );
     expect(scopedQuote.kind).toBe('failed');
-    expect((scopedQuote as { message: string }).message).toContain('引文未见于其声明的来源段');
+    expect((scopedQuote as { message: string }).message).toContain('未见于其声明的来源段');
     // 5) fact 的 source 索引越界（终态：证据段必须真实存在）→ 拒。
     const ghostSource = await registry.call(
       'shufa.summary_write',
@@ -526,7 +526,8 @@ describe('shufa capability 工具面', () => {
     );
     expect(smuggle.kind).toBe('failed');
     expect((smuggle as { message: string }).message).toContain('无原文锚点');
-    // 7) 短引号豁免（五审 P2：「重心」这类 <4 字引号也是原话，词表不误伤）。
+    // 7) 短引号（五审 P2 豁免 + 六审 P1 逐字）：「重心」这类 <4 字引号豁免
+    //    词表误伤，但同样逐字核验——原文里真有才放行（本 fixture 段含「重心要稳」）。
     const shortQuote = await registry.call(
       'shufa.summary_write',
       {
@@ -537,6 +538,31 @@ describe('shufa capability 工具面', () => {
       'agent',
     );
     expect(shortQuote).toMatchObject({ kind: 'ok' });
+    // 8) run13 反例（六审 P1）：短引号不在所引段——即使句子有其它锚点也拒。
+    const ghostShortQuote = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content:
+          '{"topic":"甲","paragraphs":[{"kind":"fact","text":"老师讲「丙」的讲评甲字的内容。","source":[0]}],"key_points":[{"kind":"fact","text":"要点","source":[0]}]}',
+      },
+      'agent',
+    );
+    expect(ghostShortQuote.kind).toBe('failed');
+    expect((ghostShortQuote as { message: string }).message).toContain('未见于其声明的来源段');
+  });
+
+  it('factEvidenceErrors：跨段伪锚点拒绝（六审——4 字片段仅在两段拼接处存在）', () => {
+    const segs = ['讲评甲字', '和乙字的内容'];
+    // 「甲字和乙」恰好横跨 seg0 尾与 seg1 头：拼接核会放行，逐段核应拒。
+    const errs = factEvidenceErrors({ kind: 'fact', text: '甲字和乙。', source: [0, 1] }, segs, 'x');
+    expect(errs.some((e) => e.includes('无原文锚点'))).toBe(true);
+    // 跨段长引文仍可核（老师的句子被分段切开——引文对拼接逐字）。
+    expect(
+      factEvidenceErrors({ kind: 'fact', text: '老师强调「甲字和乙字」的要点。', source: [0, 1] }, segs, 'x').filter((e) =>
+        e.includes('未见于其声明的来源段'),
+      ),
+    ).toEqual([]);
   });
 
   it('export 终态门禁（五审 P1-1）：bundle summary 退化为纯 string → 拒绝导出', async () => {
@@ -590,10 +616,24 @@ describe('shufa capability 工具面', () => {
     await exporting.call('shufa.export', { workdir: taskDir }, 'agent');
     const command2 = commands[1]?.command ?? [];
     expect(command2[command2.indexOf('--labels') + 1]).toBe(path.join(taskDir, 'labels.json'));
-    // bundle 缺 data.json 时 onExported 返回 null（收尾静默跳过，不附加链接）。
+    // bundle 缺 data.json → fail-closed 拒绝导出（六审 P1：不得给坏 bundle
+    // 建结果行；旧「静默跳过收尾」行为废除）。
     const noBundle = makeRegistry([{ code: 0, stdout: JSON.stringify({ step: 'export', bundle: path.join(userRoot, 'nope') }) + '\n', stderr: '' }]);
     const bare = await noBundle.call('shufa.export', { workdir: taskDir }, 'agent');
-    expect((bare as { value: { result_url?: string } }).value.result_url).toBeUndefined();
+    expect(bare).toMatchObject({ kind: 'failed' });
+    expect((bare as { message: string }).message).toContain('不可读或非法');
+    // data.json 存在但非法 JSON → 同样拒绝。
+    const corruptDir = path.join(userRoot, 'bundle-corrupt');
+    mkdirSync(corruptDir, { recursive: true });
+    writeFileSync(path.join(corruptDir, 'data.json'), 'not-json', 'utf8');
+    const corrupt = makeRegistry([{ code: 0, stdout: JSON.stringify({ step: 'export', bundle: corruptDir }) + '\n', stderr: '' }]);
+    const corruptResult = await corrupt.call('shufa.export', { workdir: taskDir }, 'agent');
+    expect(corruptResult).toMatchObject({ kind: 'failed' });
+    // data.json 是目录（不可读形态）→ 拒绝。
+    const dirAsFile = path.join(userRoot, 'bundle-dirfile');
+    mkdirSync(path.join(dirAsFile, 'data.json'), { recursive: true });
+    const dirfile = makeRegistry([{ code: 0, stdout: JSON.stringify({ step: 'export', bundle: dirAsFile }) + '\n', stderr: '' }]);
+    expect(await dirfile.call('shufa.export', { workdir: taskDir }, 'agent')).toMatchObject({ kind: 'failed' });
   });
 
   it('registry 语义：未注册 denied、重名 fail fast、export 默认参数命令', async () => {

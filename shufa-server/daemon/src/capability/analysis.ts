@@ -462,10 +462,10 @@ export function wrapExportCompletion(
       // path.resolve——那会锚到 daemon 进程 cwd 而非用户根目录）。
       const location = workdir ? deps.findTaskByDir(workdir) : null;
       if (location === null || typeof value.bundle !== 'string') return result;
-      // 终态门禁（Codex 五审 P1-1：CLI/手工注入的 summary 不经
-      // summary_write 的 zod 硬校验——产品入口在建 results 行前对 bundle
-      // 内 summary 复核终态契约，未达即拒绝导出）。data.json 缺失/损坏
-      // 仍走旧路径（onExported 收尾域负责 bundle 完整性）。
+      // 终态门禁（Codex 五审 P1-1 / 六审 P1 fail-closed：CLI/手工注入的
+      // summary 不经 summary_write 的 zod 硬校验——产品入口在建 results 行
+      // 前对 bundle 内 summary 复核终态契约。data.json 缺失/损坏/非法一律
+      // 拒绝导出，不得进入 onExported——fail-open 会给坏 bundle 建结果行）。
       try {
         const bundleData = JSON.parse(
           readFileSync(path.join(value.bundle, 'data.json'), 'utf8'),
@@ -478,8 +478,10 @@ export function wrapExportCompletion(
               .join('；')}`,
           );
         }
-      } catch {
-        // data.json 不可读：不在本门禁域（见上）。
+      } catch (error) {
+        return failed(
+          `bundle data.json 不可读或非法（拒绝导出）：${error instanceof Error ? error.message : String(error)}`,
+        );
       }
       const exported = deps.onExported(location.taskId, value.bundle);
       return exported === null
@@ -502,6 +504,9 @@ export const VISUAL_RE = /(圈画|画了圈|圈出|圈点|划出|勾出|红笔|�
 export const RISKY_RE = /(中轴|垂直线|竖直线|同一条竖线|重心|最关键|最容易|正对|正下方|匀称|比例|部件错位|对位标准|动手纠正|未对齐|逐字精讲|圈出|圈点|先肯定|以鼓励|搭对了|迎让|归位)/;
 /** ≥4 字配对引文（硬校验域；短引文同音变体易误伤，不做逐字硬核）。 */
 export const QUOTE_RE = /「([^」]{4,})」|“([^”]{4,})”|『([^』]{4,})』/g;
+/** 任意长度配对引号（捕获组给逐字核验用——六审 P1：短引号如「桂」也是
+ * 原话声明，不核会留下「引号里的字不在所引段」的夹带面）。 */
+export const ANY_QUOTE_CAPTURE_RE = /「([^」]+)」|“([^”]+)”|『([^』]+)』/g;
 /** 任意长度引号整段剥除（词表豁免域——「重心」这类短引号也是原话，五审 P2 误伤修复）。 */
 export const ANY_QUOTE_RE = /「[^」]*」|“[^”]*”|『[^』]*』/g;
 /** 归一化：去空白与标点（引文/锚点比对共用）。 */
@@ -513,26 +518,48 @@ export function quoteOf(m: RegExpMatchArray): string {
 }
 
 /**
- * fact 溯源锚点核验（Codex 五审 P1-2：source 只证明「段存在」，不证明
- * text 整体被支撑——「半真半假夹带」可绕过。判据按 run12 真实产物校准：
- * 每个句子须含 ≥4 字连续原文片段出现在 source 所指段中；纯夹带句（如
- * 「而且每天练习一百遍」）锚点为零即拒）。返回错误列表（空=通过）。
+ * fact 证据核验（终态唯一事实门，六审并档）：
+ * 1. source 界内（引用不存在的转录段 → 拒）；
+ * 2. 引文逐字：text 里**任意长度**的配对引号（「」“”『』），其内容
+ *    （归一化后）必须逐字出现在 source 所指段的拼接里——短引号也是
+ *    原话声明（run13 反例：「桂」是左右结构…source=[2,3] 而那两段没有
+ *    「桂」字，六审 P1）；
+ * 3. 溯源锚点：每个句子（归一化后 ≥4 字）须含一段 ≥4 字连续原文，且
+ *    锚点**不跨段**（逐段核——段边界拼接会造出伪锚点，六审风险点）。
+ * 判据经 run12/run13 真实产物校准。返回错误列表（空=通过）。
  */
-export function factAnchorErrors(
+export function factEvidenceErrors(
   claim: { kind: string; text: string; source: number[] },
   segments: string[],
   where: string,
 ): string[] {
   if (claim.kind !== 'fact') return [];
-  const scope = normalizeClaimText(claim.source.map((idx) => segments[idx] ?? '').join(''));
   const errors: string[] = [];
+  const bad = claim.source.filter((idx) => idx >= segments.length || idx < 0);
+  if (bad.length > 0) {
+    errors.push(`${where} 引用了不存在的转录段（${bad.join(',')}；共 ${segments.length} 段）`);
+    return errors;
+  }
+  const segNorms = claim.source.map((idx) => normalizeClaimText(segments[idx] ?? ''));
+  const scopeNorm = segNorms.join('');
+  // 2) 引文逐字（任意长度；跨段拼接核——老师的句子可能被分段切开）。
+  for (const m of claim.text.matchAll(ANY_QUOTE_CAPTURE_RE)) {
+    const q = quoteOf(m);
+    if (!scopeNorm.includes(normalizeClaimText(q))) {
+      errors.push(`${where} 引文「${q}」未见于其声明的来源段（fact 只能引 source 所指段的原话）`);
+    }
+  }
+  // 3) 逐句锚点（≥4 字连续原文；逐段核防跨段伪锚点）。
   for (const sent of claim.text.split(/[。；！？\n]/)) {
     const ns = normalizeClaimText(sent);
     // <4 字的残句（引导语/语气词）单独核无意义，并入相邻句由整句锚点覆盖。
     if (ns.length < 4) continue;
     let anchored = false;
-    for (let k = 0; k + 4 <= ns.length && !anchored; k += 1) {
-      if (scope.includes(ns.slice(k, k + 4))) anchored = true;
+    for (const seg of segNorms) {
+      for (let k = 0; k + 4 <= ns.length && !anchored; k += 1) {
+        if (seg.includes(ns.slice(k, k + 4))) anchored = true;
+      }
+      if (anchored) break;
     }
     if (!anchored) {
       errors.push(
@@ -583,37 +610,27 @@ function lintContentSemantics(
   const texts = claims.map(claimText);
   const segments = manifest?.transcribe?.segments ?? [];
 
-  // 0) fact 证据核验（终态）：source 索引必须存在；引文只对所引 segments
-  // 逐字核（引用哪段就在哪段里——编造内容伪造不了来源）。
+  // 0) fact 证据核验（终态唯一事实门，六审并档）：source 界内 + 任意长度
+  // 引文逐字（只对所引段）+ 逐句 ≥4 字原文锚点（不跨段）。
+  const segmentTexts = segments.map((s) => String(s.text ?? ''));
   claims.forEach((claim, i) => {
-    if (claim.kind !== 'fact') return;
-    const bad = claim.source.filter((idx) => idx >= segments.length);
-    if (bad.length > 0) {
-      errors.push(`第 ${i + 1} 条 fact 引用了不存在的转录段（${bad.join(',')}；共 ${segments.length} 段）`);
-    }
+    errors.push(
+      ...factEvidenceErrors(claim as { kind: string; text: string; source: number[] }, segmentTexts, `第 ${i + 1} 条 fact`),
+    );
   });
 
-  // 1) 引文忠实（≥4 字才核对：短引文同音/变体太易误伤）。引号内已逐字核过
-  // = 转录原话，视觉动词黑名单对其豁免。
+  // 1) 引文忠实：inference/suggestion 的 ≥4 字引文对转录全文核（分析段
+  // 引老师原话同样要忠实；fact 的引文已由 0) 分域核过）。
   const norm = normalizeClaimText;
   const quoteRe = QUOTE_RE;
   const quoteOfLocal = quoteOf;
   const strippedQuotes = (t: string): string => t.replace(ANY_QUOTE_RE, '');
-  const quotes: string[] = [];
-  for (const para of texts) {
-    for (const m of para.matchAll(quoteRe)) quotes.push(quoteOfLocal(m));
-  }
   claims.forEach((claim, i) => {
-    if (transcriptText === '' || quotes.length === 0) return;
-    const scope =
-      claim.kind === 'fact'
-        ? claim.source.map((idx) => segments[idx]?.text ?? '').join('')
-        : transcriptText;
-    const haystack = norm(scope);
-    for (const m of texts[i]!.matchAll(quoteRe)) {
+    if (claim.kind === 'fact' || transcriptText === '') return;
+    for (const m of claim.text.matchAll(quoteRe)) {
       const q = quoteOfLocal(m);
-      if (!haystack.includes(norm(q))) {
-        errors.push(`第 ${i + 1} 条引文未见于其声明的来源段：「${q}」（fact 只能引 source 所指的转录段原话）`);
+      if (!norm(transcriptText).includes(norm(q))) {
+        errors.push(`第 ${i + 1} 条引文未见于转录：「${q}」`);
       }
     }
   });
@@ -690,19 +707,6 @@ function lintContentSemantics(
         `第 ${i + 1} 条 fact 含分析判断「${hit[1]}」——老师没说过的判断须改为 {"kind":"inference"} 或删除`,
       );
     }
-  });
-
-  // 6) fact 溯源锚点（Codex 五审 P1-2：source 只证段存在不证内容支撑——
-  //    每句须含 ≥4 字连续原文锚点，拦「半真半假夹带」；判据经 run12
-  //    真实产物校准，见 factAnchorErrors 注释）。
-  claims.forEach((claim, i) => {
-    errors.push(
-      ...factAnchorErrors(
-        claim as { kind: string; text: string; source: number[] },
-        segments.map((s) => s.text ?? ''),
-        `第 ${i + 1} 条 fact`,
-      ),
-    );
   });
 
   return errors;
