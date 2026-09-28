@@ -89,3 +89,22 @@ class OCRTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OCRFailurePathTests(unittest.TestCase):
+    """Codex 复审 P2 补测：OCR 旁路失败不得阻塞导出。"""
+
+    def test_ocr_stage_requires_clip_crops(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(FileNotFoundError):
+                pipeline.ocr_stage(Path(td), None, None)
+
+    def test_export_without_ocr_results_succeeds(self) -> None:
+        """manifest 无 ocr 键（步失败/未跑）→ 导出不含 label_ocr 但成功。"""
+        grids = [{"idx": 0, "row": 0, "col": 0, "visibility": 1.0,
+                  "note": "", "label": "桂", "crop": np.zeros((8, 8, 3), np.uint8)}]
+        pipeline._attach_ocr_results(grids, [])  # 空 rows：不附加也不覆盖
+        self.assertEqual(grids[0]["label"], "桂")
+        self.assertNotIn("label_ocr", grids[0])
