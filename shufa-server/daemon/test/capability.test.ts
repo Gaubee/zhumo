@@ -182,6 +182,12 @@ describe('shufa capability 工具面', () => {
   });
 
   it('summary_write：写入任务目录 summary.json；非法 JSON 拒绝；结构缺失拒绝（2026-09-25 lint）', async () => {
+    // 语义 lint 需要 manifest 在场（Codex 2026-09-28：缺失即拒写）。
+    mkdirSync(path.join(taskDir, '.shufa-work'), { recursive: true });
+    writeFileSync(
+      path.join(taskDir, '.shufa-work', 'manifest.json'),
+      JSON.stringify({ probe: { duration_s: 30 }, transcribe: { segments: [{ start: 0, end: 3, text: '内容' }] } }),
+    );
     const good = await registry.call(
       'shufa.summary_write',
       {
@@ -205,6 +211,11 @@ describe('shufa capability 工具面', () => {
   });
 
   it('summary_write labels 双通道（走查 2026-09-23）：合法落盘、非法拒绝、值回传', async () => {
+    mkdirSync(path.join(taskDir, '.shufa-work'), { recursive: true });
+    writeFileSync(
+      path.join(taskDir, '.shufa-work', 'manifest.json'),
+      JSON.stringify({ probe: { duration_s: 30 }, transcribe: { segments: [{ start: 0, end: 3, text: '内容' }] } }),
+    );
     const withLabels = await registry.call(
       'shufa.summary_write',
       {
@@ -349,6 +360,41 @@ describe('shufa capability 工具面', () => {
     expect(legit).toMatchObject({ kind: 'ok' });
     expect(existsSync(path.join(taskDir, 'summary.json'))).toBe(true);
     expect(existsSync(path.join(taskDir, 'labels.json'))).toBe(true);
+  });
+
+  it('summary_write 语义 lint（Codex 评审 2026-09-28）：manifest 缺失拒写；时间变体核验', async () => {
+    // manifest 缺失（管线未跑完）→ 拒写，不再静默跳过（taskDir 尚无 .shufa-work）。
+    const rejected = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content: '{"topic":"X","paragraphs":["内容"],"key_points":["要点"]}',
+      },
+      'agent',
+    );
+    expect(rejected.kind).toBe('failed');
+    expect((rejected as { message: string }).message).toContain('manifest 不存在');
+    // 时间变体：约99s（超时长）与负数形态。
+    mkdirSync(path.join(taskDir, '.shufa-work'), { recursive: true });
+    writeFileSync(
+      path.join(taskDir, '.shufa-work', 'manifest.json'),
+      JSON.stringify({
+        probe: { duration_s: 31.88 },
+        transcribe: { segments: [{ start: 0, end: 4, text: '内容' }] },
+        grid: { grids: [{ idx: 0 }] },
+        ink: { annotations: [{ index: 0, first_ts: 9.0 }] },
+      }),
+    );
+    const variant = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content: '{"topic":"X","paragraphs":["老师讲到（约99s）"],"key_points":["要点"]}',
+      },
+      'agent',
+    );
+    expect(variant.kind).toBe('failed');
+    expect((variant as { message: string }).message).toContain('超出视频时长');
   });
 
   it('export：summary-file 注入 + bundle 命中 → onExported 附加结果链接', async () => {

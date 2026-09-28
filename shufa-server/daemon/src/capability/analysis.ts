@@ -316,8 +316,8 @@ export function createAnalysisCapabilities(deps: AnalysisCapabilityDeps): Capabi
         content: z.string().min(1).describe('summary.json 完整内容（JSON 文本）'),
         labels: z.string().optional().describe(
           'labels.json 完整内容（JSON 文本，可选但强烈建议）：'
-          + '{"grids":[{"index":0,"label":"桂"}],"annotations":[{"index":0,"desc":"指出主笔起了钩"}]}——'
-          + 'index 对应检测顺序；label 用于转录↔生字关联与旁注归属',
+          + '{"grids":[{"index":0,"label":"<生字>"}],"annotations":[{"index":0,"desc":"指出的问题（仅转录能支撑的内容）"}]}——'
+          + 'index 对应检测顺序；label 只标转录明确点到的字，未点名的格留空串或省略',
         ),
       }),
       handler: (raw) => {
@@ -497,7 +497,9 @@ function lintContentSemantics(
   try {
     manifest = JSON.parse(readFileSync(path.join(taskDir, '.shufa-work', 'manifest.json'), 'utf8'));
   } catch {
-    return errors; // manifest 未生成：跳过语义核对（结构校验已过）
+    // manifest 缺失 = 管线步骤未跑完（Codex 评审 2026-09-28：跳过会让硬校验
+    // 整体可绕过——summary 必须在 transcribe 完成后写入）。
+    return ['管线 manifest 不存在（probe/transcribe 未完成）——请先跑完前置步骤再写 summary'];
   }
   const transcriptText = (manifest?.transcribe?.segments ?? [])
     .map((s) => String(s.text ?? ''))
@@ -523,7 +525,8 @@ function lintContentSemantics(
   }
 
   // 2) t≈ 不得超出视频时长（summary 正文 + labels desc 通用）。
-  const timeRe = /t≈(\d+(?:\.\d+)?)s/g;
+  // 时间表达变体（Codex 评审：t≈12.3s / 约12s / t≈ 12 s；负数或非数字直接报）。
+  const timeRe = /(?:t≈|约)\s*(\d+(?:\.\d+)?)\s*s/g;
   const checkTime = (text: string, where: string) => {
     if (duration <= 0) return;
     for (const m of text.matchAll(timeRe)) {
