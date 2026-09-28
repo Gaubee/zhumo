@@ -140,6 +140,11 @@ def load_injected(path: Path, source: str = "injected") -> Summary:
 _STRIP_RE = re.compile(r"[\s，。、；：？！,.;:?!\"'（）()「」『』…—·]")
 # 任意长度配对引号（捕获组供逐字核验）。
 _QUOTE_CAP_RE = re.compile(r"「([^」]+)」|“([^”]+)”|『([^』]+)』")
+# 子句切分（八审 P1：逗号/顿号/冒号/破折号从句各自须有锚点；分隔符保留
+# 在子句尾——冒号结尾=前导标签，豁免）。与 daemon 的 lookbehind 切分同规。
+_CLAUSE_SPLIT_RE = re.compile(r"(?<=[。；！？\n，、：])|(?<=——)")
+# 引号整段剥除（锚点核验只针对非引文散文）。
+_QUOTE_STRIP_RE = re.compile(r"「[^」]*」|“[^”]*”|『[^』]*』")
 
 
 def _norm(t: str) -> str:
@@ -170,37 +175,57 @@ def validate_summary_evidence(summary: dict, segment_texts: list[str]) -> list[s
                 continue
             where = f"{field_name}[{i}]"
             kind = item.get("kind")
+            text = item.get("text") if isinstance(item.get("text"), str) else ""
             if kind == "fact":
                 if not segment_texts:
                     errors.append(f"{where} 无转录可引（fact 需要转录证据；改用 inference/suggestion）")
                     continue
-                src = item.get("source", [])
-                if any(not isinstance(x, int) or isinstance(x, bool) or x >= len(segment_texts) or x < 0 for x in src):
+                src = item.get("source")
+                if not isinstance(src, list) or any(
+                    not isinstance(x, int) or isinstance(x, bool) or x >= len(segment_texts) or x < 0 for x in src
+                ):
                     errors.append(f"{where} 引用了不存在的转录段（共 {len(segment_texts)} 段）")
                     continue
                 if any(src[k] <= src[k - 1] for k in range(1, len(src))):
                     errors.append(f"{where} 的 source 必须是严格递增的去重下标序列")
                     continue
                 seg_norms = [_norm(segment_texts[x]) for x in src]
-                scope = "".join(seg_norms)
-                text = item.get("text", "") if isinstance(item.get("text"), str) else ""
+                # 连续 run（八审 P1：非连续 source 拼接可造跨 gap 伪引文）。
+                runs: list[str] = []
+                cur = seg_norms[0] if seg_norms else ""
+                for k in range(1, len(src)):
+                    if src[k] == src[k - 1] + 1:
+                        cur += seg_norms[k]
+                    else:
+                        runs.append(cur)
+                        cur = seg_norms[k]
+                runs.append(cur)
                 for m in _QUOTE_CAP_RE.finditer(text):
                     inner = m.group(1) or m.group(2) or m.group(3) or ""
-                    if _norm(inner) not in scope:
+                    if not any(_norm(inner) in run for run in runs):
                         errors.append(f'{where} 引文「{inner}」未见于其声明的来源段')
-                for sent in re.split(r"[。；！？\n]", text):
-                    ns = _norm(sent)
+                # 子句锚点（八审 P1：逗号/顿号/冒号/破折号从句各自核；
+                # 冒号结尾的前导子句=中文标签惯例，豁免）。
+                for clause in _CLAUSE_SPLIT_RE.split(text):
+                    clause = clause.strip()
+                    if not clause or clause.endswith(("：", ":")):
+                        continue
+                    # 引文已对连续 run 逐字核过（自证）。锚点只核非引文散文：
+                    # 含引文的子句其 ≤6 字散文=引导/连接语豁免（与 daemon 同规）。
+                    prose = _QUOTE_STRIP_RE.sub("", clause)
+                    ns = _norm(prose)
                     if not ns:
+                        continue
+                    if prose != clause and len(ns) <= 6:
                         continue
                     if len(ns) < 4:
                         if not any(ns in seg for seg in seg_norms):
-                            errors.append(f'{where} 的句子无原文支撑：「{sent}」')
+                            errors.append(f'{where} 的子句无原文支撑：「{clause}」')
                         continue
                     anchored = any(ns[k : k + 4] in seg for seg in seg_norms for k in range(len(ns) - 3))
                     if not anchored:
-                        errors.append(f'{where} 的句子无原文锚点：「{sent}」')
+                        errors.append(f'{where} 的子句无原文锚点：「{clause}」')
             else:
-                text = item.get("text", "") if isinstance(item.get("text"), str) else ""
                 for m in _QUOTE_CAP_RE.finditer(text):
                     inner = m.group(1) or m.group(2) or m.group(3) or ""
                     if _norm(inner) not in full_norm:

@@ -577,6 +577,29 @@ describe('shufa capability 工具面', () => {
     expect(nonFactQuoteErrors({ kind: 'inference', text: '老师强调「重心」要稳' }, '讲评甲字和乙字的内容重心要稳', 'x')).toEqual([]);
   });
 
+  it('八审补测：非连续 source 伪引文 / 逗号从句夹带 / 标签豁免 / 破折号追加', () => {
+    // 非连续 source 拼接伪引文（segs[0]尾「上下」+ segs[2]「要对齐」≠原话）。
+    const gap = ['老师说上下', '中间讲别的', '要对齐'];
+    expect(factEvidenceErrors({ kind: 'fact', text: '老师说「上下要对齐」。', source: [0, 2] }, gap, 'x').some((e) => e.includes('未见于其声明的来源段'))).toBe(true);
+    // 相邻段的跨段引文仍可（老师的句子被分段切开；引导语由引文自证）。
+    const adjacent = ['老师说上下', '要对齐啦'];
+    expect(factEvidenceErrors({ kind: 'fact', text: '老师说「上下要对齐」。', source: [0, 1] }, adjacent, 'x')).toEqual([]);
+    // 逗号从句夹带（八审反例：真话逗号后接编造）。
+    expect(
+      factEvidenceErrors({ kind: 'fact', text: '老师说每天练习一百遍，并说上下要对齐。', source: [0] }, ['老师说上下要对齐'], 'x').some((e) =>
+        e.includes('无原文锚点'),
+      ),
+    ).toBe(true);
+    // 冒号前导标签豁免（中文惯例：「讲解对象：…」的标签不是陈述）。
+    expect(factEvidenceErrors({ kind: 'fact', text: '讲解对象：老师带大家看考卷上桂花的「桂」字。', source: [0] }, ['我们看考卷上桂花的桂字'], 'x')).toEqual([]);
+    // 破折号追加（run15 残余形态：正文有据，追加评注无据）。
+    expect(
+      factEvidenceErrors({ kind: 'fact', text: '这个土有点靠里面，纠正一下——这就是本次讲评要改的问题点。', source: [0] }, ['这个土有点靠里面纠正一下'], 'x').some((e) =>
+        e.includes('无原文锚点'),
+      ),
+    ).toBe(true);
+  });
+
   it('export 终态门禁（五审 P1-1）：bundle summary 退化为纯 string → 拒绝导出', async () => {
     writeFileSync(path.join(taskDir, 'summary.json'), '{"topic":"桂"}', 'utf8');
     const bundle = path.join(userRoot, 'bundle-legacy');

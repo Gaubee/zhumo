@@ -541,7 +541,6 @@ export function factEvidenceErrors(
     return errors;
   }
   const segNorms = claim.source.map((idx) => normalizeClaimText(segments[idx] ?? ''));
-  const scopeNorm = segNorms.join('');
   // source 有序性（七审 P2：乱序/重复拼接可造出不存在的短语）。
   for (let i = 1; i < claim.source.length; i += 1) {
     if (claim.source[i]! <= claim.source[i - 1]!) {
@@ -549,21 +548,50 @@ export function factEvidenceErrors(
       return errors;
     }
   }
-  // 2) 引文逐字（任意长度；跨段拼接核——老师的句子可能被分段切开）。
-  for (const m of claim.text.matchAll(ANY_QUOTE_CAPTURE_RE)) {
-    const q = quoteOf(m);
-    if (!scopeNorm.includes(normalizeClaimText(q))) {
-      errors.push(`${where} 引文「${q}」未见于其声明的来源段（fact 只能引 source 所指段的原话）`);
+  // 连续 run 拼接（八审 P1：非连续 source 直接拼接可拼造跨 gap 伪引文——
+  // 反例 segments=[老师说上下|中间讲别的|要对齐]、source=[0,2]、引文
+  // 「上下要对齐」。引文只能命中**连续段**的拼接，一段原话不会被中间
+  // 插入的别的内容隔开）。
+  const runs: string[] = [];
+  let current = segNorms[0] ?? '';
+  for (let i = 1; i < claim.source.length; i += 1) {
+    if (claim.source[i]! === claim.source[i - 1]! + 1) {
+      current += segNorms[i]!;
+    } else {
+      runs.push(current);
+      current = segNorms[i]!;
     }
   }
-  // 3) 逐句锚点（≥4 字连续原文；逐段核防跨段伪锚点；<4 字短句要求整句
-  //    出现在单一 source 段——七审 P2：短句跳过是夹带缝隙）。
-  for (const sent of claim.text.split(/[。；！？\n]/)) {
-    const ns = normalizeClaimText(sent);
+  runs.push(current);
+  // 2) 引文逐字（任意长度；对某条连续 run 核——老师的句子可能被相邻分段
+  // 切开，但不能跨 gap）。
+  for (const m of claim.text.matchAll(ANY_QUOTE_CAPTURE_RE)) {
+    const q = quoteOf(m);
+    if (!runs.some((run) => run.includes(normalizeClaimText(q)))) {
+      errors.push(`${where} 引文「${q}」未见于其声明的来源段（fact 只能引 source 所指连续段的原话）`);
+    }
+  }
+  // 3) 子句锚点（八审 P1：只按句号切句挡不住「真话，夹带。」——逗号/
+  //    顿号/冒号/破折号从句各自须有锚点；≥4 字含 ≥4 字连续原文且不跨段，
+  //    <4 字须整句出现在所引某段。以冒号结尾的前导子句是中文标签惯例
+  //    （「讲解对象：…」），标签不是陈述，豁免锚点）。
+  const clauses = claim.text
+    .split(/(?<=[。；！？\n，、：])|(?<=——)/)
+    .map((c) => c.trim())
+    .filter((c) => c.length > 0);
+  for (const clause of clauses) {
+    if (clause.endsWith('：') || clause.endsWith(':')) continue; // 前导标签
+    // 引文内容已对 source 连续 run 逐字核过（自证）。锚点只核**非引文
+    // 散文**：含已核引文的子句，其 ≤6 字散文视为引导/连接语（「老师强调」
+    // 「并再次重复」类）豁免；>6 字仍须锚点（防借引文夹带长编造）。
+    const prose = clause.replace(ANY_QUOTE_RE, '');
+    const hasVerifiedQuote = prose !== clause;
+    const ns = normalizeClaimText(prose);
     if (ns.length === 0) continue;
+    if (hasVerifiedQuote && ns.length <= 6) continue;
     if (ns.length < 4) {
       if (!segNorms.some((seg) => seg.includes(ns))) {
-        errors.push(`${where} 的句子无原文支撑：「${sent}」（短句须整句出现在所引某段中）`);
+        errors.push(`${where} 的子句无原文支撑：「${clause}」（短子句须整句出现在所引某段中）`);
       }
       continue;
     }
@@ -576,7 +604,7 @@ export function factEvidenceErrors(
     }
     if (!anchored) {
       errors.push(
-        `${where} 的句子无原文锚点：「${sent}」——每句须含所引段 ≥4 字连续原话；夹带内容改 {"kind":"inference"} 或删除`,
+        `${where} 的子句无原文锚点：「${clause}」——每个子句须含所引段 ≥4 字连续原话；夹带内容改 {"kind":"inference"} 或删除`,
       );
     }
   }

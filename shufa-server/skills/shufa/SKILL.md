@@ -189,10 +189,13 @@ stdout 输出 `{"step":"transcribe","skipped":"transcribe","reason":"…"}`，
 - 结构：topic/paragraphs（≥1 段）/key_points（≥1 条）非空；元素必须是
   三种对象形态之一（纯字符串拒绝）；labels index 在检测范围内。
 - fact 证据：每条 fact 的 `source` 下标必须真实存在（超出 segments 范围
-  拒绝写入）且**严格递增去重**；text 每句含 ≥4 字连续原文锚点且**不跨段**
-  （<4 字短句须整句出现在所引某段；防夹带与拼接伪锚点）。export 前另有
-  终态门禁复核 bundle 内 summary——未达契约的导出被拒绝（CLI 注入同规
-  核证据；无转录时 fact 一律拒）。
+  拒绝写入）且**严格递增去重**；引文须逐字出自 source 的**连续段拼接**
+  （跨 gap 拼接是伪引文）；text 的**每个子句**（逗号/顿号/冒号/破折号
+  均切分）须含 ≥4 字连续原文锚点且不跨段——<4 字短子句须整句出现在所
+  引某段；含引文的子句其 ≤6 字引导语（「老师强调」类）豁免；冒号前导
+  标签（「讲解对象：」）豁免。export 前另有终态门禁复核 bundle 内
+  summary——未达契约的导出被拒绝（CLI 注入同规核证据；无转录时 fact
+  一律拒）。
 - 引文忠实：paragraphs/key_points 里**任意长度**的「」『』引文，**必须
   逐字出现在该条 fact 的 source 所指转录段里**（inference/suggestion 的
   引文对全文核）——只有老师原话才加引号，转述与概括一律不用引号；引号
