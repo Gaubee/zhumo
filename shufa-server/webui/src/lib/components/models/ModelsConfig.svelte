@@ -252,14 +252,12 @@
     onsaved?.();
   }
 
-  /** 默认模型当前的 efforts 目录（默认强度选择器的选项源；anthropic-messages
-   * 协议是 thinking-budget 语义、不支持档位——选择器隐藏，e2e 实证）。 */
+  /** 默认模型当前的 efforts 目录（默认强度选择器的选项源；档位能力经
+   * settings.yaml reasoningEfforts 声明打通——所有协议一致投影）。 */
   const defaultEfforts = $derived.by(() => {
     const def = settings?.default;
     if (def == null) return [];
-    const route = routes.find((r) => r.provider === def.provider);
-    if (route?.api === "anthropic-messages") return [];
-    return route?.models.find((model) => model.id === def.model)?.efforts ?? [];
+    return routes.find((r) => r.provider === def.provider)?.models.find((model) => model.id === def.model)?.efforts ?? [];
   });
 
   async function saveDefaultEffort(effort: string | null): Promise<void> {

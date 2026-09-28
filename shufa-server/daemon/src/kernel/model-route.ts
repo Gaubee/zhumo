@@ -23,13 +23,15 @@ export interface ShufaModelRoute {
   contextWindow: number;
 }
 
-/** 桥接路由（多模型）：一条 provider 路由携带全部模型条目。 */
+/** 桥接路由（多模型）：一条 provider 路由携带全部模型条目（efforts 随行
+ * 供 settings.yaml reasoningEfforts 声明——anthropic 系协议的档位能力
+ * 声明后内核才接受 reasoningEffort，2026-09-28 打通）。 */
 export interface BridgedRoute {
   provider: string;
   api: string;
   baseURL: string;
   apiKey: string;
-  models: Array<{ id: string; contextWindow?: number }>;
+  models: Array<{ id: string; contextWindow?: number; efforts?: string[] }>;
 }
 
 /** 多路由桥接载荷（boot 用）：全量路由 + 默认模型（effort=后台默认强度档，
@@ -86,6 +88,18 @@ export function syncModelRoutesSettings(dshHome: string, bundle: ModelRoutesBund
     const models = route.models.map((entry) => ({
       id: entry.id,
       ...(entry.contextWindow !== undefined ? { contextWindow: entry.contextWindow } : {}),
+      // 档位能力声明（pi-ai 适配器 resolveModelReasoning 消费）：level →
+      // wire 同名映射；未声明时 anthropic 系协议模型被内核判「不支持档位」，
+      // 传 reasoningEffort 即 UNSUPPORTED_REASONING_EFFORT（e2e 两轮实证）。
+      // 只声明 pi-ai THINKING_LEVELS 枚举内的档——zcode 目录的开关型档
+      // （disabled/enabled）不在枚举内，声明即 NO_ADAPTER（run10 实证）。
+      ...(() => {
+        const PI_AI_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+        const levels = (entry.efforts ?? []).filter((level) => PI_AI_LEVELS.has(level));
+        return levels.length > 0
+          ? { reasoningEfforts: Object.fromEntries(levels.map((level) => [level, level])) }
+          : {};
+      })(),
     }));
     // 默认模型不在清单（悬空防御）时补一条。
     if (bundle.default?.provider === route.provider) {

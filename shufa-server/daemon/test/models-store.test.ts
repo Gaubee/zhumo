@@ -6,13 +6,14 @@
  *       非 2xx=failed 带脱敏、无密钥=failed、超时。
  */
 import http from 'node:http';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createServices, type TestServices } from './helpers.js';
 import { getSetting, putSetting } from '../src/db/store.js';
 import {
+  buildRoutesBundle,
   loadModelsConfig,
   loadRoutes,
   resolveDefaultEffort,
@@ -120,7 +121,30 @@ describe('五轮 models-store：保存与密钥语义', () => {
     expect(resolveDefaultEffort(undefined)).toBeUndefined();
   });
 
-  it('迁移收编：旧 llm_* 五键齐备 → 首次读取物化为单路由 + default + 密钥', () => {
+    it('桥接档位声明（2026-09-28 打通）：THINKING_LEVELS 内档同名映射、开关型档过滤', () => {
+    saveModelsConfig(s.db, {
+      routes: [
+        { provider: 'zai', api: 'anthropic-messages', baseURL: 'https://z.ai/api/anthropic', apiKey: 'k', models: [
+          { id: 'GLM-5.3-Flash', contextWindow: 1000000, efforts: ['low', 'medium', 'high'] },
+          { id: 'GLM-5-Turbo', efforts: ['disabled', 'enabled'] },
+        ] },
+      ],
+      default: { provider: 'zai', model: 'GLM-5.3-Flash' },
+    });
+    const home = mkdtempSync(path.join(tmpdir(), 'shufa-dsh-'));
+    try {
+      syncModelRoutesSettings(home, buildRoutesBundle(s.db));
+      const doc = parseYaml(readFileSync(path.join(home, 'settings.yaml'), 'utf8')) as any;
+      const models = doc['llm-pi-ai'].providers.zai.models;
+      expect(models[0].reasoningEfforts).toEqual({ low: 'low', medium: 'medium', high: 'high' });
+      // 开关型档（disabled/enabled）不在 pi-ai 枚举——声明即 NO_ADAPTER（run10 实证）。
+      expect(models[1].reasoningEfforts).toBeUndefined();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+it('迁移收编：旧 llm_* 五键齐备 → 首次读取物化为单路由 + default + 密钥', () => {
     putSetting(s.db, 'llm_provider', 'zhipu');
     putSetting(s.db, 'llm_base_url', 'https://open.bigmodel.cn/api/paas/v4');
     putSetting(s.db, 'llm_api_key', 'k-legacy');

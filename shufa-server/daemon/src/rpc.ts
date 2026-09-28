@@ -550,12 +550,7 @@ const modelsAvailable = requireActiveUser.handler(({ context }): ModelsAvailable
         name: model.name ?? model.id,
         ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
         ...(model.inputTypes !== undefined ? { inputTypes: model.inputTypes } : {}),
-        // 档位只对 effort 原生协议投影（e2e 实证 2026-09-28：anthropic-messages
-        // 路由传 effort 必被内核 UNSUPPORTED_REASONING_EFFORT 拒——pi-ai 对该
-        // 协议的 zai 能力未声明；不投影 → 前端强度 chip 自动隐藏）。
-        ...(route.api !== 'anthropic-messages' && model.efforts !== undefined && model.efforts.length > 0
-          ? { efforts: model.efforts }
-          : {}),
+        ...(model.efforts !== undefined && model.efforts.length > 0 ? { efforts: model.efforts } : {}),
         ...(route.iconUrl !== undefined ? { iconUrl: route.iconUrl } : {}),
       })),
     ),

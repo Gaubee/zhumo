@@ -153,6 +153,7 @@ export function buildRoutesBundle(db: SqliteDb): ModelRoutesBundle {
         models: route.models.map((model) => ({
           id: model.id,
           ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+          ...(model.efforts !== undefined && model.efforts.length > 0 ? { efforts: model.efforts } : {}),
         })),
       })),
     default: loadDefault(db, routes),

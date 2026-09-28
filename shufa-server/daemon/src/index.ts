@@ -97,26 +97,17 @@ const sessions = createTaskSessions({
         catalog.routes
           .find((route) => route.provider === provider)
           ?.models.find((entry) => entry.id === model)?.efforts;
-      // 档位仅对 effort 原生协议附加（e2e 实证 2026-09-28：anthropic-messages
-      // 路由传 effort 必被内核 UNSUPPORTED_REASONING_EFFORT 拒——该协议是
-      // thinking-budget 语义，pi-ai 能力未声明；前台投影面同步隐藏档位）。
-      const supportsEffort = (provider: string): boolean =>
-        catalog.routes.find((route) => route.provider === provider)?.api !== 'anthropic-messages';
       const autoEffortOf = (provider: string, model: string): string | undefined =>
-        supportsEffort(provider) ? resolveDefaultEffort(effortsOf(provider, model)) : undefined;
+        resolveDefaultEffort(effortsOf(provider, model));
       if (task?.model_provider && task.model_model) {
-        const explicit = task.model_effort
-          ? { effort: task.model_effort }
-          : bundle.default?.effort
-            ? { effort: bundle.default.effort }
-            : { effort: autoEffortOf(task.model_provider, task.model_model) };
-        const effortValue = 'effort' in explicit ? explicit.effort : undefined;
         return {
           provider: task.model_provider,
           model: task.model_model,
-          ...(effortValue !== undefined && supportsEffort(task.model_provider)
-            ? { effort: effortValue }
-            : {}),
+          ...(task.model_effort
+            ? { effort: task.model_effort }
+            : bundle.default?.effort
+              ? { effort: bundle.default.effort }
+              : { effort: autoEffortOf(task.model_provider, task.model_model) }),
         };
       }
       if (bundle.default) {
