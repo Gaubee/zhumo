@@ -485,7 +485,7 @@ export function wrapExportCompletion(
  */
 function lintContentSemantics(
   taskDir: string,
-  summary: { paragraphs: string[]; key_points: string[] },
+  summary: { topic: string; paragraphs: SummaryClaim[]; key_points: SummaryClaim[] },
   labels: unknown,
 ): string[] {
   const errors: string[] = [];
@@ -506,13 +506,17 @@ function lintContentSemantics(
     .join('');
   const duration = manifest?.probe?.duration_s ?? 0;
 
-  // 1) 引文忠实（≥4 字才核对：短引文同音/变体太易误伤）。
+  const claims = [...summary.paragraphs, ...summary.key_points];
+  const texts = claims.map(claimText);
+
+  // 1) 引文忠实（≥4 字才核对：短引文同音/变体太易误伤）。引号内已逐字核过
+  // = 转录原话，视觉动词黑名单对其豁免。
   const norm = (t: string) =>
     t.replace(/[\s，。、；：？！,.;:?!"'（）()「」『』…—·]/g, '');
-  // 引号族（e2e 013b8c78 实证：agent 常用弯引号 “” 引原话——只认 「」 会被绕过）。
   const quoteRe = /[「“『]([^」”』]{4,})[」”』]/g;
+  const strippedQuotes = (t: string): string => t.replace(quoteRe, '');
   const quotes: string[] = [];
-  for (const para of [...summary.paragraphs, ...summary.key_points]) {
+  for (const para of texts) {
     for (const m of para.matchAll(quoteRe)) quotes.push(m[1]!);
   }
   if (transcriptText && quotes.length > 0) {
@@ -524,27 +528,45 @@ function lintContentSemantics(
     }
   }
 
-  // 2) t≈ 不得超出视频时长（summary 正文 + labels desc 通用）。
-  // 时间表达变体（Codex 评审：t≈12.3s / 约12s / t≈ 12 s；负数或非数字直接报）。
-  const timeRe = /(?:t≈|约)\s*(\d+(?:\.\d+)?)\s*s/g;
+  // 2) 视觉动词黑名单（Codex 三审 P1：agent 看不到画面，任何视觉动作断言
+  // 都是编造——run5 三条 desc 全写「圈画」实证）。
+  const visualRe = /(圈画|画了圈|划出|勾出|红笔|笔迹|示范)/g;
+  const checkVisual = (text: string, where: string) => {
+    for (const m of strippedQuotes(text).matchAll(visualRe)) {
+      errors.push(`${where}：视觉动作「${m[1]}」无证据——你看不到画面，删除或改为转录原话引用`);
+    }
+  };
+  texts.forEach((t, i) => checkVisual(t, `summary 第 ${i + 1} 条`));
+
+  // 3) 时间全遍历（topic/段落/要点/labels desc；秒字变体；负数显式拒绝）。
+  const timeRe = /(?:t≈|约)\s*(\d+(?:\.\d+)?)\s*(?:s|秒)/g;
+  const negTimeRe = /(?:t≈|约)\s*-(\d+(?:\.\d+)?)/;
   const checkTime = (text: string, where: string) => {
     if (duration <= 0) return;
+    if (negTimeRe.test(text)) {
+      errors.push(`${where}：出现负数时间戳`);
+      return;
+    }
     for (const m of text.matchAll(timeRe)) {
       if (Number(m[1]) > duration + 0.5) {
         errors.push(`${where}：t≈${m[1]}s 超出视频时长 ${duration.toFixed(1)}s`);
       }
     }
   };
-  checkTime([...summary.paragraphs, ...summary.key_points].join('\n'), 'summary');
+  checkTime(`${summary.topic}\n${texts.join('\n')}`, 'summary');
 
-  // 3) labels desc 的 t≈ ↔ 旁注实际 first_ts（±3s）。
+  // 4) labels：desc 时间/视觉动词 + 旁注 ±3s + label 字级证据（非空 label
+  // 必须在转录中出现过——多字视频无证据标注在此拦截）。
   const annos = manifest?.ink?.annotations ?? [];
-  const labelsAnnotations = (labels as { annotations?: unknown } | undefined)?.annotations;
-  if (Array.isArray(labelsAnnotations) && annos.length > 0) {
-    for (const item of labelsAnnotations as Array<{ index?: unknown; desc?: unknown }>) {
-      if (typeof item.index !== 'number' || typeof item.desc !== 'string') continue;
+  const labelsObj = labels as { annotations?: unknown; grids?: unknown } | undefined;
+  if (Array.isArray(labelsObj?.annotations)) {
+    (labelsObj!.annotations as Array<{ index?: unknown; desc?: unknown }>).forEach((item, i) => {
+      if (typeof item.index !== 'number' || typeof item.desc !== 'string') return;
+      checkVisual(item.desc, `labels.annotations[${i}].desc`);
+      checkTime(item.desc, `labels.annotations[${item.index}].desc`);
+      if (annos.length === 0) return;
       const real = annos[item.index]?.first_ts;
-      if (real === undefined) continue;
+      if (real === undefined) return;
       for (const m of item.desc.matchAll(timeRe)) {
         if (Math.abs(Number(m[1]) - real) > 3) {
           errors.push(
@@ -552,17 +574,54 @@ function lintContentSemantics(
           );
         }
       }
-    }
+    });
   }
+  if (transcriptText && Array.isArray(labelsObj?.grids)) {
+    (labelsObj!.grids as Array<{ index?: unknown; label?: unknown }>).forEach((g, i) => {
+      if (typeof g.label !== 'string' || g.label === '') return;
+      if (!transcriptText.includes(g.label)) {
+        errors.push(
+          `labels.grids[${i}].label「${g.label}」未在转录中出现——无逐格证据的字不标（留空）`,
+        );
+      }
+    });
+  }
+
+  // 5) 练习建议必须显式声明（Codex 三审边界：混在纯文本里的建议条 → 拒）。
+  claims.forEach((claim, i) => {
+    if (typeof claim !== 'string') return;
+    if (/^(练习建议|练习路径|建议)[:：]/.test(claim)) {
+      errors.push(`第 ${i + 1} 条是练习建议却用纯文本——请改为 {"kind":"suggestion","text":…} 显式声明`);
+    }
+  });
   return errors;
 }
+
+/**
+ * summary 段落元素（Codex 复审 2026-09-28：三类分栏从提示词升级为可验证
+ * 契约）：纯 string = 自称转录事实（引文逐字核）；对象形态显式声明推断
+ * （inference）或建议（suggestion）——渲染端带标记展示。
+ */
+const SummaryClaimSchema = z.union([
+  z.string().min(1),
+  z.object({
+    kind: z.enum(['inference', 'suggestion']),
+    text: z.string().min(1),
+  }),
+]);
+type SummaryClaim = z.infer<typeof SummaryClaimSchema>;
 
 /** summary.json 内容结构（结果页静态总结消费面）。 */
 const SummaryContentSchema = z.object({
   topic: z.string().min(1, 'topic 不能为空'),
-  paragraphs: z.array(z.string().min(1)).min(1, 'paragraphs 至少一段'),
-  key_points: z.array(z.string().min(1)).min(1, 'key_points 至少一条'),
+  paragraphs: z.array(SummaryClaimSchema).min(1, 'paragraphs 至少一段'),
+  key_points: z.array(SummaryClaimSchema).min(1, 'key_points 至少一条'),
 });
+
+/** 段落纯文本（lint 与渲染面统一取 text）。 */
+function claimText(claim: SummaryClaim): string {
+  return typeof claim === 'string' ? claim : claim.text;
+}
 
 /** labels.json 内容结构（语义层：grids[].label 生字 / annotations[].desc 旁注）。 */
 const LabelsContentSchema = z.object({

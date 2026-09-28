@@ -315,12 +315,16 @@
           <h2 class="sub-h2">内容总结 <small>{summarySub}</small></h2>
           <div class="summary">
             {#each data.summary.paragraphs as para, i (i)}
-              <p>{para}</p>
+              <p>
+                {#if typeof para !== "string"}<span class="claim-chip claim-{para.kind}">{para.kind === "inference" ? "分析" : "建议"}</span>{/if}{typeof para === "string" ? para : para.text}
+              </p>
             {/each}
             {#if data.summary.key_points.length > 0}
               <ul class="points">
                 {#each data.summary.key_points as point, i (i)}
-                  <li>{point}</li>
+                  <li>
+                    {#if typeof point !== "string"}<span class="claim-chip claim-{point.kind}">{point.kind === "inference" ? "分析" : "建议"}</span>{/if}{typeof point === "string" ? point : point.text}
+                  </li>
                 {/each}
               </ul>
             {/if}

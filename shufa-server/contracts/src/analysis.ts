@@ -96,10 +96,19 @@ export type AnalysisTranscript = z.infer<typeof AnalysisTranscriptSchema>;
  * 总结。source 词表（2026-09-25 对齐生产端）：agent=模型亲写（summary_write 注入，
  * daemon 默认）/ injected=summary 文件注入（CLI 旧路径）/ heuristic=CLI 规则摘要。
  */
+/** 段落元素（Codex 三审 2026-09-28：三类分栏结构化）：纯 string = 转录
+ * 事实段；对象形态显式声明推断（inference）/建议（suggestion）。heuristic
+ * 摘要仍产纯 string 段（兼容）。 */
+export const AnalysisClaimSchema = z.union([
+  z.string(),
+  z.object({ kind: z.enum(['inference', 'suggestion']), text: z.string() }),
+]);
+export type AnalysisClaim = z.infer<typeof AnalysisClaimSchema>;
+
 export const AnalysisSummarySchema = z.object({
   topic: z.string(),
-  paragraphs: z.array(z.string()),
-  key_points: z.array(z.string()),
+  paragraphs: z.array(AnalysisClaimSchema),
+  key_points: z.array(AnalysisClaimSchema),
   source: z.enum(['heuristic', 'injected', 'agent']).optional(),
 });
 export type AnalysisSummary = z.infer<typeof AnalysisSummarySchema>;

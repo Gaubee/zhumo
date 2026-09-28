@@ -102,7 +102,7 @@ if (task?.status !== 'done') {
     check((summary.key_points ?? []).length >= 1, 'summary.key_points ≥ 1');
     // 3) 引文逐字复核（与 daemon 同规：≥4 字「」去标点后子串命中）
     const norm = (t: string) => t.replace(/[\s，。、；：？！,.;:?!"'（）()「」『』…—·]/g, '');
-    const quotes = [...(summary.paragraphs ?? []), ...(summary.key_points ?? [])].join('\n').match(/「([^」]{4,})」/g) ?? [];
+    const quotes = [...(summary.paragraphs ?? []), ...(summary.key_points ?? [])].join('\n').match(/[「“『]([^」”』]{4,})[」”』]/g) ?? [];
     for (const q of quotes) {
       const inner = q.slice(1, -1);
       check(norm(transcript).includes(norm(inner)), `引文逐字见于转录：「${inner}」`);
@@ -116,12 +116,26 @@ if (task?.status !== 'done') {
     }
     check((data.annotations ?? []).every((a: any) => typeof a.grid_idx === 'number'), 'annotations.grid_idx 全存在（格级关联）');
     check((data.summary?.paragraphs ?? []).length >= 2, 'data.summary 已注入');
+    // 6) desc 无视觉动作词（Codex 三审硬拦后的产物面复核）。
+    const VISUAL = /(圈画|画了圈|划出|勾出|红笔|笔迹|示范)/;
+    for (const a of labels.annotations ?? []) {
+      check(!VISUAL.test(a.desc ?? ''), `labels.annotations[${a.index}].desc 无视觉动作词`);
+    }
+    for (const para of [...(summary.paragraphs ?? []), ...(summary.key_points ?? [])]) {
+      const t = typeof para === 'string' ? para : para?.text ?? '';
+      check(!VISUAL.test(t.replace(/[「“『]([^」”』]{4,})[」”』]/g, '')), 'summary 段落无未豁免视觉动作词');
+    }
+    // 7) 建议条已声明（无「练习建议：」开头纯字符串）。
+    for (const [i, c] of [...(summary.paragraphs ?? []), ...(summary.key_points ?? [])].entries()) {
+      if (typeof c === 'string') check(!/^(练习建议|练习路径|建议)[:：]/.test(c), `第 ${i + 1} 条非未声明建议`);
+    }
   }
 }
 
 // ---- 6. 清场（临时用户 + 任务）----
 authWs.close();
 try {
+  db.prepare('DELETE FROM resources WHERE owner_id = (SELECT id FROM users WHERE username = ?)').run(TEST_USER);
   db.prepare('DELETE FROM task_queue WHERE task_id IN (SELECT id FROM tasks WHERE owner_id = (SELECT id FROM users WHERE username = ?))').run(TEST_USER);
   db.prepare('DELETE FROM results WHERE task_id IN (SELECT id FROM tasks WHERE owner_id = (SELECT id FROM users WHERE username = ?))').run(TEST_USER);
   db.prepare('DELETE FROM tasks WHERE owner_id = (SELECT id FROM users WHERE username = ?)').run(TEST_USER);

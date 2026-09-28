@@ -214,7 +214,7 @@ describe('shufa capability 工具面', () => {
     mkdirSync(path.join(taskDir, '.shufa-work'), { recursive: true });
     writeFileSync(
       path.join(taskDir, '.shufa-work', 'manifest.json'),
-      JSON.stringify({ probe: { duration_s: 30 }, transcribe: { segments: [{ start: 0, end: 3, text: '内容' }] } }),
+      JSON.stringify({ probe: { duration_s: 30 }, transcribe: { segments: [{ start: 0, end: 3, text: '讲评桂字的内容' }] } }),
     );
     const withLabels = await registry.call(
       'shufa.summary_write',
@@ -395,6 +395,90 @@ describe('shufa capability 工具面', () => {
     );
     expect(variant.kind).toBe('failed');
     expect((variant as { message: string }).message).toContain('超出视频时长');
+  });
+
+  it('summary_write 三类分栏契约（Codex 三审）：混合类型/视觉动词/秒字/字级证据/建议声明', async () => {
+    mkdirSync(path.join(taskDir, '.shufa-work'), { recursive: true });
+    writeFileSync(
+      path.join(taskDir, '.shufa-work', 'manifest.json'),
+      JSON.stringify({
+        probe: { duration_s: 31.88 },
+        transcribe: { segments: [{ start: 0, end: 4, text: '讲评甲字和乙字的内容' }] },
+        grid: { grids: [{ idx: 0 }, { idx: 1 }] },
+        ink: { annotations: [{ index: 0, first_ts: 9.0 }] },
+      }),
+    );
+    // 1) 视觉动词（desc 与正文均拒；引号内原话豁免）。
+    const visual = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content: '{"topic":"甲","paragraphs":["老师圈画了部件"],"key_points":["要点"]}',
+      },
+      'agent',
+    );
+    expect(visual.kind).toBe('failed');
+    expect((visual as { message: string }).message).toContain('视觉动作');
+    const visualDesc = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content: '{"topic":"甲","paragraphs":["内容"],"key_points":["要点"]}',
+        labels: '{"grids":[{"index":0,"label":"甲"}],"annotations":[{"index":0,"desc":"约9秒圈画了偏差"}]}',
+      },
+      'agent',
+    );
+    expect(visualDesc.kind).toBe('failed');
+    expect((visualDesc as { message: string }).message).toContain('视觉动作');
+    // 2) labels desc 的秒字时长（约99秒 → 拒）。
+    const secsOver = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content: '{"topic":"甲","paragraphs":["内容"],"key_points":["要点"]}',
+        labels: '{"grids":[{"index":0,"label":"甲"}],"annotations":[{"index":0,"desc":"约9秒指出问题；另见约99秒的重复"}]}',
+      },
+      'agent',
+    );
+    expect(secsOver.kind).toBe('failed');
+    expect((secsOver as { message: string }).message).toContain('超出视频时长');
+    // 3) 多字负例（Codex 修复集 5）：label 丙 不在转录（甲/乙在）→ 拒。
+    const ghost = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content: '{"topic":"甲","paragraphs":["内容"],"key_points":["要点"]}',
+        labels: '{"grids":[{"index":0,"label":"甲"},{"index":1,"label":"丙"}],"annotations":[{"index":0,"desc":"约9秒指出问题"}]}',
+      },
+      'agent',
+    );
+    expect(ghost.kind).toBe('failed');
+    expect((ghost as { message: string }).message).toContain('未在转录中出现');
+    // 4) 建议未声明（纯文本「练习建议：」→ 拒）。
+    const bareSuggestion = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content: '{"topic":"甲","paragraphs":["内容"],"key_points":["练习建议：每天写三遍"]}',
+      },
+      'agent',
+    );
+    expect(bareSuggestion.kind).toBe('failed');
+    expect((bareSuggestion as { message: string }).message).toContain('显式声明');
+    // 5) 混合类型合法：转录事实（string）+ 推断/建议（对象形态）→ ok 落盘。
+    const mixed = await registry.call(
+      'shufa.summary_write',
+      {
+        workdir: taskDir,
+        content:
+          '{"topic":"甲","paragraphs":["讲评甲字的内容",{"kind":"inference","text":"从画面产物看属部件错位（分析）"},{"kind":"suggestion","text":"练习建议：每天对照自查"}],"key_points":["要点甲",{"kind":"suggestion","text":"建议路径：先单练再整字"}]}',
+        labels: '{"grids":[{"index":0,"label":"甲"},{"index":1,"label":"乙"}],"annotations":[{"index":0,"desc":"约9秒指出问题"}]}',
+      },
+      'agent',
+    );
+    expect(mixed).toMatchObject({ kind: 'ok' });
+    const written = JSON.parse(readFileSync(path.join(taskDir, 'summary.json'), 'utf8'));
+    expect(written.paragraphs[1]).toMatchObject({ kind: 'inference' });
   });
 
   it('export：summary-file 注入 + bundle 命中 → onExported 附加结果链接', async () => {

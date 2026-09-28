@@ -954,3 +954,25 @@
   margin: 0;
   padding-left: 18px;
 }
+
+/* 三类分栏标记 chip（Codex 三审）：转录事实无标记；分析/建议带声明。 */
+.shufa-report .claim-chip {
+  display: inline-block;
+  vertical-align: baseline;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 9999px;
+  font-size: 10px;
+  line-height: 16px;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  background: color-mix(in srgb, var(--line) 12%, transparent);
+}
+.shufa-report .claim-inference {
+  color: #9a6700;
+  border-color: #9a670040;
+}
+.shufa-report .claim-suggestion {
+  color: #1a7f37;
+  border-color: #1a7f3740;
+}
