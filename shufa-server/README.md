@@ -2,8 +2,8 @@
 
 书法/作业讲评视频的多用户分析与 agent 编排平台：上传讲评视频，agent 按工作流
 （探针→抽帧→旋转探测→对齐→背景合成→田字格检测→角点精化→旁注提取与生字关联
-→回放剪辑（含音画增强）→转录→摘要→导出）自动完成分析，产出可独立分享的
-结果页。
+→回放剪辑（含音画增强）→格字 OCR→转录→摘要→导出）自动完成分析，产出可独立
+分享的结果页。
 
 ## 环境要求
 
@@ -30,9 +30,21 @@ pnpm --filter @zhumo/daemon start   # 根目录无 start 脚本；默认 http://
 ```
 
 首次访问（无 `.env` 或 `ADMIN_USERNAME`/`ADMIN_PASSWORD` 为空）会自动进入
-**安装向导**：①设置管理员账号 → ②准备步骤（ffmpeg/dsh 探测、whisper 模型
-下载、前端构建——已存在默认跳过，可强制重跑）→ ③大模型服务配置。
-完成后即可登录使用。
+**安装向导**：①设置管理员账号 → ②准备步骤（ffmpeg / Python 环境（转录+OCR
+依赖）/ OCR 识别模型（PP-OCRv6，档位 medium·73MB 默认或 small·20MB，可换档
+重下）/ whisper 转写模型 / git——已存在默认跳过，可强制重跑）→ ③大模型服务
+配置。完成后即可登录使用。
+
+## 摘要证据契约与机器感知（产品核心保证）
+
+- **事实必须可溯源**：摘要的转录事实（fact）必须携带转录段引用（`source`
+  下标），写入面逐句校验原文锚点/引文逐字（含引号形状栈、子句级锚点、逐格
+  label 证据），export 前还有终态门禁复核——编造内容进不了产物（14 轮
+  外部评审收敛，评分轨迹 4.5→9.5）。
+- **推断与建议显式分栏**：`inference`/`suggestion` 独立标记，结果页以
+  「分析/建议」chip 区分，不冒充老师原话。
+- **OCR 是机器感知旁路**：格字识别结果存 `label_ocr`+置信度（结果页「识：X
+  NN%」弱化展示），永不填充正式 label 或证据字段——正式格字标签只认转录点名。
 
 ## .env 配置项
 
@@ -47,6 +59,7 @@ LLM_API=                   # 可选：wire 协议（openai-completions / anthrop
 LLM_BASE_URL=
 LLM_API_KEY=
 LLM_MODEL=
+SHUFA_OCR_SIZE=medium     # PP-OCRv6 档位：medium（默认·73MB）| small（快档·20MB）
 ```
 
 > 管理员的初始账号密码保存在 .env 作恢复凭证；之后在后台修改的密码存于
@@ -97,6 +110,19 @@ Chrome）。脚本结束自动杀 daemon/Chrome；PASS/FAIL 逐项输出，退�
 
 > 该脚本为 mac/linux 调试专用（lsof 探端口、macOS Chrome 路径、`/tmp` 默认
 > DATA_ROOT），Windows 不适用，亦未做兼容改造。
+
+## 真实产物质量 E2E（webui/e2e-shufa.mts，烧真实 LLM）
+
+```bash
+# 在部署机（daemon 所在）跑：临时用户 → 真实视频全管线 → 断言产物质量
+# （fact.source 界内/引文逐字/子句锚点/逐格证据/label_ocr 全给/焦点双证）。
+cd daemon && npx tsx ../webui/e2e-shufa.mts <视频绝对路径> ws://127.0.0.1:8217
+```
+
+- **产物保留供审计**：每轮 e2e 的任务、results 行与产物目录不清理，日志在
+  `/tmp/e2e-run*.log`，结果页链接打印在日志尾部。
+- 断言校验表与 daemon lint 同源（`webui/e2e-shufa.mts` 直接 import
+  `daemon/src/capability/analysis.ts` 的导出），杜绝「网内自洽假阳性」。
 
 ## Windows（初步适配，未测试）
 

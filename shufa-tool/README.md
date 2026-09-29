@@ -8,7 +8,8 @@
 
 ```bash
 cd shufa-tool
-uv sync --extra transcribe            # 首次；transcribe extra 仅 macOS/arm64 生效
+uv sync --extra transcribe --extra ocr # 首次；transcribe 按平台（mac=mlx / win,linux=faster）
+                                      # ocr extra = PP-OCRv6 格字识别（RapidOCR+onnxruntime，~95MB）
 
 # 分析 + 启动服务（默认 6173 端口，自动构建 dist 并静态承载）
 uv run shufa-analyze 视频.mp4 --serve
@@ -25,6 +26,20 @@ uv run shufa-serve .shufa-work/视频/bundle --dev      # vite dev（前端开�
 --labels labels.json         # 格标签/旁注描述注入（见下）
 --summary-file summary.json  # 精修摘要注入（覆盖默认规则摘要）
 ```
+
+## 格字 OCR（PP-OCRv6，可选独立步骤）
+
+```bash
+uv run python -m shufa_tool.steps ocr <WORKDIR> [--ocr-size medium|small]
+uv run python -m shufa_tool.warm_ocr [--check] [--size medium|small]
+```
+
+- `ocr` 步对 clip 产出的每张格字裁剪图做 rec-only 识别（边缘白化 8% 预处理），
+  结果写 `manifest.ocr`，export 时并入 `data.json` 的 `chars[].label_ocr/
+  label_ocr_conf`——**机器感知旁路**：不参与任何证据核验、不回填正式 label。
+- 档位：medium（默认，73MB，手写识别率最高）/ small（20MB 快档）；tiny 手写
+  精度坍塌不开放。权重首次运行从 ModelScope 懒下载；`warm_ocr` 供向导预热/
+  检查（`--check` 只验缓存不联网）。环境变量 `SHUFA_OCR_SIZE` 同效。
 
 ## 架构
 
@@ -55,7 +70,11 @@ shufa-serve ──▶ 构建缓存命中则跳过，dist 上起静态 HTTP 服�
   "annotations": [{"index": 0, "desc": "△△ 与开口方框记号：强调左右两部分"}]
 }
 ```
-summary.json：`{"topic": "桂", "paragraphs": [...], "key_points": [...]}`。
+summary.json：三态分栏契约——paragraphs/key_points 元素为
+`{"kind":"fact","text":…,"source":[转录段下标],"label":…}` /
+`{"kind":"inference"|"suggestion","text":…}`；export 前做证据核验
+（source 界内+引文逐字+子句锚点，空转录拒 fact）。`--labels` 注入同样过
+逐格证据核验（多格同 label 须焦点格或旁注墨迹落入）。
 
 ## 设计取舍速记（详见工作报告）
 
@@ -84,7 +103,7 @@ summary.json：`{"topic": "桂", "paragraphs": [...], "key_points": [...]}`。
 
 **本节为静态推写的初步说明，尚未在真实 Windows 环境验证。**
 
-- 分析主体（probe→sample→orient→align→bg→grid→ink→clip→export）为
+- 分析主体（probe→sample→orient→align→bg→grid→ink→clip→ocr→export）为
   OpenCV + numpy + ffmpeg，Windows 理论可用：安装 Python ≥3.12 与 uv
   （`powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`）后
   `uv sync` 即可；ffmpeg 需在 PATH（`winget install -e --id Gyan.FFmpeg`，

@@ -39,10 +39,12 @@ dsh（`DSH_HOME` 注入）。
    - 每项显示：标题、目标目录、来源链接、状态徽章；summary 内嵌实时预览
      （命令=last-line-log，下载=进度条）；嗅探：命令可探测（已装默认跳过）、
      下载文件已存在默认跳过；均可"强制执行"。
-   - 首发步骤清单：`ffmpeg -version`（嗅探命令）、`dsh --version`（嗅探）、
-     whisper 模型下载（按 OS 选 provider，显示目标目录+源链接）、
-     `npm install`（仅源码分发时需要；官方分发内含预构建 webui/dist 则该步
-     默认跳过——daemon 直接托管静态产物）。
+   - 首发步骤清单（2026-09-29 现状）：`ffmpeg -version`（嗅探）、
+     Python 分析环境（uv sync --extra transcribe --extra ocr，嗅探 venv 内容）、
+     OCR 识别模型（PP-OCRv6 档位可选 medium|small，warm_ocr 预热/--check 嗅探，
+     换档重下）、whisper 转写模型（按 OS 选引擎族，HF 缓存预热+断点续传）、
+     `git --version`（知识库修订历史，缺失不阻塞）。
+     （历史步骤 dsh/npm-install 已随内核 SDK 内嵌与 dist 预构建退役。）
 3. **大模型服务配置**：移植 skill-creator-v2 `SettingsDialog > Models`
    （组件与逻辑整体复用）；配置落 .env（LLM_*）+ 传给 dsh 的 env 注入层。
 4. 完成态：写安装完成标记 → 跳转登录/后台。
@@ -109,7 +111,8 @@ results(id PK, public_id UNIQUE, task_id FK, owner_id FK, title,
 ## 6. agent 工作流拆分（capability→工具注入）
 
 管线重构为离散步骤命令（`shufa_tool.steps`：probe/sample/orient/align/bg/grid/
-ink/clip/transcribe/export），由 daemon 的 capability 层暴露为 agent 工具
+ink/clip/ocr/transcribe/export；ocr=PP-OCRv6 格字机器感知，label_ocr 不进
+证据契约），由 daemon 的 capability 层暴露为 agent 工具
 （照 skill-creator-v2 的 `CapabilityDefinition`：name + Zod schema + authority
 (readonly|proposal) + handler；readonly 步骤 agent 直调，写型步骤走 proposal）。
 **summary 步骤不提供工具——由 agent 读取转录与画面产物后亲自撰写**（替换模式
