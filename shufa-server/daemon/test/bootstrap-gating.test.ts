@@ -24,12 +24,12 @@ test('初始态：needs_setup=true 且 setup 端点可达；setup_progress 三�
     expect(bootstrap.setup_progress).toEqual({
       admin_created: false,
       steps_done: 0,
-      steps_total: 4, // Owner 需求 2026-09-25：git 检测步骤加入
+      steps_total: 5, // 2026-09-29：OCR 模型预热步骤加入（此前懒下载在任务关键路径）
       model_configured: false,
     });
 
     const { steps } = await client.setup.steps();
-    expect(steps.map((step) => step.id)).toEqual(['ffmpeg', 'python-env', 'git', 'whisper-model']);
+    expect(steps.map((step) => step.id)).toEqual(['ffmpeg', 'python-env', 'ocr-model', 'git', 'whisper-model']);
     expect(steps.every((step) => step.status === 'pending')).toBe(true);
   } finally {
     s.dispose();
@@ -47,7 +47,7 @@ test('setup_progress 三态推进：建管理员 / 完成向导步骤 / 配置�
     expect(progress).toEqual({
       admin_created: true,
       steps_done: 1,
-      steps_total: 4, // Owner 需求 2026-09-25：git 检测步骤加入
+      steps_total: 5, // 2026-09-29：OCR 模型预热步骤加入（此前懒下载在任务关键路径）
       model_configured: false,
     });
 

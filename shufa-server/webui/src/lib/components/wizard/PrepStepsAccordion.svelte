@@ -28,7 +28,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Switch } from "$lib/components/ui/switch";
   import IconPlay from "@lucide/svelte/icons/play";
-  import IconSave from "@lucide/svelte/icons/save";
+
   import IconSquare from "@lucide/svelte/icons/square";
   import IconX from "@lucide/svelte/icons/x";
   import { OCR_MODEL_CATALOG, WHISPER_MIRRORS, WHISPER_MODEL_CATALOG, whisperModelIdFromRepo, whisperRepoFor } from "@zhumo/contracts";
@@ -58,7 +58,7 @@
   let ocrSize = $state<OcrModelId>("medium");
 
   $effect(() => {
-    const selected = steps.find((step) => step.id === "python-env")?.ocrSize;
+    const selected = steps.find((step) => step.id === "ocr-model")?.ocrSize;
     if (selected) ocrSize = selected;
   });
 
@@ -185,8 +185,8 @@
 
   /** 按钮文字：命令=运行；下载=.download 残差存在=恢复下载，否则开始下载。 */
   function actionLabel(step: WizardStep): string {
-    if (step.id === "python-env" && step.status === "done" && (step.ocrSize ?? "medium") !== ocrSize) {
-      return "保存档位";
+    if (step.id === "ocr-model" && step.status === "done" && (step.ocrSize ?? "medium") !== ocrSize) {
+      return "下载新档";
     }
     if (step.kind === "command") return "运行";
     return step.resumable ? "恢复下载" : "开始下载";
@@ -219,7 +219,7 @@
   function runStep(step: WizardStep, force: boolean): void {
     if (step.id === "whisper-model") {
       onrun(step.id, force, { model: whisperModel, mirror: whisperMirror });
-    } else if (step.id === "python-env") {
+    } else if (step.id === "ocr-model") {
       onrun(step.id, force, { ocr_size: ocrSize });
     } else {
       onrun(step.id, force);
@@ -271,7 +271,7 @@
 {#snippet detailBody(step: WizardStep)}
   {@const isRunning = running === step.id || step.status === "running"}
   {@const force = forceMap[step.id] ?? false}
-  {@const ocrSelectionChanged = step.id === "python-env" && (step.ocrSize ?? "medium") !== ocrSize}
+  {@const ocrSelectionChanged = step.id === "ocr-model" && (step.ocrSize ?? "medium") !== ocrSize}
   {@const rerunLocked = step.status === "done" && !force && !ocrSelectionChanged}
   <div class="flex min-w-0 flex-col gap-3 text-xs text-muted-foreground">
     <div class="flex flex-col gap-1">
@@ -366,7 +366,7 @@
         </label>
       </div>
     {/if}
-    {#if step.id === "python-env"}
+    {#if step.id === "ocr-model"}
       <label class="flex min-w-0 flex-col gap-1">
         <span class="text-muted-foreground">PP-OCRv6 档位</span>
         <Select.Root type="single" items={ocrModelItems} bind:value={ocrSize}>
@@ -409,7 +409,7 @@
         {/if}
       {:else}
         <Button size="sm" disabled={rerunLocked} onclick={() => runStep(step, force)}>
-          {#if ocrSelectionChanged}<IconSave />{:else}<IconPlay />{/if}
+          <IconPlay />
           {actionLabel(step)}
         </Button>
       {/if}

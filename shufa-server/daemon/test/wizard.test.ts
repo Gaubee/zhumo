@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, sym
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { OCR_MODEL_CATALOG, WHISPER_MODEL_CATALOG, WHISPER_MIRRORS } from '@zhumo/contracts';
-import { getWizardStep, listWizardSteps, updateWizardProgress } from '../src/db/store.js';
+import { getWizardStep, listWizardSteps, seedWizardSteps, updateWizardProgress } from '../src/db/store.js';
 import {
   capStepLog,
   defaultWizardSeeds,
@@ -249,14 +249,14 @@ describe('wizard 命令步骤', () => {
       const runner = new WizardRunner(s.db, []);
       await expect(runner.run('nope', false)).rejects.toMatchObject({ code: 'NOT_FOUND' });
       const rows = listWizardSteps(s.db);
-      expect(rows.map((r) => r.id)).toEqual(['ffmpeg', 'python-env', 'git', 'whisper-model']);
+      expect(rows.map((r) => r.id)).toEqual(['ffmpeg', 'python-env', 'ocr-model', 'git', 'whisper-model']);
       expect(rows.find((r) => r.id === 'webui-install')).toBeUndefined();
       expect(rows.find((r) => r.id === 'whisper-model')?.kind).toBe('download');
       // 2026-09-23：dsh 步骤退役——内核是 SDK 进程内嵌（pnpm install 就位），非系统依赖。
       expect(rows.find((r) => r.id === 'dsh')).toBeUndefined();
       // Owner 需求 2026-09-25：git 检测步骤（知识库修订历史的依赖）。
       expect(rows.find((r) => r.id === 'git')?.kind).toBe('command');
-      expect(defaultWizardSeeds({ dataRoot: s.config.dataRoot, shufaToolDir: s.root + '/shufa-tool' }).length).toBe(4);
+      expect(defaultWizardSeeds({ dataRoot: s.config.dataRoot, shufaToolDir: s.root + '/shufa-tool' }).length).toBe(5);
     } finally {
       s.dispose();
     }
@@ -502,6 +502,59 @@ describe('wizard 种子定义（走查 R3/R4/R5/R6）', () => {
 });
 
 describe('wizard OCR 档位设置', () => {
+  test('ocr-model 种子步：预热命令 + --check 探测（不联网）', () => {
+    const ctx = { dataRoot: '/tmp/zumo-wz', shufaToolDir: '/opt/shufa-tool' };
+    const seeds = defaultWizardSeeds(ctx, 'darwin', 'arm64');
+    const step = seeds.find((s) => s.id === 'ocr-model');
+    expect(step).toBeDefined();
+    expect(step?.command).toContain('shufa_tool.warm_ocr');
+    expect(step?.command).not.toContain('--check');
+    expect(step?.probe).toContain('warm_ocr --check');
+  });
+
+  test('ocr-model 换档重下：done 步骤换档不提前返回，执行预热命令', async () => {
+    const s = createServices();
+    const previous = process.env.SHUFA_OCR_SIZE;
+    try {
+      const marker = path.join(s.root, 'ocr-model-command-ran');
+      // createServices 已把默认种子落库（command=真实 uv 预热命令）——用
+      // seedWizardSteps 的定义更新把本测试的行命令覆盖为 touch 探针。
+      seedWizardSteps(s.db, [
+        {
+          id: 'ocr-model',
+          kind: 'command' as const,
+          title: 'OCR 模型',
+          command: `touch "${marker}"`,
+          url: null,
+          target_dir: s.root,
+        },
+      ]);
+      const runner = new WizardRunner(s.db, [
+        {
+          id: 'ocr-model',
+          kind: 'command',
+          title: 'OCR 模型',
+          command: `touch "${marker}"`,
+          targetDir: s.root,
+        },
+      ], { envFile: s.envFile });
+      updateWizardProgress(s.db, 'ocr-model', { status: 'done' });
+      // 同档（medium→medium）：done 只保存，不执行。
+      const keep = await runner.run('ocr-model', false, { ocr_size: 'medium' });
+      expect(keep.status).toBe('done');
+      expect(existsSync(marker)).toBe(false);
+      // 换档（medium→small）：越过 done 提前返回，执行 warm 命令。
+      const changed = await runner.run('ocr-model', false, { ocr_size: 'small' });
+      expect(changed.ocr_size).toBe('small');
+      expect(existsSync(marker)).toBe(true);
+      expect(readFileSync(s.envFile, 'utf8')).toContain('SHUFA_OCR_SIZE=small');
+    } finally {
+      if (previous === undefined) delete process.env.SHUFA_OCR_SIZE;
+      else process.env.SHUFA_OCR_SIZE = previous;
+      s.dispose();
+    }
+  });
+
   test('python-env 选择持久化到 .env，读取向导时回显，done 步骤也保存新选项', async () => {
     const s = createServices();
     const previous = process.env.SHUFA_OCR_SIZE;
@@ -722,7 +775,7 @@ describe('wizard 种子迁移（走查）', () => {
       installWizardSeeds(s.db, defaultWizardSeeds({ dataRoot: s.config.dataRoot, shufaToolDir: s.root + '/shufa-tool' }));
 
       const rows = listWizardSteps(s.db);
-      expect(rows.map((r) => r.id)).toEqual(['ffmpeg', 'python-env', 'git', 'whisper-model']); // webui-install 被删
+      expect(rows.map((r) => r.id)).toEqual(['ffmpeg', 'python-env', 'ocr-model', 'git', 'whisper-model']); // webui-install 被删
       const ffmpeg = rows.find((r) => r.id === 'ffmpeg')!;
       expect(ffmpeg.command).toBe('brew install ffmpeg'); // 定义字段恒更新（darwin 派生）
       expect(ffmpeg.status).toBe('done'); // 运行态保留

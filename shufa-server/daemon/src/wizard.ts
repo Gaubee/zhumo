@@ -141,6 +141,10 @@ export function capStepLog(text: string): string {
 /** whisper 下载步骤 id（R6 参数化的作用面）。 */
 export const WHISPER_STEP_ID = 'whisper-model';
 
+/** OCR 模型预热步骤 id（2026-09-29 Owner：准备步骤须含模型安装——此前
+ * PP-OCRv6 权重在首个任务里懒下载，73MB 落在分析关键路径）。 */
+export const OCR_STEP_ID = 'ocr-model';
+
 /**
  * 首发步骤清单（§1；走查修订 2026-09-22；2026-09-23 dsh 步骤退役；走查四轮
  * 2026-09-25：whisper 步骤改为预热管线真消费的模型；W9 2026-09-27 平台最优
@@ -218,6 +222,16 @@ export function defaultWizardSeeds(
       title: `Python 分析环境（转录与 OCR${whisperEngine ? ` · ${whisperEngine === 'mlx' ? 'mlx-whisper' : 'faster-whisper'}` : ''}）`,
       command: `uv sync --project "${ctx.shufaToolDir}" --extra transcribe --extra ocr`,
       probe: `uv run --no-sync --project "${ctx.shufaToolDir}" python -c "${pyProbeImports}, rapidocr, onnxruntime"`,
+      targetDir: ctx.shufaToolDir,
+    },
+    {
+      id: OCR_STEP_ID,
+      kind: 'command',
+      // 档位经环境 SHUFA_OCR_SIZE 传递（UI 在本步选档 → run() 持久化 env →
+      // 子进程继承）；--check 探测只验缓存不联网，换档后重跑即下载新档。
+      title: 'OCR 识别模型（PP-OCRv6 · 档位可选 · 首次运行从 ModelScope 下载缓存）',
+      command: `uv run --no-sync --project "${ctx.shufaToolDir}" python -m shufa_tool.warm_ocr`,
+      probe: `uv run --no-sync --project "${ctx.shufaToolDir}" python -m shufa_tool.warm_ocr --check`,
       targetDir: ctx.shufaToolDir,
     },
     {
@@ -353,7 +367,7 @@ export class WizardRunner {
 
   private view(row: WizardStepRow | null): WizardStep {
     const view = toView(row);
-    if (row?.id === 'python-env') view.ocr_size = this.selectedOcrSize();
+    if (row?.id === 'python-env' || row?.id === OCR_STEP_ID) view.ocr_size = this.selectedOcrSize();
     return view;
   }
 
@@ -404,6 +418,8 @@ export class WizardRunner {
       throw new WizardError('CONFLICT', `步骤正在执行中：${id}`);
     }
     const seed = this.seeds.find((s) => s.id === id) ?? null;
+    // 换档判定基数：进入参数处理前已持久化的档位（此后 save 分支会更新 env）。
+    const previousOcrSize = this.selectedOcrSize();
     if (
       id === WHISPER_STEP_ID &&
       row.kind === 'download' &&
@@ -422,7 +438,13 @@ export class WizardRunner {
         if (repo) saveEnvValues(this.options.envFile, { SHUFA_WHISPER_REPO: repo });
       }
     }
-    if (id === 'python-env' && params?.ocr_size !== undefined) {
+    // 换档语义分步：python-env 只保存档位（依赖已装，不重跑）；ocr-model
+    // 保存后继续执行——预热新档权重（旧 done 态也放行下载新档）。
+    const ocrTierChanged =
+      id === OCR_STEP_ID && params?.ocr_size !== undefined && isOcrModelId(params.ocr_size)
+        ? params.ocr_size !== previousOcrSize
+        : false;
+    if ((id === 'python-env' || id === OCR_STEP_ID) && params?.ocr_size !== undefined) {
       if (!isOcrModelId(params.ocr_size)) {
         throw new Error(`未知的 OCR 档位：${params.ocr_size}`);
       }
@@ -431,7 +453,7 @@ export class WizardRunner {
         saveEnvValues(this.options.envFile, { SHUFA_OCR_SIZE: params.ocr_size });
       }
     }
-    if (!force && row.status === 'done') return this.view(row);
+    if (!force && row.status === 'done' && !ocrTierChanged) return this.view(row);
 
     if (!force) {
       const skipReason = await this.sniff(row, seed);
