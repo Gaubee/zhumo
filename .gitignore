@@ -16,6 +16,10 @@ samples/*.mp4
 # 会话工具产物
 .agents/
 
+# shufa-transcribe 工具产物（setup/check 生成的模型与临时音频）
+shufa-transcribe/models/
+shufa-transcribe/.tmp/
+
 # 系统
 .DS_Store
 *.log

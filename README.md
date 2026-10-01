@@ -26,8 +26,9 @@
 │   ├── scripts/             一键 E2E（w7b-e2e.mjs）
 │   ├── skills/              agent 的管线手册（SKILL.md）
 │   └── changes/             变更记录（按波次）
-└── shufa-tool/              Python 分析管线（uv；当前参考实现）
-    └── web/                 打磨版分析页源码（结果页的移植母本）
+├── shufa-tool/              Python 分析管线（uv；当前参考实现）
+│   └── web/                 打磨版分析页源码（结果页的移植母本）
+└── shufa-transcribe/        独立音频转录 CLI（bun .sh.ts；Qwen3-ASR 三引擎 mlx/cuda/cpu，2026-10-01 起 Whisper 的替代）
 ```
 
 ## 快速开始

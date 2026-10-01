@@ -4,6 +4,7 @@
 
 - `shufa-server/`：pnpm monorepo（daemon=Node/oRPC+sqlite、webui=SvelteKit、contracts=zod 契约）。
 - `shufa-tool/`：平级 Python 管线仓库（uv；probe/sample/orient/align/bg/grid/ink/clip/ocr/transcribe/export 步骤，`python -m shufa_tool.steps <step>`）。
+- `shufa-transcribe/`：平级独立音频转录 CLI（bun `.sh.ts`；2026-10-01 Whisper→Qwen3-ASR 选型落地：mlx-qwen3-asr 0.6B-4bit 主力 / qwen-asr cuda / sherpa-onnx SenseVoice cpu 兜底；iMac 实测 PASS 2.4s；热词 `--context` 实证负优化默认禁用）。注意：shufa-tool 管线内 transcribe 步骤仍用 mlx-whisper（W9），引擎切换待推进。
 - 部署：mini（macmini）launchd `com.zhumo.daemon` 跑 daemon（tsx 源码直跑）+ 静态托管 `webui/dist`；改前端后必须重建 dist 并提交（六审 P1：源码与 dist 漂移会让线上跑旧逻辑）。
 - e2e：`webui/e2e-shufa.mts`（mini 上 `cd daemon && npx tsx ../webui/e2e-shufa.mts <视频> ws://127.0.0.1:8217`）。**不清场**——任务/results/产物保留供 Owner 审计（2026-09-27 Owner 质询后立规）。
 
